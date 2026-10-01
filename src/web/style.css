@@ -1931,3 +1931,26 @@ a.btn {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
 }
+
+.sheet-list button.picked {
+  color: var(--accent);
+  font-weight: 600;
+}
+.sheet-list .check {
+  float: right;
+}
+.side-foot button {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.side-foot > .dim {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.side-foot {
+  gap: 0;
+}
+.side-foot button.small {
+  padding: 4px 6px;
+}

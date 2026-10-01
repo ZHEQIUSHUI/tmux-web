@@ -9,10 +9,65 @@ import { Chevron, Icon, Modal, ThemeCycle, ThemeSwitch } from './ui';
 // ---------------- activity: order, unread ----------------
 
 /** Waiting for you first, then running, then most recently active. */
-/** Sessions in use lately: active within RECENT_MS, or working / waiting right now. */
-export const RECENT_MS = 30 * 60 * 1000;
-export function recentSessions(list: SessionInfo[]): SessionInfo[] {
-  return sortSessions(list.filter((s) => s.status === 'busy' || s.status === 'waiting' || Date.now() - s.activityAt < RECENT_MS));
+/** How far back the recent section reaches, in minutes (0 = no recent section); per browser. */
+const RECENT_CHOICES: [number, string][] = [
+  [15, '15 分钟'],
+  [30, '30 分钟'],
+  [60, '1 小时'],
+  [180, '3 小时'],
+  [1440, '24 小时'],
+  [0, '不显示这个分组'],
+];
+const readRecentMinutes = () => {
+  const v = Number(store.get('tw:recent-min') ?? 30);
+  return Number.isFinite(v) && v >= 0 ? v : 30;
+};
+/** The setting, shared by every list on the page. */
+export function useRecentMinutes(): [number, (m: number) => void] {
+  const [min, setMin] = useState(readRecentMinutes);
+  useEffect(() => {
+    const on = () => setMin(readRecentMinutes());
+    addEventListener('tw:recent', on);
+    return () => removeEventListener('tw:recent', on);
+  }, []);
+  return [
+    min,
+    (m) => {
+      store.set('tw:recent-min', String(m));
+      dispatchEvent(new Event('tw:recent'));
+    },
+  ];
+}
+
+function RecentModal({ minutes, onPick, onClose }: { minutes: number; onPick: (m: number) => void; onClose: () => void }) {
+  return (
+    <Modal title="「最近」分组" onClose={onClose}>
+      <p class="dim small">显示多久以内有过活动的会话。正在运行、等待确认的会话总会显示。只对这个浏览器生效。</p>
+      <div class="sheet-list">
+        {RECENT_CHOICES.map(([m, label]) => (
+          <button
+            key={m}
+            class={m === minutes ? 'picked' : ''}
+            onClick={() => {
+              onPick(m);
+              onClose();
+            }}
+          >
+            {label}
+            {m === minutes && <span class="check">✓</span>}
+          </button>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+const recentLabel = (m: number) => (RECENT_CHOICES.find(([v]) => v === m)?.[1] ?? `${m} 分钟`).replace('不显示这个分组', '不显示');
+
+/** Sessions in use lately: active within `minutes`, or working / waiting right now. */
+export function recentSessions(list: SessionInfo[], minutes: number): SessionInfo[] {
+  if (!minutes) return [];
+  return sortSessions(list.filter((s) => s.status === 'busy' || s.status === 'waiting' || Date.now() - s.activityAt < minutes * 60_000));
 }
 const folderName = (s: SessionInfo, folders: Folder[]) => folders.find((f) => f.id === s.folderId)?.name ?? '未分组';
 
@@ -160,7 +215,7 @@ export function FolderHeader(props: { group: SessionGroup; open: boolean; onTogg
         <span class="folder-count">{sessions.length}</span>
         {!props.open && waiting > 0 && <span class="dot waiting" title={`${waiting} 个等待确认`} />}
       </button>
-      {folder && props.onEdit && (
+      {(folder || props.label) && props.onEdit && (
         <button class="icon-btn folder-edit" onClick={props.onEdit} aria-label="编辑文件夹">
           <Icon.more />
         </button>
@@ -193,7 +248,9 @@ export function Sidebar(props: {
   const multiHost = new Set(sessions.map((s) => s.hostId)).size > 1;
   const [collapsed, toggle] = useCollapsed();
   const groups = groupByFolder(sortSessions(sessions), props.folders);
-  const recent = recentSessions(sessions);
+  const [recentMin, setRecentMin] = useRecentMinutes();
+  const [recentDlg, setRecentDlg] = useState(false);
+  const recent = recentSessions(sessions, recentMin);
   // the recent section: name, conversation title and which folder it lives in
   const recentItem = (s: SessionInfo) => (
     <button key={`r${s.id}`} class={`session-item ${s.id === current ? 'active' : ''}`} onPointerDown={() => prefetchChat(s)} onMouseEnter={() => prefetchChat(s)} onClick={() => props.onPick(s.id)} title={s.title || undefined}>
@@ -252,10 +309,11 @@ export function Sidebar(props: {
           有主机连不上，点此查看
         </button>
       )}
+      {recentDlg && <RecentModal minutes={recentMin} onPick={setRecentMin} onClose={() => setRecentDlg(false)} />}
       <nav class="session-list">
         {recent.length > 0 && (
           <div class="folder recent" key="recent">
-            <FolderHeader label="最近" group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} />
+            <FolderHeader label="最近" group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} onEdit={() => setRecentDlg(true)} />
             {!collapsed.has('r') && <div class="folder-body">{recent.map(recentItem)}</div>}
           </div>
         )}
@@ -280,10 +338,13 @@ export function Sidebar(props: {
         {!sessions.length && <p class="dim small pad">还没有会话，点「新建」开始。</p>}
       </nav>
       <div class="side-foot">
-        <span class="dim small">{me.username}</span>
+        <span class="dim small" title={me.username}>{me.username}</span>
         <span class="spacer" />
         <button class="ghost small" onClick={props.onToggleAlerts} title={props.alerts ? '页内提醒：开（点击关闭）' : '页内提醒：关（点击开启）'}>
           {props.alerts ? '🔔' : '🔕'}
+        </button>
+        <button class="ghost small" onClick={() => setRecentDlg(true)} title={`「最近」分组：${recentLabel(recentMin)}`} aria-label="「最近」分组">
+          <Icon.clock />
         </button>
         <ThemeCycle />
         {me.role === 'admin' && (
@@ -297,7 +358,7 @@ export function Sidebar(props: {
         <button class="ghost small" onClick={props.onTokens} title="API 令牌（App / 脚本）">
           令牌
         </button>
-        <button class="ghost small" onClick={props.onLogout}>
+        <button class="ghost small" onClick={props.onLogout} title={`退出登录（${me.username}）`}>
           退出
         </button>
       </div>
@@ -326,7 +387,9 @@ export function MobileHome(props: {
   const shown = (sessions || []).filter((s) => !q || `${s.name} ${s.note} ${s.cwd} ${s.host}`.toLowerCase().includes(q));
   const sorted = sortSessions(shown);
   const groups = groupByFolder(sorted, q ? [] : props.folders);
-  const recent = q ? [] : recentSessions(sessions || []);
+  const [recentMin, setRecentMin] = useRecentMinutes();
+  const [recentDlg, setRecentDlg] = useState(false);
+  const recent = q ? [] : recentSessions(sessions || [], recentMin);
   const recentRow = (s: SessionInfo) => (
     <button key={`r${s.id}`} class={`m-row ${s.status}`} onPointerDown={() => prefetchChat(s)} onClick={() => props.onPick(s.id)}>
       <span class={`m-badge ${s.agent}`}>
@@ -401,6 +464,7 @@ export function MobileHome(props: {
           <Icon.user />
         </button>
       </header>
+      {recentDlg && <RecentModal minutes={recentMin} onPick={setRecentMin} onClose={() => setRecentDlg(false)} />}
       <div class="m-list">
         {sessions && sessions.length > 4 && (
           <label class="m-search">
@@ -421,7 +485,7 @@ export function MobileHome(props: {
         {q && !shown.length && <p class="dim pad">没有匹配的会话</p>}
         {recent.length > 0 && (
           <div class="m-section" key="recent">
-            <FolderHeader big label="最近" group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} />
+            <FolderHeader big label="最近" group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} onEdit={() => setRecentDlg(true)} />
             {!collapsed.has('r') && <div class="m-group">{recent.map(recentRow)}</div>}
           </div>
         )}
@@ -446,6 +510,9 @@ export function MobileHome(props: {
 }
 
 export function MenuSheet({ me, onClose, onAdmin, onPassword, onTokens, onLogout }: { me: Me; onClose: () => void; onAdmin: () => void; onPassword: () => void; onTokens: () => void; onLogout: () => void }) {
+  const [recentMin, setRecentMin] = useRecentMinutes();
+  const [recentDlg, setRecentDlg] = useState(false);
+  if (recentDlg) return <RecentModal minutes={recentMin} onPick={setRecentMin} onClose={() => setRecentDlg(false)} />;
   return (
     <Modal title={me.username} onClose={onClose}>
       <div class="sheet-theme">
@@ -460,6 +527,9 @@ export function MenuSheet({ me, onClose, onAdmin, onPassword, onTokens, onLogout
         <input type="checkbox" defaultChecked={alertsEnabled()} onChange={(e) => store.set('tw:alerts', (e.target as HTMLInputElement).checked ? null : 'off')} />
       </label>
       <div class="sheet-list">
+        <button onClick={() => setRecentDlg(true)}>
+          「最近」分组<span class="check dim">{recentLabel(recentMin)}</span>
+        </button>
         {me.role === 'admin' && <button onClick={onAdmin}>主机、账号与分组</button>}
         <button onClick={onPassword}>修改密码</button>
         <button onClick={onTokens}>API 令牌（App / 脚本）</button>
