@@ -535,7 +535,14 @@ function ClaudePanel(props: { st: ClaudeState | null; canControl: boolean; onClo
 async function restartAgent(session: SessionInfo, status: Status): Promise<boolean> {
   const busy = status === 'busy' || status === 'waiting';
   if (busy && !confirm('Claude 正在执行任务，重启会中断它。确定重启？')) return false;
-  await api('POST', `/_tw/api/sessions/${session.id}/restart-agent`);
+  try {
+    await api('POST', `/_tw/api/sessions/${session.id}/restart-agent`, {});
+  } catch (e: any) {
+    // background shells / monitors would end with it: ask, then insist
+    if (e.status !== 409) throw e;
+    if (!confirm(`${e.message}。\n\n确定仍要重启？`)) return false;
+    await api('POST', `/_tw/api/sessions/${session.id}/restart-agent`, { force: true });
+  }
   return true;
 }
 
@@ -1505,6 +1512,75 @@ function SessionSettings({ me, session, folders, onClose }: { me: Me; session: S
   );
 }
 
+interface ApiToken {
+  id: number;
+  name: string;
+  created_at: number;
+  last_used_at: number | null;
+}
+
+/** Tokens for apps (e.g. the phone app) and scripts: Authorization: Bearer ... */
+function TokensModal({ onClose }: { onClose: () => void }) {
+  const [list, setList] = useState<ApiToken[]>([]);
+  const [fresh, setFresh] = useState<{ name: string; token: string } | null>(null);
+  const [err, setErr] = useState('');
+  const load = () => api<ApiToken[]>('GET', '/_tw/api/tokens').then(setList, (e) => setErr(e.message));
+  useEffect(() => {
+    load();
+  }, []);
+  const create = async (e: Event) => {
+    e.preventDefault();
+    const form = e.target as HTMLFormElement;
+    try {
+      setFresh(await api('POST', '/_tw/api/tokens', { name: new FormData(form).get('name') }));
+      form.reset();
+      load();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+  };
+  const revoke = async (t: ApiToken) => {
+    if (!confirm(`吊销「${t.name}」？用它登录的设备会立刻失效。`)) return;
+    await api('DELETE', `/_tw/api/tokens/${t.id}`).catch((e) => setErr(e.message));
+    load();
+  };
+  return (
+    <Modal title="API 令牌" onClose={onClose}>
+      <p class="dim small">给手机 App、脚本等用的长期凭证（请求头 Authorization: Bearer 令牌）。令牌只在创建时显示一次。</p>
+      {fresh && (
+        <div class="keybox">
+          <div class="small">「{fresh.name}」的令牌，请现在复制保存：</div>
+          <pre>{fresh.token}</pre>
+          <button type="button" onClick={() => navigator.clipboard?.writeText(fresh.token).catch(() => {})}>
+            复制
+          </button>
+        </div>
+      )}
+      <div class="table" style="margin-top:10px">
+        {list.map((t) => (
+          <div class="user-row" key={t.id}>
+            <div>
+              <b>{t.name}</b>
+              <div class="dim small">
+                创建于 {new Date(t.created_at).toLocaleString()} · {t.last_used_at ? `最近使用 ${relTime(t.last_used_at)}` : '还没用过'}
+              </div>
+            </div>
+            <button class="danger" onClick={() => revoke(t)}>
+              吊销
+            </button>
+          </div>
+        ))}
+        {!list.length && <p class="dim small">还没有令牌</p>}
+      </div>
+      {err && <p class="error">{err}</p>}
+      <form class="input-row" style="margin-top:12px" onSubmit={create}>
+        <input name="name" placeholder="名字，比如「我的手机」" required maxLength={40} />
+        <button class="primary">创建</button>
+      </form>
+    </Modal>
+  );
+}
+
 function PasswordModal({ onClose }: { onClose: () => void }) {
   const [msg, setMsg] = useState('');
   const submit = async (e: Event) => {
@@ -1891,6 +1967,7 @@ function Sidebar(props: {
   onPassword: () => void;
   onLogout: () => void;
   onEditFolder: (f: Folder | null) => void;
+  onTokens: () => void;
 }) {
   const { me, sessions, current } = props;
   const multiHost = new Set(sessions.map((s) => s.hostId)).size > 1;
@@ -1963,6 +2040,9 @@ function Sidebar(props: {
         )}
         <button class="ghost small" onClick={props.onPassword}>
           密码
+        </button>
+        <button class="ghost small" onClick={props.onTokens} title="API 令牌（App / 脚本）">
+          令牌
         </button>
         <button class="ghost small" onClick={props.onLogout}>
           退出
@@ -2239,7 +2319,7 @@ function MobileHome(props: {
   );
 }
 
-function MenuSheet({ me, onClose, onAdmin, onPassword, onLogout }: { me: Me; onClose: () => void; onAdmin: () => void; onPassword: () => void; onLogout: () => void }) {
+function MenuSheet({ me, onClose, onAdmin, onPassword, onTokens, onLogout }: { me: Me; onClose: () => void; onAdmin: () => void; onPassword: () => void; onTokens: () => void; onLogout: () => void }) {
   return (
     <Modal title={me.username} onClose={onClose}>
       <div class="sheet-theme">
@@ -2249,6 +2329,7 @@ function MenuSheet({ me, onClose, onAdmin, onPassword, onLogout }: { me: Me; onC
       <div class="sheet-list">
         {me.role === 'admin' && <button onClick={onAdmin}>主机、账号与分组</button>}
         <button onClick={onPassword}>修改密码</button>
+        <button onClick={onTokens}>API 令牌（App / 脚本）</button>
         <button class="danger" onClick={onLogout}>
           退出登录
         </button>
@@ -2261,7 +2342,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   const narrow = useNarrow();
   const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
   const [current, setCurrent] = useHashSession();
-  const [modal, setModal] = useState<'new' | 'admin' | 'password' | 'menu' | null>(null);
+  const [modal, setModal] = useState<'new' | 'admin' | 'password' | 'menu' | 'tokens' | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
   // folder being edited; null = creating one; undefined = dialog closed
   const [editFolder, setEditFolder] = useState<Folder | null | undefined>(undefined);
@@ -2343,6 +2424,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             onNew={() => setModal('new')}
             onAdmin={() => setModal('admin')}
             onPassword={() => setModal('password')}
+            onTokens={() => setModal('tokens')}
             onLogout={logout}
           />
           {session ? (
@@ -2355,7 +2437,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
         </>
       )}
       {editFolder !== undefined && <FolderModal folder={editFolder} onClose={() => setEditFolder(undefined)} />}
-      {modal === 'menu' && <MenuSheet me={me} onClose={() => setModal(null)} onAdmin={() => setModal('admin')} onPassword={() => setModal('password')} onLogout={logout} />}
+      {modal === 'menu' && <MenuSheet me={me} onClose={() => setModal(null)} onAdmin={() => setModal('admin')} onPassword={() => setModal('password')} onTokens={() => setModal('tokens')} onLogout={logout} />}
       {modal === 'new' && (
         <NewSession
           me={me}
@@ -2368,6 +2450,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
       )}
       {modal === 'admin' && <AdminModal me={me} onClose={() => setModal(null)} />}
       {modal === 'password' && <PasswordModal onClose={() => setModal(null)} />}
+      {modal === 'tokens' && <TokensModal onClose={() => setModal(null)} />}
     </div>
   );
 }

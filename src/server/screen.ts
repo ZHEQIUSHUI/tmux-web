@@ -7,7 +7,10 @@ const { SerializeAddon } = serializePkg;
 
 export type AgentStatus = 'starting' | 'idle' | 'busy' | 'waiting' | 'offline' | 'dead';
 
-const BUSY = /esc to interrupt/i;
+// "esc to interrupt" in the footer, or — when the window is too narrow for the footer to say
+// it — Claude Code's spinner line "✻ Working… (12s · ↓ 1.2k tokens)" (finished: "✻ Crunched for 4s",
+// no ellipsis) and Codex's "Working (3s • esc to interrupt)"
+const BUSY = /esc to interrupt|^\s*\S?\s*[A-Z][\w-]*…\s*\(\s*\d+[hms]|^\s*\S?\s*Working\s*\(\d+[hms]/im;
 // permission prompts / pickers of Claude Code and Codex
 const WAITING = [/Do you want to /, /^\s*[❯›>]\s*\d+\.\s/m, /Enter to confirm/, /\(y\/n\)/i, /Press enter to continue/i, /Yes, (allow|proceed)/i];
 const MODES: [RegExp, string][] = [
@@ -16,6 +19,7 @@ const MODES: [RegExp, string][] = [
   [/plan mode on/i, 'plan'],
   [/auto mode on/i, 'auto'],
 ];
+const BACKGROUND = /\d+\s+(?:shells?|monitors?|bash(?:es)?|background tasks?)(?:,\s*\d+\s+(?:shells?|monitors?|bash(?:es)?|background tasks?))*/i;
 const SEPARATOR = /^\s*[─━═╌┄\-]{10,}\s*$/;
 const BOX_EDGE = /^\s*[╭╰┌└][─━]+[╮╯┐┘]\s*$/;
 const PROMPT_LINE = /^\s*[│|]?\s*[❯›>](\s|$)/;
@@ -82,7 +86,11 @@ export class Screen {
    */
   hasPromptInput(): boolean {
     const buf = this.term.buffer.active;
-    for (let y = this.term.rows - 1; y >= Math.max(0, this.term.rows - 16); y--) {
+    // the input box is just above the footer, which is at the end of the content (not
+    // necessarily the bottom of the screen in a short session)
+    let last = this.term.rows - 1;
+    while (last > 0 && !buf.getLine(buf.viewportY + last)?.translateToString(true).trim()) last--;
+    for (let y = last; y >= Math.max(0, last - 15); y--) {
       const line = buf.getLine(buf.viewportY + y);
       if (!line || !/^[❯>]\s/.test(line.translateToString(true))) continue;
       for (let x = 1; x < line.length; x++) {
@@ -96,7 +104,7 @@ export class Screen {
   }
 
   /** Classify the agent's state and pull out the text it is producing right now. */
-  analyze(): { status: AgentStatus; preview: string; mode: string; update: boolean } {
+  analyze(): { status: AgentStatus; preview: string; mode: string; update: boolean; background: string } {
     const lines = this.lines().filter((l) => !NOISE.some((re) => re.test(l)));
     while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
     const text = lines.join('\n');
@@ -141,7 +149,9 @@ export class Screen {
     while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
     const tail = kept.slice(-20);
     while (tail.length && !tail[0].trim()) tail.shift();
-    return { status, preview: tail.join('\n'), mode, update };
+    // background work Claude Code is keeping alive ("1 shell, 1 monitor"); "← 1 agent" is just a hint
+    const background = BACKGROUND.exec(footer)?.[0] ?? '';
+    return { status, preview: tail.join('\n'), mode, update, background };
   }
 
   dispose() {

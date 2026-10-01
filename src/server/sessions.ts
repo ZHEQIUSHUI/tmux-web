@@ -60,6 +60,8 @@ export class LiveSession extends EventEmitter {
   mode = '';
   /** Claude Code says an update is installed and waits for a restart */
   update = false;
+  /** background work shown in Claude Code's footer, e.g. "1 shell, 1 monitor" ('' = none) */
+  background = '';
   error = '';
   screen: Screen | null = null;
   private stream: PaneStream | null = null;
@@ -212,10 +214,11 @@ export class LiveSession extends EventEmitter {
       if (!this.screen) return;
       await this.screen.flush();
       if (!this.screen) return;
-      const { status, preview, mode, update } = this.screen.analyze();
-      if (mode !== this.mode || update !== this.update) {
+      const { status, preview, mode, update, background } = this.screen.analyze();
+      if (mode !== this.mode || update !== this.update || background !== this.background) {
         this.mode = mode;
         this.update = update;
+        this.background = background;
         this.emit('state', this.stateView());
       }
       this.setStatus(status, preview);
@@ -235,7 +238,7 @@ export class LiveSession extends EventEmitter {
   }
 
   stateView() {
-    return { status: this.status, preview: this.preview, error: this.error, mode: this.mode, update: this.update };
+    return { status: this.status, preview: this.preview, error: this.error, mode: this.mode, update: this.update, background: this.background };
   }
 
   /**
@@ -243,8 +246,10 @@ export class LiveSession extends EventEmitter {
    * and the conversation: stop it, then run `claude --resume <current conversation>` with the
    * same options in the shell it leaves behind.
    */
-  async restartAgent(): Promise<void> {
+  async restartAgent(force = false): Promise<void> {
     if (this.row.agent !== 'claude') throw new Error('只有 Claude 会话支持');
+    // restarting ends Claude's background shells and monitors: only when asked to explicitly
+    if (this.background && !force) throw Object.assign(new Error(`Claude 有后台任务在运行（${this.background}），重启会结束它们`), { code: 'BACKGROUND' });
     const host = this.host;
     if (!host || !this.stream) throw new Error('会话未连接');
     const t = this.target;

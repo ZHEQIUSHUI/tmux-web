@@ -128,6 +128,15 @@ create table if not exists session_folders (
   folder_id integer not null references folders(id) on delete cascade,
   primary key (user_id, session_id)
 );
+-- long-lived tokens for apps and scripts (Authorization: Bearer ...)
+create table if not exists api_tokens (
+  id integer primary key,
+  user_id integer not null references users(id) on delete cascade,
+  name text not null,
+  token_hash text unique not null,
+  created_at integer not null,
+  last_used_at integer
+);
 create table if not exists auth_tokens (
   token_hash text primary key,
   user_id integer not null references users(id) on delete cascade,
@@ -196,6 +205,15 @@ export const q = {
   unadopt: db.prepare('update sessions set tmux_socket = null, tmux_name = null, adopted = 0 where id = ?'),
   setTranscript: db.prepare('update sessions set agent_session_id = ?, transcript_path = ? where id = ?'),
 
+  apiTokenUser: db.prepare<[string], UserRow & { token_id: number }>(
+    `select u.*, t.id as token_id from api_tokens t join users u on u.id = t.user_id where t.token_hash = ? and u.disabled = 0`,
+  ),
+  touchApiToken: db.prepare('update api_tokens set last_used_at = ? where id = ?'),
+  apiTokensOf: db.prepare<[number], { id: number; name: string; created_at: number; last_used_at: number | null }>(
+    'select id, name, created_at, last_used_at from api_tokens where user_id = ? order by id',
+  ),
+  insertApiToken: db.prepare('insert into api_tokens (user_id, name, token_hash, created_at) values (?, ?, ?, ?)'),
+  deleteApiToken: db.prepare('delete from api_tokens where id = ? and user_id = ?'),
   tokenUser: db.prepare<[string, number], UserRow>(
     `select u.* from auth_tokens t join users u on u.id = t.user_id
      where t.token_hash = ? and t.expires_at > ? and u.disabled = 0`,

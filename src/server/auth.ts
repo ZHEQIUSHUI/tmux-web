@@ -96,9 +96,29 @@ export function clientIp(req: IncomingMessage): string {
 }
 
 export function currentUser(req: IncomingMessage): UserRow | null {
+  // apps and scripts: Authorization: Bearer tw_...
+  const auth = req.headers.authorization;
+  if (auth?.startsWith('Bearer ')) {
+    const row = q.apiTokenUser.get(sha256(auth.slice(7).trim()));
+    if (!row) return null;
+    // touching on every request would be a write per request: once a minute is plenty
+    if (!lastTouch.has(row.token_id) || Date.now() - lastTouch.get(row.token_id)! > 60000) {
+      lastTouch.set(row.token_id, Date.now());
+      q.touchApiToken.run(Date.now(), row.token_id);
+    }
+    return row;
+  }
   const token = parseCookies(req)[COOKIE];
   if (!token) return null;
   return q.tokenUser.get(sha256(token), Date.now()) ?? null;
+}
+const lastTouch = new Map<number, number>();
+
+/** A new API token: returned once, stored hashed. */
+export function createApiToken(user: UserRow, name: string): { id: number; token: string } {
+  const token = 'tw_' + crypto.randomBytes(32).toString('base64url');
+  const info = q.insertApiToken.run(user.id, name, sha256(token), Date.now());
+  return { id: Number(info.lastInsertRowid), token };
 }
 
 export function startSession(req: IncomingMessage, res: ServerResponse, user: UserRow) {

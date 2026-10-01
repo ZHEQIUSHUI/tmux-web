@@ -2,7 +2,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { config } from './config.js';
 import { db, groupIdsOf, q, type Agent, type FolderRow, type HostRow, type Role, type Share, type UserRow } from './db.js';
-import { clientIp, currentUser, endSession, isSecureRequest, hashPassword, loginLockedFor, recordLogin, sameOrigin, startSession, verifyLogin, verifyPassword } from './auth.js';
+import { createApiToken, clientIp, currentUser, endSession, isSecureRequest, hashPassword, loginLockedFor, recordLogin, sameOrigin, startSession, verifyLogin, verifyPassword } from './auth.js';
 import { HttpError, readJson, sendJson, serveStatic, Sse } from './http.js';
 import { ensureSshKey, forgetHost, getHost, publicKey } from './host.js';
 import {
@@ -25,6 +25,7 @@ import {
   type Access,
 } from './sessions.js';
 import { claudeState, followLog, readFull, readPage } from './transcript.js';
+import { notices, noticesFor, visible, type Notice } from './notify.js';
 import { parsePreviewPath, previewCookie, proxyHttp, proxyUpgrade, readPreviewCookie, type ProxyTarget } from './proxy.js';
 
 // ---------- helpers ----------
@@ -228,10 +229,12 @@ route('DELETE', '/_tw/api/sessions/:id', async (req, res, [id]) => {
 /** Restart just the claude process (keeps the tmux session and the conversation). */
 route('POST', '/_tw/api/sessions/:id/restart-agent', async (req, res, [id]) => {
   const { live } = sessionFor(requireUser(req), id, 'control');
+  const { force } = await readJson(req);
   try {
-    await live.restartAgent();
+    await live.restartAgent(!!force);
   } catch (e: any) {
-    throw new HttpError(400, e.message);
+    // 409: background tasks are running; repeat with {"force": true} to restart anyway
+    throw new HttpError(e.code === 'BACKGROUND' ? 409 : 400, e.message);
   }
   sendJson(req, res, 200, { ok: true });
 });
@@ -446,6 +449,42 @@ route('DELETE', '/_tw/api/groups/:id', (req, res, [id]) => {
   q.deleteGroup.run(Number(id));
   hub.emit('list');
   sendJson(req, res, 200, q.groups.all());
+});
+
+// --- notifications (for apps; derived from status changes) ---
+
+route('GET', '/_tw/api/notifications', (req, res, _p, url) => {
+  const user = requireUser(req);
+  sendJson(req, res, 200, noticesFor(user, Number(url.searchParams.get('after') || 0), Math.min(200, Number(url.searchParams.get('limit') || 50))));
+});
+
+/** Live notices; reconnect with Last-Event-ID (or ?after=) to receive what was missed. */
+route('GET', '/_tw/api/notifications/stream', (req, res, _p, url) => {
+  const user = requireUser(req);
+  const after = Number(req.headers['last-event-id'] ?? url.searchParams.get('after') ?? 0) || 0;
+  const onNotice = (n: Notice) => visible(user, n) && sse.send('notice', n, n.id);
+  const sse = new Sse(req, res, () => notices.off('notice', onNotice));
+  // without a starting point, only what happens from now on
+  if (after) for (const n of noticesFor(user, after)) sse.send('notice', n, n.id);
+  notices.on('notice', onNotice);
+});
+
+// --- API tokens (Authorization: Bearer ...) ---
+
+route('GET', '/_tw/api/tokens', (req, res) => {
+  sendJson(req, res, 200, q.apiTokensOf.all(requireUser(req).id));
+});
+
+route('POST', '/_tw/api/tokens', async (req, res) => {
+  const user = requireUser(req);
+  const name = String((await readJson(req)).name || '').trim().slice(0, 40);
+  if (!name) throw new HttpError(400, '请给令牌起个名字，比如「我的手机」');
+  sendJson(req, res, 200, { ...createApiToken(user, name), name });
+});
+
+route('DELETE', '/_tw/api/tokens/:id', (req, res, [id]) => {
+  q.deleteApiToken.run(Number(id), requireUser(req).id);
+  sendJson(req, res, 200, { ok: true });
 });
 
 // --- hosts ---
