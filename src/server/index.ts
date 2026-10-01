@@ -9,6 +9,7 @@ import {
   accessOf,
   adoptSession,
   backend,
+  claudeHistory,
   listExistingTmux,
   createSession,
   deleteSession,
@@ -117,8 +118,12 @@ route('POST', '/_tw/api/sessions', async (req, res) => {
   const groupId = b.groupId ? Number(b.groupId) : null;
   if (groupId !== null && user.role !== 'admin' && !groupIdsOf(user.id).includes(groupId)) throw new HttpError(400, '不在该分组');
   const args = String(b.args || '').replace(/[\r\n]/g, ' ').slice(0, 500);
+  const resumeId = b.resumeId ? String(b.resumeId) : undefined;
+  if (resumeId && (agent !== 'claude' || !/^[0-9a-f-]{36}$/.test(resumeId))) throw new HttpError(400, '历史会话无效');
   try {
     const row = await createSession(user, {
+      resumeId,
+      fork: !!b.fork,
       name: String(b.name || '').trim().slice(0, 60),
       agent,
       hostId: host.id,
@@ -232,12 +237,9 @@ route('POST', '/_tw/api/sessions/:id/input', async (req, res, [id]) => {
   const { text, submit = true } = await readJson(req);
   if (typeof text !== 'string') throw new HttpError(400, 'text required');
   if (!live.alive) throw new HttpError(409, 'session 已停止');
-  if (text) await backend.paste(live.target, text);
-  if (submit) {
-    // give the TUI a moment to finish handling the paste before submitting
-    await new Promise((r) => setTimeout(r, 120));
-    await backend.keys(live.target, ['Enter']);
-  }
+  if (text && submit) await backend.submit(live.target, text);
+  else if (text) await backend.paste(live.target, text);
+  else if (submit) await backend.keys(live.target, ['Enter']);
   sendJson(req, res, 200, { ok: true });
 });
 
@@ -393,6 +395,18 @@ route('GET', '/_tw/api/hosts/:id/ports', async (req, res, [id]) => {
   if (!h || !canUseHost(user, h)) throw new HttpError(404, '主机不存在');
   try {
     sendJson(req, res, 200, await getHost(h.id)!.listPorts());
+  } catch (e: any) {
+    throw new HttpError(502, e.message);
+  }
+});
+
+/** Recent Claude Code conversations on a host, to continue one in a new session. */
+route('GET', '/_tw/api/hosts/:id/claude-history', async (req, res, [id]) => {
+  const user = requireUser(req);
+  const h = q.hostById.get(Number(id));
+  if (!h || !canUseHost(user, h)) throw new HttpError(404, '主机不存在');
+  try {
+    sendJson(req, res, 200, await claudeHistory(getHost(h.id)!));
   } catch (e: any) {
     throw new HttpError(502, e.message);
   }

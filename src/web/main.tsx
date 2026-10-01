@@ -292,8 +292,18 @@ const QUICK_KEYS: [string, string[], string][] = [
   ['^C', ['C-c'], 'Ctrl+C'],
 ];
 
+/** A message sent from this page that hasn't shown up in the agent's log yet. */
+interface Pending {
+  key: number;
+  text: string;
+  sent: boolean;
+}
+const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+
 function ChatView({ session }: { session: SessionInfo }) {
   const [items, setItems] = useState<ChatItem[]>([]);
+  // shown right away when you press send; removed once the agent's log has the message
+  const [pending, setPending] = useState<Pending[]>([]);
   const [page, setPage] = useState<{ start: number; hasMore: boolean; pending: boolean } | null>(null);
   const [state, setState] = useState<{ status: Status; preview: string; error?: string }>({ status: session.status, preview: '' });
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -326,11 +336,14 @@ function ChatView({ session }: { session: SessionInfo }) {
           {
             msg: (fresh: ChatItem[], ev) => {
               if (ev.lastEventId) offset = Number(ev.lastEventId);
-              if (fresh.length)
+              if (fresh.length) {
                 setItems((cur) => {
                   const seen = new Set(cur.map((i) => i.id));
                   return [...cur, ...fresh.filter((i) => !seen.has(i.id))];
                 });
+                const arrived = fresh.filter((i) => i.role === 'user').map((i) => norm(i.text));
+                if (arrived.length) setPending((ps) => ps.filter((p) => !arrived.some((a) => a === norm(p.text) || a.startsWith(norm(p.text).slice(0, 200)))));
+              }
               setPage((pg) => (pg && pg.pending ? { ...pg, pending: false } : pg));
             },
             state: setState,
@@ -381,7 +394,7 @@ function ChatView({ session }: { session: SessionInfo }) {
       el.scrollTop = anchor.current.top + (el.scrollHeight - anchor.current.height);
       anchor.current = null;
     } else if (stick.current) el.scrollTop = el.scrollHeight;
-  }, [items, state.preview, state.status]);
+  }, [items, pending, state.preview, state.status]);
 
   const onScroll = () => {
     const el = scroller.current!;
@@ -406,6 +419,14 @@ function ChatView({ session }: { session: SessionInfo }) {
           )}
           {!page && !error && <div class="empty">加载中…</div>}
           {blocks.map((b) => (b.kind === 'tools' ? <ToolGroup key={b.items[0].id} items={b.items} onExpand={expand} /> : <Message key={b.it.id} it={b.it} onExpand={expand} />))}
+          {pending.map((p) => (
+            <div key={p.key} class="msg user pending">
+              <div class="bubble">
+                {p.text}
+                <span class="pending-tag">{p.sent ? '已发送' : '发送中…'}</span>
+              </div>
+            </div>
+          ))}
           {live && (
             <div class={`live ${state.status}`}>
               <div class="live-head">
@@ -424,12 +445,35 @@ function ChatView({ session }: { session: SessionInfo }) {
       )}
       {!online && <div class="banner">连接中断，正在重连…</div>}
       {online && state.status === 'offline' && <div class="banner error">主机离线{state.error ? `：${state.error}` : ''}，恢复后会自动重连</div>}
-      {session.access === 'control' ? <Composer sessionId={id} status={state.status} /> : <div class="readonly">只读：你没有这个会话的操作权限</div>}
+      {session.access === 'control' ? (
+        <Composer
+          sessionId={id}
+          status={state.status}
+          onPending={(text) => {
+            // a shell has no chat log to confirm the message: don't show a placeholder
+            if (session.agent === 'bash') return () => {};
+            const key = Date.now() + Math.random();
+            stick.current = true;
+            setPending((ps) => [...ps, { key, text, sent: false }]);
+            // drop it eventually even if it never shows up in the log (e.g. it was a /command)
+            const expire = setTimeout(() => setPending((ps) => ps.filter((p) => p.key !== key)), 120000);
+            return (ok: boolean) => {
+              if (ok) setPending((ps) => ps.map((p) => (p.key === key ? { ...p, sent: true } : p)));
+              else {
+                clearTimeout(expire);
+                setPending((ps) => ps.filter((p) => p.key !== key));
+              }
+            };
+          }}
+        />
+      ) : (
+        <div class="readonly">只读：你没有这个会话的操作权限</div>
+      )}
     </div>
   );
 }
 
-function Composer({ sessionId, status }: { sessionId: number; status: Status }) {
+function Composer({ sessionId, status, onPending }: { sessionId: number; status: Status; onPending: (text: string) => (ok: boolean) => void }) {
   const draftKey = `tw:draft:${sessionId}`;
   const [text, setText] = useState(() => store.get(draftKey) || '');
   const [sending, setSending] = useState(false);
@@ -453,15 +497,26 @@ function Composer({ sessionId, status }: { sessionId: number; status: Status }) 
     store.set(draftKey, v || null);
   };
 
+  // optimistic: clear the box and show the message at once, the request runs behind it
   const send = async () => {
-    if (!text.trim() || sending) return;
+    const msg = text;
+    if (!msg.trim() || sending) return;
     setSending(true);
     setErr('');
+    update('');
+    const done = onPending(msg);
     try {
-      await api('POST', `/_tw/api/sessions/${sessionId}/input`, { text });
-      update('');
+      await api('POST', `/_tw/api/sessions/${sessionId}/input`, { text: msg });
+      done(true);
     } catch (e: any) {
+      done(false);
       setErr(e.message);
+      // give the text back unless something new was typed meanwhile
+      setText((cur) => {
+        const restored = cur ? cur : msg;
+        store.set(draftKey, restored || null);
+        return restored;
+      });
     } finally {
       setSending(false);
     }
@@ -760,8 +815,76 @@ function AdoptList({ hostId, onAdopted }: { hostId: number; onAdopted: (id: numb
   );
 }
 
+interface ClaudeHistory {
+  id: string;
+  cwd: string;
+  title: string;
+  lastPrompt: string;
+  mtime: number;
+  size: number;
+  running?: { tmux?: string };
+  openAs?: number;
+}
+
+function relTime(ms: number): string {
+  const s = (Date.now() - ms) / 1000;
+  if (s < 60) return '刚刚';
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+  if (s < 86400 * 30) return `${Math.floor(s / 86400)} 天前`;
+  return new Date(ms).toLocaleDateString();
+}
+
+/** Pick an earlier Claude Code conversation on the host to continue (claude --resume). */
+function ClaudeHistoryPicker({ hostId, selected, onSelect }: { hostId: number; selected: ClaudeHistory | null; onSelect: (h: ClaudeHistory | null) => void }) {
+  const [list, setList] = useState<ClaudeHistory[] | null>(null);
+  const [err, setErr] = useState('');
+  const [filter, setFilter] = useState('');
+  useEffect(() => {
+    setList(null);
+    setErr('');
+    api<ClaudeHistory[]>('GET', `/_tw/api/hosts/${hostId}/claude-history`).then(setList, (e) => {
+      setList([]);
+      setErr(e.message);
+    });
+  }, [hostId]);
+  const f = filter.trim().toLowerCase();
+  const shown = (list || []).filter((h) => !f || `${h.title} ${h.lastPrompt} ${h.cwd}`.toLowerCase().includes(f));
+  return (
+    <div class="hist">
+      <div class="hist-head">
+        <span>从历史会话继续</span>
+        {list && list.length > 5 && <input value={filter} onInput={(e) => setFilter((e.target as HTMLInputElement).value)} placeholder="搜索标题、内容、目录" />}
+      </div>
+      <div class="hist-list">
+        <button type="button" class={`hist-item ${selected ? '' : 'on'}`} onClick={() => onSelect(null)}>
+          <span class="hist-title">新会话</span>
+          <span class="hist-sub">不基于历史，在下面的目录里开始</span>
+        </button>
+        {list === null && <p class="dim small pad">读取历史会话…</p>}
+        {err && <p class="error small pad">{err}</p>}
+        {shown.map((h) => (
+          <button type="button" key={h.id} class={`hist-item ${selected?.id === h.id ? 'on' : ''}`} onClick={() => onSelect(h)}>
+            <span class="hist-title">
+              {h.title || h.lastPrompt || h.id.slice(0, 8)}
+              {h.running && <span class="tag warn">运行中{h.running.tmux ? ` · ${h.running.tmux}` : ''}</span>}
+              {h.openAs && <span class="tag">已在 tmux-web</span>}
+            </span>
+            {h.title && h.lastPrompt && <span class="hist-sub">最近：{h.lastPrompt}</span>}
+            <span class="hist-sub mono">
+              {shortPath(h.cwd)} · {relTime(h.mtime)}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => void; onCreated: (id: number) => void }) {
   const [mode, setMode] = useState<'new' | 'adopt'>('new');
+  const [agent, setAgent] = useState<keyof typeof AGENT_LABEL>('claude');
+  const [resume, setResume] = useState<ClaudeHistory | null>(null);
   const [hosts] = useHosts();
   const [hostId, setHostId] = useState<number | null>(null);
   const [dirs, setDirs] = useState<string[]>([]);
@@ -783,8 +906,10 @@ function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => void; o
     setBusy(true);
     setErr('');
     try {
+      const fromHistory = agent === 'claude' && resume;
       const { id } = await api<{ id: number }>('POST', '/_tw/api/sessions', {
         ...f,
+        ...(fromHistory ? { resumeId: resume.id, cwd: resume.cwd, fork: !!resume.running, name: f.name || resume.title || '' } : {}),
         hostId,
         groupId: f.groupId ? Number(f.groupId) : null,
         share: f.groupId ? f.share : 'none',
@@ -822,7 +947,7 @@ function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => void; o
       <form onSubmit={submit} class="form" style={mode === 'adopt' ? 'display:none' : ''}>
         <label>
           类型
-          <select name="agent" defaultValue="claude">
+          <select name="agent" value={agent} onChange={(e) => setAgent((e.target as HTMLSelectElement).value as keyof typeof AGENT_LABEL)}>
             {(Object.keys(AGENT_LABEL) as (keyof typeof AGENT_LABEL)[]).map((a) => (
               <option key={a} value={a}>
                 {AGENT_LABEL[a]}
@@ -844,9 +969,27 @@ function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => void; o
           </label>
         )}
         {host && host.ok === false && <p class="error small">这台主机当前连不上：{host.error}</p>}
-        <label>
+        {agent === 'claude' && hostId !== null && <ClaudeHistoryPicker key={hostId} hostId={hostId} selected={resume} onSelect={setResume} />}
+        {agent === 'claude' && resume?.running && (
+          <p class="small hint">
+            这个会话正在{resume.running.tmux ? ` tmux「${resume.running.tmux}」` : '别处'}运行。两个进程同时写同一个对话会互相干扰，所以会<b>复制一份</b>再继续（--fork-session），原会话不受影响。
+            {resume.openAs ? (
+              <>
+                {' '}
+                也可以
+                <button type="button" class="link" onClick={() => onCreated(resume.openAs!)}>
+                  直接打开 tmux-web 里的那个会话
+                </button>
+                。
+              </>
+            ) : (
+              ' 想直接操作原会话的话，用「导入已有 tmux」。'
+            )}
+          </p>
+        )}
+        <label style={agent === 'claude' && resume ? 'display:none' : ''}>
           工作目录
-          <input name="cwd" list="dirs" key={hostId ?? 0} defaultValue={dirs[0] || ''} placeholder="~/项目，不存在会自动创建" required />
+          <input name="cwd" list="dirs" key={hostId ?? 0} defaultValue={dirs[0] || ''} placeholder="~/项目，不存在会自动创建" required={!(agent === 'claude' && resume)} />
           <datalist id="dirs">
             {dirs.map((d) => (
               <option key={d} value={d} />
@@ -855,7 +998,7 @@ function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => void; o
         </label>
         <label>
           名称
-          <input name="name" placeholder="留空则用 agent + 目录名" maxLength={60} />
+          <input name="name" placeholder={agent === 'claude' && resume?.title ? resume.title : '留空则用 agent + 目录名'} maxLength={60} />
         </label>
         <label>
           额外启动参数
@@ -864,7 +1007,7 @@ function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => void; o
         <ShareFields groups={groups} />
         {err && <p class="error">{err}</p>}
         <button class="primary" disabled={busy || hostId === null}>
-          {busy ? '创建中…' : '创建'}
+          {busy ? '创建中…' : agent === 'claude' && resume ? (resume.running ? '复制一份并继续' : '继续这个会话') : '创建'}
         </button>
       </form>
     </Modal>

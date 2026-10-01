@@ -45,6 +45,10 @@ function blockText(c: unknown): string {
   return '';
 }
 
+const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+const stripTags = (s: string) => stripAnsi(s.replace(/<\/?[a-z-]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+const tagText = (s: string, tag: string) => stripAnsi(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(s)?.[1] ?? '').replace(/\s+/g, ' ').trim();
+
 function parseClaude(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
   if ((o.type !== 'user' && o.type !== 'assistant') || o.isSidechain) return [];
   const content = o.message?.content;
@@ -61,8 +65,23 @@ function parseClaude(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
   if (o.isMeta) return [];
   if (o.isCompactSummary) return [{ role: 'meta', text: '（上下文已压缩）' }];
   if (typeof content === 'string') {
-    if (/^\s*<(command-name|local-command-stdout|command-message|bash-input|bash-stdout)>/.test(content)) {
-      const cleaned = content.replace(/<\/?[a-z-]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    // Claude Code injects notifications (background tasks, monitors) as user turns; only
+    // origin.kind "human" is something the person actually typed
+    const origin = o.origin?.kind as string | undefined;
+    if ((origin && origin !== 'human') || o.promptSource === 'system' || /^\s*<task-notification>/.test(content)) {
+      const summary = tagText(content, 'summary').replace(/^Monitor event: "(.*)"$/, '监控「$1」');
+      const event = tagText(content, 'event');
+      const status = tagText(content, 'status');
+      const text = [summary, event].filter(Boolean).join(' → ') || stripTags(content);
+      return text ? [{ role: 'meta', text: `后台任务${status ? `（${status}）` : ''}：${text}` }] : [];
+    }
+    if (/^\s*<(command-name|command-message|command-args)>/.test(content)) {
+      const cmd = tagText(content, 'command-name') || `/${tagText(content, 'command-message')}`;
+      const args = tagText(content, 'command-args');
+      return [{ role: 'meta', text: `${cmd}${args ? ' ' + args : ''}` }];
+    }
+    if (/^\s*<(local-command-stdout|local-command-stderr|bash-input|bash-stdout|bash-stderr)>/.test(content)) {
+      const cleaned = stripTags(content);
       return cleaned ? [{ role: 'meta', text: cleaned }] : [];
     }
     return [{ role: 'user', text: content }];

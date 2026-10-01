@@ -383,13 +383,25 @@ label select {
   word-break: break-word;
   max-width: 85%;
 }
+.msg.pending .bubble {
+  opacity: 0.6;
+}
+.pending-tag {
+  display: block;
+  font-size: 11px;
+  color: var(--dim);
+  text-align: right;
+  margin-top: 2px;
+}
 .bubble .link {
   display: block;
 }
 .msg.meta {
-  text-align: center;
   font-size: 12px;
   color: var(--dim);
+  border-left: 2px dashed var(--line);
+  padding-left: 10px;
+  word-break: break-word;
 }
 .md {
   word-break: break-word;
@@ -790,6 +802,79 @@ a.btn {
   align-items: center;
   gap: 4px;
   color: var(--text);
+}
+.hist {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.hist-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--dim);
+  border-bottom: 1px solid var(--line);
+  background: var(--side);
+}
+.hist-head span {
+  flex: none;
+}
+.hist-head input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+}
+.hist-list {
+  max-height: 260px;
+  overflow-y: auto;
+  display: grid;
+}
+.hist-item {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  padding: 8px 12px;
+  min-width: 0;
+}
+.hist-item.on {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.hist-title {
+  font-weight: 600;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.hist-title .tag {
+  font-weight: 400;
+  flex: none;
+}
+.hist-sub {
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mono {
+  font-family: var(--mono);
+}
+.hint {
+  background: color-mix(in srgb, var(--busy) 12%, transparent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 0;
 }
 .mode-tabs {
   margin-top: 12px;

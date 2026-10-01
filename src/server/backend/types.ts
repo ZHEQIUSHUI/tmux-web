@@ -39,6 +39,8 @@ export interface SessionBackend {
   kill(t: PaneTarget): Promise<void>;
   /** paste text as one block (bracketed paste when the app asked for it) */
   paste(t: PaneTarget, text: string): Promise<void>;
+  /** paste text and press Enter, in one round trip */
+  submit(t: PaneTarget, text: string): Promise<void>;
   /** named keys, e.g. Enter, Escape, C-c, Up */
   keys(t: PaneTarget, keys: string[]): Promise<void>;
   capture(t: PaneTarget): Promise<PaneCapture>;

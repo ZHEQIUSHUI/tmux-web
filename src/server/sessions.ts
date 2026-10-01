@@ -21,13 +21,15 @@ const INSTALL_HINT: Record<string, string[]> = {
  * The pane's command. It runs in a login shell so the agent sees the same PATH and environment
  * as an interactive login on the host; when the agent exits, a shell stays in the pane.
  */
-function agentCommand(row: SessionRow, resume: boolean): string {
+function agentCommand(row: SessionRow, resume: boolean, fork = false): string {
   const extra = row.args.trim() ? ' ' + row.args.trim() : '';
   let cmd = '';
   if (row.agent === 'claude') {
     const id = row.agent_session_id!;
+    // fork: continue a copy of a conversation that is still running elsewhere
+    const resumeCmd = `claude --resume ${id}${fork ? ' --fork-session' : ''}${extra}`;
     cmd = resume
-      ? `if ls "$HOME"/.claude/projects/*/${id}.jsonl >/dev/null 2>&1; then claude --resume ${id}${extra}; else claude --session-id ${id}${extra}; fi`
+      ? `if ls "$HOME"/.claude/projects/*/${id}.jsonl >/dev/null 2>&1; then ${resumeCmd}; else claude --session-id ${id}${extra}; fi`
       : `claude --session-id ${id}${extra}`;
   } else if (row.agent === 'codex') {
     cmd = resume && row.agent_session_id ? `codex resume ${row.agent_session_id}${extra}` : `codex${extra}`;
@@ -82,13 +84,13 @@ export class LiveSession extends EventEmitter {
   }
 
   /** Attach to the tmux session, (re)creating it if needed. */
-  start(resume: boolean): Promise<void> {
+  start(resume: boolean, fork = false): Promise<void> {
     this.stopped = false;
-    this.starting ??= this.doStart(resume).finally(() => (this.starting = null));
+    this.starting ??= this.doStart(resume, fork).finally(() => (this.starting = null));
     return this.starting;
   }
 
-  private async doStart(resume: boolean) {
+  private async doStart(resume: boolean, fork = false) {
     if (this.stream) return;
     try {
       const host = await readyHost(this.row.host_id);
@@ -104,7 +106,7 @@ export class LiveSession extends EventEmitter {
       if (!(await backend.has(t))) {
         await backend.create(t, {
           cwd: this.row.cwd,
-          command: agentCommand(this.row, resume),
+          command: agentCommand(this.row, resume, fork),
           cols: config.defaultCols,
           rows: config.defaultRows,
           term: host.status.term || 'screen-256color',
@@ -256,7 +258,8 @@ export class LiveSession extends EventEmitter {
         )
         .catch(() => '')
     ).trim();
-    if (id && /^[0-9a-f-]{36}$/.test(id) && id !== r.agent_session_id) {
+    // switch only once the new conversation has a log (a fresh fork writes it with its first message)
+    if (id && /^[0-9a-f-]{36}$/.test(id) && id !== r.agent_session_id && (await claudeTranscript(host, id).catch(() => null))) {
       q.setTranscript.run(id, null, r.id);
       r.agent_session_id = id;
       r.transcript_path = null;
@@ -368,19 +371,27 @@ async function prepareCwd(host: Host, cwd: string): Promise<string> {
   return out.trim();
 }
 
-export async function createSession(owner: UserRow, input: { name: string; agent: Agent; hostId: number; cwd: string; args: string; groupId: number | null; share: Share }) {
+export async function createSession(
+  owner: UserRow,
+  input: { name: string; agent: Agent; hostId: number; cwd: string; args: string; groupId: number | null; share: Share; resumeId?: string; fork?: boolean },
+) {
   const host = await readyHost(input.hostId).catch((e) => {
     throw new Error(`主机不可用：${e.message}`);
   });
+  if (input.resumeId && !input.fork) {
+    // two claude processes on one conversation would interleave its log
+    const running = (await claudeHistory(host, 200)).find((h) => h.id === input.resumeId)?.running;
+    if (running) throw new Error(`这个会话正在${running.tmux ? ` tmux「${running.tmux}」` : '别处'}运行，请选择「复制一份继续」，或直接导入那个 tmux 会话`);
+  }
   const cwd = await prepareCwd(host, input.cwd || '~');
-  const agentSessionId = input.agent === 'claude' ? crypto.randomUUID() : null;
+  const agentSessionId = input.agent === 'claude' ? input.resumeId || crypto.randomUUID() : null;
   const name = input.name || `${input.agent} ${cwd.split('/').pop() || '~'}`;
   const info = q.insertSession.run(name, owner.id, input.groupId, input.share, input.agent, agentSessionId, cwd, input.args, input.hostId, Date.now());
   const row = q.sessionById.get(Number(info.lastInsertRowid))!;
   const s = new LiveSession(row);
   live.set(row.id, s);
   try {
-    await s.start(false);
+    await s.start(!!input.resumeId, !!input.fork);
   } catch (e) {
     live.delete(row.id);
     q.deleteSession.run(row.id);
@@ -481,6 +492,95 @@ export async function adoptSession(owner: UserRow, host: Host, socket: string, n
   await s.start(true);
   hub.emit('list');
   return row;
+}
+
+// ---------- Claude Code history ----------
+
+export interface ClaudeHistory {
+  id: string;
+  cwd: string;
+  title: string;
+  lastPrompt: string;
+  mtime: number;
+  size: number;
+  /** running in some claude process right now (its tmux pane if known) */
+  running?: { tmux?: string };
+  /** already open in tmux-web as this session */
+  openAs?: number;
+}
+
+const HIST_FIELDS = /^"(aiTitle|customTitle|agentName|lastPrompt|cwd)":"(.*)$/;
+
+function jsonUnescape(s: string): string {
+  // values may be cut mid-escape by the length limit: drop a dangling backslash sequence
+  for (let t = s; t; t = t.slice(0, -1)) {
+    try {
+      return JSON.parse(`"${t}"`);
+    } catch {
+      /* shorten and retry */
+    }
+  }
+  return '';
+}
+
+/**
+ * Recent Claude Code conversations on a host. Only the first and last 256KB of each log are read,
+ * which is where titles, the working directory and the latest prompt are recorded.
+ */
+export async function claudeHistory(host: Host, limit = 60): Promise<ClaudeHistory[]> {
+  const out = await host.shText(
+    `cd "$HOME/.claude/projects" 2>/dev/null || exit 0; ` +
+      `ls -t -- */*.jsonl 2>/dev/null | head -n "$1" | while IFS= read -r f; do ` +
+      `printf '@\t%s\t%s\n' "$f" "$(stat -c '%Y %s' -- "$f" 2>/dev/null || stat -f '%m %z' -- "$f")"; ` +
+      `{ head -c 262144 -- "$f"; printf '\\n'; tail -c 262144 -- "$f"; } | grep -o '"\\(aiTitle\\|customTitle\\|agentName\\|lastPrompt\\|cwd\\)":"\\([^"\\\\]\\|\\\\.\\)\\{0,240\\}'; ` +
+      `done; ` +
+      `for f in "$HOME"/.claude/sessions/*.json; do [ -f "$f" ] || continue; p=\${f##*/}; p=\${p%.json}; kill -0 "$p" 2>/dev/null || continue; ` +
+      `printf 'R\\t%s\\t%s\\n' "$(sed -n 's/.*"sessionId" *: *"\\([0-9a-f-]*\\)".*/\\1/p' "$f" | head -n1)" "$(sed -n 's/.*"tmux" *: *"\\([^"]*\\)".*/\\1/p' "$f" | head -n1)"; done`,
+    [String(limit)],
+  );
+  const list: ClaudeHistory[] = [];
+  const running = new Map<string, { tmux?: string }>();
+  let cur: (ClaudeHistory & { titles: Record<string, string> }) | null = null;
+  const flush = () => {
+    if (!cur) return;
+    const t = cur.titles;
+    cur.title = t.customTitle || t.agentName || t.aiTitle || '';
+    const { titles: _, ...h } = cur;
+    list.push(h);
+  };
+  for (const line of out.split('\n')) {
+    if (line.startsWith('@\t')) {
+      flush();
+      const [, file, stat] = line.split('\t');
+      const [mtime, size] = (stat || '').split(' ').map(Number);
+      const id = file.split('/').pop()!.replace(/\.jsonl$/, '');
+      cur = { id, cwd: '', title: '', lastPrompt: '', mtime: mtime * 1000, size, titles: {} };
+    } else if (line.startsWith('R\t')) {
+      const [, id, tmux] = line.split('\t');
+      // tmux is "session:@window.%pane"; the session name is what people know
+      if (id) running.set(id, tmux ? { tmux: tmux.split(':')[0] } : {});
+    } else if (cur) {
+      const m = HIST_FIELDS.exec(line);
+      if (!m) continue;
+      const v = jsonUnescape(m[2]).replace(/\s+/g, ' ').trim();
+      if (!v) continue;
+      if (m[1] === 'cwd') cur.cwd = v; // the latest one: conversations can move with the project
+      else if (m[1] === 'lastPrompt') cur.lastPrompt = v;
+      else cur.titles[m[1]] = v; // later occurrences (renames) win
+    }
+  }
+  flush();
+  const open = new Map(
+    q.sessions
+      .all()
+      .filter((r) => r.host_id === host.row.id && r.agent === 'claude' && r.agent_session_id)
+      .map((r) => [r.agent_session_id!, r.id]),
+  );
+  for (const h of list) {
+    if (running.has(h.id)) h.running = running.get(h.id);
+    if (open.has(h.id)) h.openAs = open.get(h.id);
+  }
+  return list;
 }
 
 /** Directories offered when creating a session: the host user's home and what's under it. */
