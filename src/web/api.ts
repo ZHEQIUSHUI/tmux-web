@@ -26,6 +26,19 @@ export interface SessionInfo {
   tmux: string | null;
   access: 'view' | 'control';
   status: Status;
+  /** when the session last did something (ms) */
+  activityAt: number;
+}
+
+/** Server-side notification (see docs/API.md) */
+export interface Notice {
+  id: number;
+  at: number;
+  sessionId: number;
+  session: string;
+  kind: 'waiting' | 'done' | 'offline' | 'ended';
+  title: string;
+  text: string;
 }
 
 export interface ChatItem {

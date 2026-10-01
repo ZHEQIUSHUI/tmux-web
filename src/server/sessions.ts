@@ -62,6 +62,8 @@ export class LiveSession extends EventEmitter {
   update = false;
   /** background work shown in Claude Code's footer, e.g. "1 shell, 1 monitor" ('' = none) */
   background = '';
+  /** when something last happened: the agent's log changed (or, for a shell, the screen did) */
+  activityAt = 0;
   error = '';
   screen: Screen | null = null;
   private stream: PaneStream | null = null;
@@ -155,6 +157,8 @@ export class LiveSession extends EventEmitter {
       screen.write(buf);
       this.emit('data', buf);
       this.scheduleAnalyze();
+      // a shell has no log: its screen is the activity (agents: see pollActivity)
+      if (this.row.agent === 'bash') this.touch(Date.now());
     });
     // someone resized the window (e.g. the user's own terminal on an adopted session): follow it
     stream.on('layout', () => {
@@ -235,6 +239,14 @@ export class LiveSession extends EventEmitter {
       hub.emit('status', this.row.id, status);
     }
     if (changed || previewChanged) this.emit('state', this.stateView());
+  }
+
+  /** Record activity; tell the sidebars when it moves noticeably. */
+  touch(at: number) {
+    if (at <= this.activityAt) return;
+    const notable = at - this.activityAt > 5000;
+    this.activityAt = at;
+    if (notable) hub.emit('activity', this.row.id, at);
   }
 
   stateView() {
@@ -435,10 +447,44 @@ export function sessionView(user: UserRow) {
       tmux: row.adopted ? `${row.tmux_socket === 'default' ? '' : `-L ${row.tmux_socket} `}${row.tmux_name}` : null,
       access,
       status: live.get(row.id)?.status ?? 'dead',
+      activityAt: live.get(row.id)?.activityAt || row.created_at,
     }));
 }
 
 // ---------- lifecycle ----------
+
+// ---------- activity ----------
+
+const ACTIVITY_EVERY_MS = 10_000;
+
+/**
+ * Every few seconds, one command per host stats the agents' logs: their modification time is
+ * when the session last did something (a reply, a tool call, your message).
+ */
+async function pollActivity() {
+  const byHost = new Map<number, LiveSession[]>();
+  for (const s of live.values()) {
+    if (s.row.agent === 'bash' || !s.host) continue;
+    if (!s.row.transcript_path) await s.transcriptPath().catch(() => null);
+    if (!s.row.transcript_path) continue;
+    byHost.set(s.row.host_id, [...(byHost.get(s.row.host_id) ?? []), s]);
+  }
+  for (const [hostId, list] of byHost) {
+    const host = getHost(hostId);
+    if (!host?.status.ok) continue;
+    try {
+      const out = await host.shText(`for f; do stat -c %Y -- "$f" 2>/dev/null || stat -f %m -- "$f" 2>/dev/null || echo 0; done`, list.map((s) => s.row.transcript_path!));
+      out.trim().split('\n').forEach((v, i) => {
+        const t = Number(v) * 1000;
+        if (t && list[i]) list[i].touch(t);
+      });
+    } catch {
+      /* host hiccup: next round */
+    }
+  }
+}
+setInterval(() => pollActivity().catch(() => {}), ACTIVITY_EVERY_MS).unref();
+setTimeout(() => pollActivity().catch(() => {}), 2000).unref();
 
 /** At boot: attach to every session, recreating (and resuming) the ones whose tmux is gone. */
 export async function restoreAll() {
@@ -618,6 +664,31 @@ function jsonUnescape(s: string): string {
  * Recent Claude Code conversations on a host. Only the first and last 256KB of each log are read,
  * which is where titles, the working directory and the latest prompt are recorded.
  */
+const historyCache = new Map<number, { at: number; list: Promise<ClaudeHistory[]> }>();
+
+/**
+ * Claude history with a short cache: reading many large logs takes seconds, and the list
+ * barely changes between opening the dialog twice. A stale answer is returned at once while
+ * a fresh one is fetched for next time.
+ */
+export function claudeHistoryCached(host: Host): Promise<ClaudeHistory[]> {
+  const hit = historyCache.get(host.row.id);
+  const refresh = () => {
+    const list = claudeHistory(host);
+    historyCache.set(host.row.id, { at: Date.now(), list });
+    list.catch(() => historyCache.delete(host.row.id));
+    return list;
+  };
+  if (!hit) return refresh();
+  if (Date.now() - hit.at > 15_000) {
+    // serve the previous result now, refresh behind it
+    const prev = hit.list;
+    refresh().catch(() => {});
+    return prev;
+  }
+  return hit.list;
+}
+
 export async function claudeHistory(host: Host, limit = 60): Promise<ClaudeHistory[]> {
   const out = await host.shText(
     `cd "$HOME/.claude/projects" 2>/dev/null || exit 0; ` +

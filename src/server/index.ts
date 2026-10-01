@@ -10,6 +10,7 @@ import {
   adoptSession,
   backend,
   claudeHistory,
+  claudeHistoryCached,
   listExistingTmux,
   createSession,
   deleteSession,
@@ -338,6 +339,45 @@ route('POST', '/_tw/api/sessions/:id/input', async (req, res, [id]) => {
   sendJson(req, res, 200, { ok: true });
 });
 
+/**
+ * Upload a file (an image from the phone, a screenshot...) to the session's host, for the agent to
+ * read. Raw body; the file name comes in X-File-Name (URI-encoded). Returns its path on the host.
+ */
+route('POST', '/_tw/api/sessions/:id/upload', async (req, res, [id]) => {
+  const { row, live } = sessionFor(requireUser(req), id, 'control');
+  if (!live.host) throw new HttpError(409, '会话未连接');
+  const MAX = 25 * 1024 * 1024;
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) {
+    size += c.length;
+    if (size > MAX) throw new HttpError(413, '文件太大（上限 25MB）');
+    chunks.push(c);
+  }
+  if (!size) throw new HttpError(400, '空文件');
+  const raw = decodeURIComponent(String(req.headers['x-file-name'] || 'file'));
+  // keep it a plain file name: no paths, no leading dots, nothing the shell or Claude could misread
+  const base = raw.split(/[\\/]/).pop()!.replace(/[^\w.\-\u4e00-\u9fff]+/g, '_').replace(/^\.+/, '').slice(-80) || 'file';
+  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  try {
+    // inside the session's working directory, so the agent may read it without asking; in a git
+    // repo the folder goes into the local exclude list (.git/info/exclude, never committed)
+    const path = (
+      await live.host.sh(
+        `d="$1/.tmux-web/uploads"; mkdir -p "$d" && f="$d/$2" && cat > "$f" || exit 1; ` +
+          `g=$(git -C "$1" rev-parse --git-dir 2>/dev/null) && { case $g in /*) ;; *) g="$1/$g";; esac; ` +
+          `grep -qxF '.tmux-web/' "$g/info/exclude" 2>/dev/null || { mkdir -p "$g/info" && echo '.tmux-web/' >> "$g/info/exclude"; }; }; ` +
+          `printf '%s' "$f"`,
+        [row.cwd, `${stamp}-${base}`],
+        Buffer.concat(chunks),
+      )
+    ).toString();
+    sendJson(req, res, 200, { path, name: base, size });
+  } catch (e: any) {
+    throw new HttpError(502, `上传失败：${e.message}`);
+  }
+});
+
 route('POST', '/_tw/api/sessions/:id/keys', async (req, res, [id]) => {
   const { live } = sessionFor(requireUser(req), id, 'control');
   const { keys } = await readJson(req);
@@ -361,12 +401,17 @@ route('GET', '/_tw/api/events', (req, res) => {
   const onStatus = (id: number, status: string) => {
     if (visible.has(id)) sse.send('status', { id, status });
   };
+  const onActivity = (id: number, at: number) => {
+    if (visible.has(id)) sse.send('activity', { id, at });
+  };
   const sse = new Sse(req, res, () => {
     hub.off('list', sendList);
     hub.off('status', onStatus);
+    hub.off('activity', onActivity);
   });
   hub.on('list', sendList);
   hub.on('status', onStatus);
+  hub.on('activity', onActivity);
   sendList();
 });
 
@@ -538,7 +583,7 @@ route('GET', '/_tw/api/hosts/:id/claude-history', async (req, res, [id]) => {
   const h = q.hostById.get(Number(id));
   if (!h || !canUseHost(user, h)) throw new HttpError(404, '主机不存在');
   try {
-    sendJson(req, res, 200, await claudeHistory(getHost(h.id)!));
+    sendJson(req, res, 200, await claudeHistoryCached(getHost(h.id)!));
   } catch (e: any) {
     throw new HttpError(502, e.message);
   }

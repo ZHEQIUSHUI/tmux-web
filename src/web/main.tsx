@@ -1,6 +1,6 @@
 import { render } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { api, type ChatItem, type Folder, type Group, type HostInfo, type Me, type Page, type SessionInfo, type Status } from './api';
+import { api, type ChatItem, type Folder, type Group, type HostInfo, type Notice, type Me, type Page, type SessionInfo, type Status } from './api';
 import { renderMarkdown } from './markdown';
 import './style.css';
 
@@ -192,6 +192,11 @@ const Icon = {
     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
       <rect x="2" y="6" width="20" height="12" rx="2" />
       <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" stroke-linecap="round" />
+    </svg>
+  ),
+  clip: () => (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 11.5l-8.5 8.5a5 5 0 01-7-7L14 4.5a3.5 3.5 0 015 5L10.5 18a2 2 0 01-3-3L15 7.5" />
     </svg>
   ),
   folderPlus: () => (
@@ -854,13 +859,42 @@ function Composer(props: {
     store.set(draftKey, v || null);
   };
 
+  // attachments: uploaded to the host first, their paths go into the message for the agent to read
+  const [files, setFiles] = useState<{ key: number; name: string; path?: string; error?: string }[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const upload = (list: FileList | File[]) => {
+    for (const file of Array.from(list)) {
+      const key = Date.now() + Math.random();
+      const name = file.name || `paste-${new Date().toTimeString().slice(0, 8).replace(/:/g, '')}.png`;
+      setFiles((fs) => [...fs, { key, name }]);
+      fetch(`/_tw/api/sessions/${sessionId}/upload`, { method: 'POST', body: file, headers: { 'X-File-Name': encodeURIComponent(name) }, credentials: 'same-origin' })
+        .then(async (r) => {
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+          setFiles((fs) => fs.map((f) => (f.key === key ? { ...f, path: d.path } : f)));
+        })
+        .catch((e) => setFiles((fs) => fs.map((f) => (f.key === key ? { ...f, error: e.message } : f))));
+    }
+  };
+  const uploading = files.some((f) => !f.path && !f.error);
+  const ready = files.filter((f) => f.path);
+  // screenshots pasted into the box become attachments
+  const onPaste = (e: ClipboardEvent) => {
+    const pasted = Array.from(e.clipboardData?.files || []);
+    if (!pasted.length) return;
+    e.preventDefault();
+    upload(pasted);
+  };
+
   // optimistic: clear the box and show the message at once, the request runs behind it
   const send = async () => {
-    const msg = text;
-    if (!msg.trim() || sending) return;
+    const paths = ready.map((f) => f.path!);
+    const msg = paths.length ? `${text.trim() || '请看这些文件：'}\n\n${paths.join('\n')}` : text;
+    if (!msg.trim() || sending || uploading) return;
     setSending(true);
     setErr('');
     update('');
+    setFiles([]);
     // slash commands don't show up as chat messages: no placeholder bubble for them
     const isCommand = /^\s*\//.test(msg);
     const done = isCommand ? () => {} : onPending(msg);
@@ -934,15 +968,47 @@ function Composer(props: {
         </div>
       )}
       {err && <div class="error small">{err}</div>}
+      {files.length > 0 && (
+        <div class="attachments">
+          {files.map((f) => (
+            <span key={f.key} class={`att ${f.error ? 'err' : f.path ? 'ok' : 'busy'}`} title={f.error || f.path || '上传中…'}>
+              {f.path ? '📎' : f.error ? '⚠' : <span class="spinner small-spin" />}
+              <span class="att-name">{f.name}</span>
+              <button aria-label="移除" onClick={() => setFiles((fs) => fs.filter((x) => x.key !== f.key))}>
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div class="input-row">
         {coarse && (
           <button class={`icon-btn ${keysOpen ? 'on' : ''}`} aria-label="快捷键" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowKeys((v) => !v)}>
             <Icon.keys />
           </button>
         )}
+        {props.agent !== 'bash' && (
+          <>
+            <button class="icon-btn attach" aria-label="添加图片或文件" title="添加图片或文件（也可以直接粘贴截图）" onMouseDown={(e) => e.preventDefault()} onClick={() => fileInput.current?.click()}>
+              <Icon.clip />
+            </button>
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => {
+                const el = e.target as HTMLInputElement;
+                if (el.files?.length) upload(el.files);
+                el.value = '';
+              }}
+            />
+          </>
+        )}
         <textarea
           ref={ta}
           rows={1}
+          onPaste={onPaste}
           value={text}
           placeholder={coarse ? '输入消息' : '输入消息，Enter 发送，Shift+Enter 换行'}
           onInput={(e) => update((e.target as HTMLTextAreaElement).value)}
@@ -954,7 +1020,7 @@ function Composer(props: {
             {!coarse && '停止'}
           </button>
         )}
-        <button class={`primary send ${coarse ? 'round' : ''}`} aria-label="发送" onMouseDown={(e) => e.preventDefault()} onClick={send} disabled={sending || !text.trim()}>
+        <button class={`primary send ${coarse ? 'round' : ''}`} aria-label="发送" onMouseDown={(e) => e.preventDefault()} onClick={send} disabled={sending || uploading || (!text.trim() && !ready.length)}>
           {sending ? '…' : coarse ? <Icon.send /> : '发送'}
         </button>
       </div>
@@ -1827,6 +1893,101 @@ function AdminModal({ me, onClose }: { me: Me; onClose: () => void }) {
 
 // ---------------- shell ----------------
 
+// ---------------- activity: order, unread ----------------
+
+/** Waiting for you first, then running, then most recently active. */
+function sortSessions(list: SessionInfo[]): SessionInfo[] {
+  const rank = (s: SessionInfo) => (s.status === 'waiting' ? 0 : s.status === 'busy' ? 1 : 2);
+  return [...list].sort((a, b) => rank(a) - rank(b) || b.activityAt - a.activityAt);
+}
+
+/**
+ * What you have seen, per session (activity time when you last looked), kept in this browser.
+ * A session is unread when it did something after that.
+ */
+function useUnread(sessions: SessionInfo[] | null, current: number | null): Set<number> {
+  const [seen, setSeen] = useState<Record<number, number>>(() => {
+    try {
+      return JSON.parse(store.get('tw:seen') || '{}');
+    } catch {
+      return {};
+    }
+  });
+  const [visible, setVisible] = useState(!document.hidden);
+  useEffect(() => {
+    const on = () => setVisible(!document.hidden);
+    document.addEventListener('visibilitychange', on);
+    return () => document.removeEventListener('visibilitychange', on);
+  }, []);
+  const save = (next: Record<number, number>) => {
+    store.set('tw:seen', JSON.stringify(next));
+    return next;
+  };
+  // sessions seen for the first time count as read (no flood of dots on first use)
+  useEffect(() => {
+    if (!sessions) return;
+    setSeen((cur) => {
+      const missing = sessions.filter((s) => !(s.id in cur));
+      if (!missing.length) return cur;
+      const next = { ...cur };
+      for (const s of missing) next[s.id] = s.activityAt;
+      return save(next);
+    });
+  }, [sessions]);
+  // the open session is being read, as long as the page is in front
+  const open = sessions?.find((s) => s.id === current);
+  useEffect(() => {
+    if (!open || !visible) return;
+    setSeen((cur) => (cur[open.id] >= open.activityAt ? cur : save({ ...cur, [open.id]: open.activityAt })));
+  }, [open?.id, open?.activityAt, visible]);
+  return new Set((sessions || []).filter((s) => s.activityAt > (seen[s.id] ?? Infinity) + 1000 && !(s.id === current && visible)).map((s) => s.id));
+}
+
+/** Short relative time for lists. */
+function ago(ms: number): string {
+  const s = (Date.now() - ms) / 1000;
+  if (s < 60) return '刚刚';
+  if (s < 3600) return `${Math.floor(s / 60)}分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)}小时前`;
+  if (s < 86400 * 7) return `${Math.floor(s / 86400)}天前`;
+  return new Date(ms).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+}
+
+// ---------------- in-page alerts ----------------
+
+const alertsEnabled = () => store.get('tw:alerts') !== 'off';
+
+const NOTICE_ICON: Record<Notice['kind'], string> = { waiting: '⚠', done: '✓', offline: '⚡', ended: '■' };
+
+function Toasts({ list, onOpen, onClose }: { list: { key: number; n: Notice }[]; onOpen: (n: Notice) => void; onClose: (key: number) => void }) {
+  if (!list.length) return null;
+  return (
+    <div class="toasts">
+      {list.map(({ key, n }) => (
+        <div key={key} class={`toast ${n.kind}`} onClick={() => onOpen(n)} role="button">
+          <span class="toast-icon">{NOTICE_ICON[n.kind]}</span>
+          <span class="toast-main">
+            <b>
+              {n.session} · {n.title}
+            </b>
+            {n.text && <span class="toast-text">{n.text}</span>}
+          </span>
+          <button
+            class="toast-x"
+            aria-label="关闭"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose(key);
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ---------------- folders ----------------
 
 interface SessionGroup {
@@ -1968,11 +2129,14 @@ function Sidebar(props: {
   onLogout: () => void;
   onEditFolder: (f: Folder | null) => void;
   onTokens: () => void;
+  unread: Set<number>;
+  alerts: boolean;
+  onToggleAlerts: () => void;
 }) {
   const { me, sessions, current } = props;
   const multiHost = new Set(sessions.map((s) => s.hostId)).size > 1;
   const [collapsed, toggle] = useCollapsed();
-  const groups = groupByFolder(sessions, props.folders);
+  const groups = groupByFolder(sortSessions(sessions), props.folders);
   const item = (s: SessionInfo) => (
     <button
       key={s.id}
@@ -1984,12 +2148,16 @@ function Sidebar(props: {
     >
       <span class={`dot ${s.status}`} title={STATUS_LABEL[s.status]} />
       <span class="s-main">
-        <span class="s-name">{s.name}</span>
+        <span class="s-name">
+          {s.name}
+          {props.unread.has(s.id) && <span class="unread" title="有新动态" />}
+        </span>
         <span class="s-sub">
           {s.note ||
             `${AGENT_LABEL[s.agent]}${multiHost ? ` · ${s.host}` : ''}${s.owner !== me.username ? ` · ${s.owner}` : ''}${s.access === 'view' ? ' · 只读' : ''}`}
         </span>
       </span>
+      <span class="s-time">{ago(s.activityAt)}</span>
     </button>
   );
   return (
@@ -2032,6 +2200,9 @@ function Sidebar(props: {
       <div class="side-foot">
         <span class="dim small">{me.username}</span>
         <span class="spacer" />
+        <button class="ghost small" onClick={props.onToggleAlerts} title={props.alerts ? '页内提醒：开（点击关闭）' : '页内提醒：关（点击开启）'}>
+          {props.alerts ? '🔔' : '🔕'}
+        </button>
         <ThemeCycle />
         {me.role === 'admin' && (
           <button class="ghost small" onClick={props.onAdmin}>
@@ -2229,16 +2400,15 @@ function MobileHome(props: {
   onMenu: () => void;
   onAdmin: () => void;
   onEditFolder: (f: Folder | null) => void;
+  unread: Set<number>;
 }) {
   const { sessions } = props;
   const multiHost = new Set((sessions || []).map((s) => s.hostId)).size > 1;
   const [collapsed, toggle] = useCollapsed();
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
-  // within a group: sessions waiting for a decision first, then the busy ones
-  const order: Record<string, number> = { waiting: 0, busy: 1 };
   const shown = (sessions || []).filter((s) => !q || `${s.name} ${s.note} ${s.cwd} ${s.host}`.toLowerCase().includes(q));
-  const sorted = [...shown].sort((a, b) => (order[a.status] ?? 2) - (order[b.status] ?? 2));
+  const sorted = sortSessions(shown);
   const groups = groupByFolder(sorted, q ? [] : props.folders);
   const count = (st: Status) => (sessions || []).filter((s) => s.status === st).length;
   const summary = sessions
@@ -2251,7 +2421,10 @@ function MobileHome(props: {
         <span class={`m-dot dot ${s.status}`} />
       </span>
       <span class="m-main">
-        <span class="m-name">{s.name}</span>
+        <span class="m-name">
+          {s.name}
+          {props.unread.has(s.id) && <span class="unread" />}
+        </span>
         <span class="m-sub">
           {s.note || (
             <span class="mono">
@@ -2261,7 +2434,7 @@ function MobileHome(props: {
           )}
         </span>
       </span>
-      {s.status !== 'idle' && <span class={`m-pill ${s.status}`}>{STATUS_LABEL[s.status]}</span>}
+      {s.status !== 'idle' ? <span class={`m-pill ${s.status}`}>{STATUS_LABEL[s.status]}</span> : <span class="m-time">{ago(s.activityAt)}</span>}
       <span class="m-chev">
         <Chevron open={false} />
       </span>
@@ -2326,6 +2499,13 @@ function MenuSheet({ me, onClose, onAdmin, onPassword, onTokens, onLogout }: { m
         <span class="dim small">外观</span>
         <ThemeSwitch />
       </div>
+      <label class="sheet-toggle">
+        <span>
+          页内提醒
+          <small class="dim">会话等待确认或完成时弹出提示、手机震动</small>
+        </span>
+        <input type="checkbox" defaultChecked={alertsEnabled()} onChange={(e) => store.set('tw:alerts', (e.target as HTMLInputElement).checked ? null : 'off')} />
+      </label>
       <div class="sheet-list">
         {me.role === 'admin' && <button onClick={onAdmin}>主机、账号与分组</button>}
         <button onClick={onPassword}>修改密码</button>
@@ -2347,6 +2527,44 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   // folder being edited; null = creating one; undefined = dialog closed
   const [editFolder, setEditFolder] = useState<Folder | null | undefined>(undefined);
   const [hostBanner, setHostBanner] = useState(false);
+  const unread = useUnread(sessions, current);
+  // relative times in the lists
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 30000);
+    return () => clearInterval(t);
+  }, []);
+  // in-page alerts from the server's notifications
+  const [toasts, setToasts] = useState<{ key: number; n: Notice }[]>([]);
+  const [alerts, setAlerts] = useState(alertsEnabled());
+  const [missed, setMissed] = useState(0);
+  const currentRef = useRef(current);
+  currentRef.current = current;
+  useEffect(
+    () =>
+      liveStream(() => '/_tw/api/notifications/stream', {
+        notice: (n: Notice) => {
+          if (!alertsEnabled()) return;
+          // already looking at it
+          if (!document.hidden && currentRef.current === n.sessionId) return;
+          const key = n.id;
+          setToasts((t) => [...t.filter((x) => x.n.sessionId !== n.sessionId).slice(-2), { key, n }]);
+          setTimeout(() => setToasts((t) => t.filter((x) => x.key !== key)), n.kind === 'waiting' ? 15000 : 8000);
+          if (document.hidden) setMissed((m) => m + 1);
+          if (n.kind === 'waiting' || n.kind === 'done') navigator.vibrate?.(n.kind === 'waiting' ? [120, 60, 120] : 80);
+        },
+      }),
+    [],
+  );
+  useEffect(() => {
+    const on = () => !document.hidden && setMissed(0);
+    document.addEventListener('visibilitychange', on);
+    return () => document.removeEventListener('visibilitychange', on);
+  }, []);
+  const toggleAlerts = () => {
+    store.set('tw:alerts', alerts ? 'off' : null);
+    setAlerts(!alerts);
+  };
   useEffect(() => {
     if (me.role !== 'admin' || modal) return;
     api<HostInfo[]>('GET', '/_tw/api/hosts').then((hs) => setHostBanner(hs.some((h) => h.ok === false)), () => {});
@@ -2360,6 +2578,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
           sessions: setSessions,
           folders: setFolders,
           status: ({ id, status }) => setSessions((cur) => cur && cur.map((s) => (s.id === id ? { ...s, status } : s))),
+          activity: ({ id, at }) => setSessions((cur) => cur && cur.map((s) => (s.id === id ? { ...s, activityAt: Math.max(s.activityAt, at) } : s))),
         },
         // a 401 also ends up as an error: confirm the login is still valid
         (ok) => ok || api('GET', '/_tw/api/me').catch(() => {}),
@@ -2386,8 +2605,9 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   };
 
   useEffect(() => {
-    document.title = session ? `${session.status === 'waiting' ? '⚠ ' : ''}${session.name} · tmux-web` : 'tmux-web';
-  }, [session?.name, session?.status]);
+    const base = session ? `${session.status === 'waiting' ? '⚠ ' : ''}${session.name} · tmux-web` : 'tmux-web';
+    document.title = missed ? `(${missed}) ${base}` : base;
+  }, [session?.name, session?.status, missed]);
 
   return (
     <div class="app">
@@ -2404,6 +2624,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             onMenu={() => setModal('menu')}
             onAdmin={() => setModal('admin')}
             onEditFolder={setEditFolder}
+            unread={unread}
           />
           {session && (
             <div class="m-push">
@@ -2419,6 +2640,9 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             sessions={sessions || []}
             folders={folders}
             onEditFolder={setEditFolder}
+            unread={unread}
+            alerts={alerts}
+            onToggleAlerts={toggleAlerts}
             current={current}
             onPick={pick}
             onNew={() => setModal('new')}
@@ -2436,6 +2660,14 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
           )}
         </>
       )}
+      <Toasts
+        list={toasts}
+        onOpen={(n) => {
+          setToasts((t) => t.filter((x) => x.n.sessionId !== n.sessionId));
+          pick(n.sessionId);
+        }}
+        onClose={(key) => setToasts((t) => t.filter((x) => x.key !== key))}
+      />
       {editFolder !== undefined && <FolderModal folder={editFolder} onClose={() => setEditFolder(undefined)} />}
       {modal === 'menu' && <MenuSheet me={me} onClose={() => setModal(null)} onAdmin={() => setModal('admin')} onPassword={() => setModal('password')} onTokens={() => setModal('tokens')} onLogout={logout} />}
       {modal === 'new' && (
