@@ -66,6 +66,12 @@ export class LiveSession extends EventEmitter {
   choices: Choices | null = null;
   /** when something last happened: the agent's log changed (or, for a shell, the screen did) */
   activityAt = 0;
+  /** the conversation's title (Claude Code: /rename, agent name or the generated title) */
+  title = '';
+  /** activity time the title was last read at */
+  titleAt = 0;
+  /** log size at the last activity check */
+  logSize = 0;
   error = '';
   screen: Screen | null = null;
   private stream: PaneStream | null = null;
@@ -452,12 +458,27 @@ export function sessionView(user: UserRow) {
       access,
       status: live.get(row.id)?.status ?? 'dead',
       activityAt: live.get(row.id)?.activityAt || row.created_at,
+      title: live.get(row.id)?.title || '',
     }));
 }
 
 // ---------- lifecycle ----------
 
 // ---------- activity ----------
+
+/** A Claude Code conversation's title: a /rename wins over the agent name and the generated one. */
+async function claudeTitle(host: Host, file: string): Promise<string> {
+  const out = await host.shText(
+    `{ head -c 262144 -- "$1"; printf '\\n'; tail -c 262144 -- "$1"; } | grep -o '"\\(customTitle\\|agentName\\|aiTitle\\)":"\\([^"\\\\]\\|\\\\.\\)\\{0,200\\}"'`,
+    [file],
+  );
+  const last: Record<string, string> = {};
+  for (const line of out.split('\n')) {
+    const m = /^"(\w+)":"(.*)"$/.exec(line);
+    if (m) last[m[1]] = jsonUnescape(m[2]).trim();
+  }
+  return last.customTitle || last.agentName || last.aiTitle || '';
+}
 
 const ACTIVITY_EVERY_MS = 10_000;
 
@@ -477,11 +498,32 @@ async function pollActivity() {
     const host = getHost(hostId);
     if (!host?.status.ok) continue;
     try {
-      const out = await host.shText(`for f; do stat -c %Y -- "$f" 2>/dev/null || stat -f %m -- "$f" 2>/dev/null || echo 0; done`, list.map((s) => s.row.transcript_path!));
-      out.trim().split('\n').forEach((v, i) => {
-        const t = Number(v) * 1000;
-        if (t && list[i]) list[i].touch(t);
-      });
+      // the size tells whether the log grew (its mtime also moves when Claude Code merely
+      // touches the file); when it did, the last record's own timestamp is the activity time
+      const out = await host.shText(`for f; do stat -c %s -- "$f" 2>/dev/null || stat -f %z -- "$f" 2>/dev/null || echo 0; done`, list.map((s) => s.row.transcript_path!));
+      const sizes = out.trim().split('\n').map(Number);
+      for (let i = 0; i < list.length; i++) {
+        const sess = list[i];
+        if (!sizes[i] || sizes[i] === sess.logSize) continue;
+        sess.logSize = sizes[i];
+        const ts = (
+          await host
+            .shText(`tail -c 65536 -- "$1" | grep -o '"timestamp":"[^"]*"' | tail -n 1`, [sess.row.transcript_path!])
+            .catch(() => '')
+        ).trim();
+        const at = Date.parse(ts.replace(/^"timestamp":"|"$/g, ''));
+        if (at) sess.touch(at);
+      }
+      // titles change rarely: re-read only for sessions whose log moved since
+      for (const sess of list) {
+        if (sess.row.agent !== 'claude' || sess.titleAt >= sess.activityAt) continue;
+        sess.titleAt = sess.activityAt;
+        const title = await claudeTitle(host, sess.row.transcript_path!).catch(() => sess.title);
+        if (title !== sess.title) {
+          sess.title = title;
+          hub.emit('list');
+        }
+      }
     } catch {
       /* host hiccup: next round */
     }

@@ -9,6 +9,13 @@ import { Chevron, Icon, Modal, ThemeCycle, ThemeSwitch } from './ui';
 // ---------------- activity: order, unread ----------------
 
 /** Waiting for you first, then running, then most recently active. */
+/** Sessions in use lately: active within RECENT_MS, or working / waiting right now. */
+export const RECENT_MS = 30 * 60 * 1000;
+export function recentSessions(list: SessionInfo[]): SessionInfo[] {
+  return sortSessions(list.filter((s) => s.status === 'busy' || s.status === 'waiting' || Date.now() - s.activityAt < RECENT_MS));
+}
+const folderName = (s: SessionInfo, folders: Folder[]) => folders.find((f) => f.id === s.folderId)?.name ?? '未分组';
+
 export function sortSessions(list: SessionInfo[]): SessionInfo[] {
   const rank = (s: SessionInfo) => (s.status === 'waiting' ? 0 : s.status === 'busy' ? 1 : 2);
   return [...list].sort((a, b) => rank(a) - rank(b) || b.activityAt - a.activityAt);
@@ -128,7 +135,7 @@ export function useCollapsed(): [Set<string>, (key: string) => void] {
 }
 
 /** A collapsible folder header: arrow, name, count, note; drop target for dragged sessions. */
-export function FolderHeader(props: { group: SessionGroup; open: boolean; onToggle: () => void; onEdit?: () => void; onDropSession?: (id: number) => void; big?: boolean }) {
+export function FolderHeader(props: { group: SessionGroup; open: boolean; onToggle: () => void; onEdit?: () => void; onDropSession?: (id: number) => void; big?: boolean; label?: string }) {
   const { folder, sessions } = props.group;
   const [over, setOver] = useState(false);
   const waiting = sessions.filter((s) => s.status === 'waiting').length;
@@ -149,7 +156,7 @@ export function FolderHeader(props: { group: SessionGroup; open: boolean; onTogg
     >
       <button class="folder-toggle" onClick={props.onToggle} aria-expanded={props.open}>
         <Chevron open={props.open} />
-        <span class="folder-name">{folder ? folder.name : '未分组'}</span>
+        <span class="folder-name">{props.label ?? (folder ? folder.name : '未分组')}</span>
         <span class="folder-count">{sessions.length}</span>
         {!props.open && waiting > 0 && <span class="dot waiting" title={`${waiting} 个等待确认`} />}
       </button>
@@ -186,6 +193,24 @@ export function Sidebar(props: {
   const multiHost = new Set(sessions.map((s) => s.hostId)).size > 1;
   const [collapsed, toggle] = useCollapsed();
   const groups = groupByFolder(sortSessions(sessions), props.folders);
+  const recent = recentSessions(sessions);
+  // the recent section: name, conversation title and which folder it lives in
+  const recentItem = (s: SessionInfo) => (
+    <button key={`r${s.id}`} class={`session-item ${s.id === current ? 'active' : ''}`} onPointerDown={() => prefetchChat(s)} onMouseEnter={() => prefetchChat(s)} onClick={() => props.onPick(s.id)} title={s.title || undefined}>
+      <span class={`dot ${s.status}`} title={STATUS_LABEL[s.status]} />
+      <span class="s-main">
+        <span class="s-name">
+          {s.name}
+          {props.unread.has(s.id) && <span class="unread" />}
+        </span>
+        <span class="s-sub">
+          <span class="s-folder">{folderName(s, props.folders)}</span>
+          {s.title ? ` · ${s.title}` : ''}
+        </span>
+      </span>
+      <span class="s-time">{ago(s.activityAt)}</span>
+    </button>
+  );
   const item = (s: SessionInfo) => (
     <button
       key={s.id}
@@ -228,6 +253,12 @@ export function Sidebar(props: {
         </button>
       )}
       <nav class="session-list">
+        {recent.length > 0 && (
+          <div class="folder recent" key="recent">
+            <FolderHeader label="最近" group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} />
+            {!collapsed.has('r') && <div class="folder-body">{recent.map(recentItem)}</div>}
+          </div>
+        )}
         {groups.map((g) => {
           const key = g.folder ? String(g.folder.id) : 'u';
           const open = !collapsed.has(key);
@@ -295,6 +326,29 @@ export function MobileHome(props: {
   const shown = (sessions || []).filter((s) => !q || `${s.name} ${s.note} ${s.cwd} ${s.host}`.toLowerCase().includes(q));
   const sorted = sortSessions(shown);
   const groups = groupByFolder(sorted, q ? [] : props.folders);
+  const recent = q ? [] : recentSessions(sessions || []);
+  const recentRow = (s: SessionInfo) => (
+    <button key={`r${s.id}`} class={`m-row ${s.status}`} onPointerDown={() => prefetchChat(s)} onClick={() => props.onPick(s.id)}>
+      <span class={`m-badge ${s.agent}`}>
+        {AGENT_LABEL[s.agent].slice(0, 1)}
+        <span class={`m-dot dot ${s.status}`} />
+      </span>
+      <span class="m-main">
+        <span class="m-name">
+          {s.name}
+          {props.unread.has(s.id) && <span class="unread" />}
+        </span>
+        <span class="m-sub">
+          <span class="m-folder">{folderName(s, props.folders)}</span>
+          {s.title ? ` · ${s.title}` : ''}
+        </span>
+      </span>
+      {s.status !== 'idle' ? <span class={`m-pill ${s.status}`}>{STATUS_LABEL[s.status]}</span> : <span class="m-time">{ago(s.activityAt)}</span>}
+      <span class="m-chev">
+        <Chevron open={false} />
+      </span>
+    </button>
+  );
   const count = (st: Status) => (sessions || []).filter((s) => s.status === st).length;
   const summary = sessions
     ? [`${sessions.length} 个会话`, count('busy') && `${count('busy')} 个运行中`, count('waiting') && `${count('waiting')} 个等待确认`].filter(Boolean).join(' · ')
@@ -365,6 +419,12 @@ export function MobileHome(props: {
         {sessions === null && <p class="dim pad">加载中…</p>}
         {sessions?.length === 0 && <p class="dim pad">还没有会话，点右下角 ＋ 新建，或导入已有的 tmux 会话。</p>}
         {q && !shown.length && <p class="dim pad">没有匹配的会话</p>}
+        {recent.length > 0 && (
+          <div class="m-section" key="recent">
+            <FolderHeader big label="最近" group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} />
+            {!collapsed.has('r') && <div class="m-group">{recent.map(recentRow)}</div>}
+          </div>
+        )}
         {groups.map((g) => {
           const key = g.folder ? String(g.folder.id) : 'u';
           const open = q ? true : !collapsed.has(key);

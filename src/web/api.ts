@@ -28,6 +28,8 @@ export interface SessionInfo {
   status: Status;
   /** when the session last did something (ms) */
   activityAt: number;
+  /** the conversation's title (Claude Code), '' if none */
+  title: string;
 }
 
 /** Server-side notification (see docs/API.md) */

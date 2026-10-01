@@ -1919,3 +1919,15 @@ a.btn {
   cursor: pointer;
   margin-top: 4px;
 }
+
+/* recent section: folder name tag in the subtitle */
+.s-folder,
+.m-folder {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
