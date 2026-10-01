@@ -1860,3 +1860,19 @@ a.btn {
     animation: none;
   }
 }
+
+/* launch option presets */
+.arg-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: -4px;
+}
+.arg-presets .chip {
+  padding: 3px 10px;
+  font-size: 12.5px;
+}
+.arg-presets .chip.danger.on {
+  border-color: var(--danger);
+  color: var(--danger);
+}

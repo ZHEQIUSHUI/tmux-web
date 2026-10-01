@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'preact/hooks';
 import { api, type Folder, type Group, type HostInfo, type Me, type SessionInfo } from './api';
-import { AGENT_LABEL, coarsePointer, relTime, shortPath } from './lib';
+import { AGENT_LABEL, coarsePointer, relTime, shortPath, store } from './lib';
 import { Modal } from './ui';
 import { restartAgent } from './chat';
 
@@ -174,6 +174,9 @@ export function ClaudeHistoryPicker({ hostId, selected, onSelect }: { hostId: nu
 export function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => void; onCreated: (id: number) => void }) {
   const [mode, setMode] = useState<'new' | 'adopt'>('new');
   const [agent, setAgent] = useState<keyof typeof AGENT_LABEL>('claude');
+  // extra launch options: remembered per agent type, presets toggle in and out
+  const [args, setArgs] = useState(() => store.get('tw:args:claude') ?? '');
+  useEffect(() => setArgs(store.get(`tw:args:${agent}`) ?? ''), [agent]);
   const [resume, setResume] = useState<ClaudeHistory | null>(null);
   const [hosts] = useHosts();
   const [hostId, setHostId] = useState<number | null>(null);
@@ -204,6 +207,7 @@ export function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => 
         groupId: f.groupId ? Number(f.groupId) : null,
         share: f.groupId ? f.share : 'none',
       });
+      store.set(`tw:args:${agent}`, args.trim() || null);
       onCreated(id);
     } catch (e: any) {
       setErr(e.message);
@@ -292,8 +296,9 @@ export function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => 
         </label>
         <label>
           额外启动参数
-          <input name="args" placeholder="例如 --model sonnet" autocapitalize="off" spellcheck={false} />
+          <input name="args" value={args} onInput={(e) => setArgs((e.target as HTMLInputElement).value)} placeholder="点下面的常用项，或自己填写" autocapitalize="off" spellcheck={false} />
         </label>
+        {ARG_PRESETS[agent] && <ArgPresets presets={ARG_PRESETS[agent]!} args={args} onChange={setArgs} />}
         <ShareFields groups={groups} />
         {err && <p class="error">{err}</p>}
         <button class="primary" disabled={busy || hostId === null}>
@@ -763,5 +768,61 @@ export function FolderModal({ folder, onClose }: { folder: Folder | null; onClos
         )}
       </form>
     </Modal>
+  );
+}
+
+interface ArgPreset {
+  /** what is added to the command line */
+  arg: string;
+  label: string;
+  /** presets in the same group exclude each other */
+  group?: string;
+  danger?: boolean;
+}
+
+/** Common launch options per agent (checked against `claude --help` / `codex --help`). */
+const ARG_PRESETS: Partial<Record<keyof typeof AGENT_LABEL, ArgPreset[]>> = {
+  claude: [
+    { arg: '--dangerously-skip-permissions', label: '跳过所有确认', group: 'perm', danger: true },
+    { arg: '--permission-mode acceptEdits', label: '自动接受编辑', group: 'perm' },
+    { arg: '--permission-mode plan', label: '计划模式', group: 'perm' },
+    { arg: '--permission-mode auto', label: '自动模式', group: 'perm' },
+    { arg: '--model opus', label: 'Opus', group: 'model' },
+    { arg: '--model sonnet', label: 'Sonnet', group: 'model' },
+    { arg: '--model fable', label: 'Fable', group: 'model' },
+    { arg: '--effort high', label: '思考 high', group: 'effort' },
+    { arg: '--effort max', label: '思考 max', group: 'effort' },
+  ],
+  codex: [
+    { arg: '--dangerously-bypass-approvals-and-sandbox', label: '跳过确认和沙箱', group: 'perm', danger: true },
+    { arg: '-s workspace-write', label: '可写工作区沙箱', group: 'perm' },
+    { arg: '--search', label: '联网搜索' },
+  ],
+};
+
+const norm1 = (s: string) => ` ${s.trim().replace(/\s+/g, ' ')} `;
+
+/** Toggle chips for common options; they edit the same text the input shows. */
+function ArgPresets({ presets, args, onChange }: { presets: ArgPreset[]; args: string; onChange: (s: string) => void }) {
+  const has = (p: ArgPreset) => norm1(args).includes(` ${p.arg} `);
+  const remove = (text: string, p: ArgPreset) => norm1(text).replace(` ${p.arg} `, ' ');
+  const toggle = (p: ArgPreset) => {
+    let text = args;
+    if (has(p)) text = remove(text, p);
+    else {
+      // one per group: drop the others first
+      for (const o of presets) if (o.group && o.group === p.group && has(o)) text = remove(text, o);
+      text = `${text} ${p.arg}`;
+    }
+    onChange(text.trim().replace(/\s+/g, ' '));
+  };
+  return (
+    <div class="arg-presets">
+      {presets.map((p) => (
+        <button type="button" key={p.arg} class={`chip ${has(p) ? 'on' : ''} ${p.danger ? 'danger' : ''}`} title={p.arg} onClick={() => toggle(p)}>
+          {p.label}
+        </button>
+      ))}
+    </div>
   );
 }
