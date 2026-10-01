@@ -21,6 +21,16 @@ export interface GroupRow {
   name: string;
 }
 
+/** A user's own grouping of sessions in the sidebar. */
+export interface FolderRow {
+  id: number;
+  owner_id: number;
+  name: string;
+  note: string;
+  position: number;
+  created_at: number;
+}
+
 export interface HostRow {
   id: number;
   name: string;
@@ -51,6 +61,8 @@ export interface SessionRow {
   tmux_name: string | null;
   /** 1 = an existing tmux session we attached to: never resized or killed by us */
   adopted: number;
+  /** free-form note shown under the name */
+  note: string;
   created_at: number;
 }
 
@@ -101,6 +113,21 @@ create table if not exists sessions (
   host_id integer not null references hosts(id),
   created_at integer not null
 );
+create table if not exists folders (
+  id integer primary key,
+  owner_id integer not null references users(id) on delete cascade,
+  name text not null,
+  note text not null default '',
+  position integer not null default 0,
+  created_at integer not null
+);
+-- which folder a session is in, per user (sessions can be shared; folders are personal)
+create table if not exists session_folders (
+  user_id integer not null references users(id) on delete cascade,
+  session_id integer not null references sessions(id) on delete cascade,
+  folder_id integer not null references folders(id) on delete cascade,
+  primary key (user_id, session_id)
+);
 create table if not exists auth_tokens (
   token_hash text primary key,
   user_id integer not null references users(id) on delete cascade,
@@ -113,6 +140,7 @@ for (const [col, ddl] of [
   ['tmux_socket', 'alter table sessions add column tmux_socket text'],
   ['tmux_name', 'alter table sessions add column tmux_name text'],
   ['adopted', 'alter table sessions add column adopted integer not null default 0'],
+  ['note', "alter table sessions add column note text not null default ''"],
 ]) {
   const cols = (db.prepare('pragma table_info(sessions)').all() as { name: string }[]).map((c) => c.name);
   if (!cols.includes(col)) db.exec(ddl);
@@ -153,6 +181,17 @@ export const q = {
     `insert into sessions (name, owner_id, group_id, share, agent, agent_session_id, cwd, args, host_id, tmux_socket, tmux_name, adopted, created_at)
      values (?, ?, null, 'none', ?, ?, ?, '', ?, ?, ?, 1, ?)`,
   ),
+  setNote: db.prepare('update sessions set note = ? where id = ?'),
+
+  foldersOf: db.prepare<[number], FolderRow>('select * from folders where owner_id = ? order by position, id'),
+  folderById: db.prepare<[number], FolderRow>('select * from folders where id = ?'),
+  insertFolder: db.prepare('insert into folders (owner_id, name, note, position, created_at) values (?, ?, ?, ?, ?)'),
+  updateFolder: db.prepare('update folders set name = ?, note = ?, position = ? where id = ?'),
+  deleteFolder: db.prepare('delete from folders where id = ?'),
+  folderAssignments: db.prepare<[number], { session_id: number; folder_id: number }>('select session_id, folder_id from session_folders where user_id = ?'),
+  assignFolder: db.prepare('insert into session_folders (user_id, session_id, folder_id) values (?, ?, ?) on conflict (user_id, session_id) do update set folder_id = excluded.folder_id'),
+  unassignFolder: db.prepare('delete from session_folders where user_id = ? and session_id = ?'),
+
   /** an adopted session whose tmux is gone becomes one of ours */
   unadopt: db.prepare('update sessions set tmux_socket = null, tmux_name = null, adopted = 0 where id = ?'),
   setTranscript: db.prepare('update sessions set agent_session_id = ?, transcript_path = ? where id = ?'),

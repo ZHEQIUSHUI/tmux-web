@@ -56,6 +56,10 @@ async function readyHost(id: number): Promise<Host> {
 export class LiveSession extends EventEmitter {
   status: AgentStatus = 'starting';
   preview = '';
+  /** Claude Code permission mode read from its footer ('' when not shown / not claude) */
+  mode = '';
+  /** Claude Code says an update is installed and waits for a restart */
+  update = false;
   error = '';
   screen: Screen | null = null;
   private stream: PaneStream | null = null;
@@ -208,7 +212,12 @@ export class LiveSession extends EventEmitter {
       if (!this.screen) return;
       await this.screen.flush();
       if (!this.screen) return;
-      const { status, preview } = this.screen.analyze();
+      const { status, preview, mode, update } = this.screen.analyze();
+      if (mode !== this.mode || update !== this.update) {
+        this.mode = mode;
+        this.update = update;
+        this.emit('state', this.stateView());
+      }
       this.setStatus(status, preview);
     }, 250);
   }
@@ -222,11 +231,85 @@ export class LiveSession extends EventEmitter {
       this.emit('status', status);
       hub.emit('status', this.row.id, status);
     }
-    if (changed || previewChanged) this.emit('state', { status, preview, error: this.error });
+    if (changed || previewChanged) this.emit('state', this.stateView());
+  }
+
+  stateView() {
+    return { status: this.status, preview: this.preview, error: this.error, mode: this.mode, update: this.update };
+  }
+
+  /**
+   * Restart only the claude process in the pane (e.g. after an update), keeping the tmux session
+   * and the conversation: stop it, then run `claude --resume <current conversation>` with the
+   * same options in the shell it leaves behind.
+   */
+  async restartAgent(): Promise<void> {
+    if (this.row.agent !== 'claude') throw new Error('只有 Claude 会话支持');
+    const host = this.host;
+    if (!host || !this.stream) throw new Error('会话未连接');
+    const t = this.target;
+    const out = await host.shText(
+      `pp=$(tmux -u -L "$1" display-message -p -t "=$2:" '#{pane_pid}') || exit 3; ` +
+        `cp=; for p in $pp $(pgrep -P "$pp" 2>/dev/null); do [ "$(ps -o comm= -p "$p" 2>/dev/null)" = claude ] && { cp=$p; break; }; done; ` +
+        `[ -n "$cp" ] || { echo NOCLAUDE; exit 0; }; ` +
+        `sid=$(sed -n 's/.*"sessionId" *: *"\\([0-9a-f-]*\\)".*/\\1/p' "$HOME/.claude/sessions/$cp.json" 2>/dev/null | head -n1); ` +
+        `printf 'SID %s\\n' "$sid"; ` +
+        // the original argv, one per line (Linux /proc; elsewhere fall back to ps)
+        `if [ -r /proc/$cp/cmdline ]; then tr '\\0' '\\n' < /proc/$cp/cmdline; else ps -o args= -p "$cp" | tr ' ' '\\n'; fi; ` +
+        `kill -TERM "$cp"; i=0; while kill -0 "$cp" 2>/dev/null && [ $i -lt 40 ]; do sleep 0.2; i=$((i+1)); done; ` +
+        `kill -0 "$cp" 2>/dev/null && kill -KILL "$cp"; true`,
+      [t.socket, t.name],
+    );
+    if (out.startsWith('NOCLAUDE')) throw new Error('窗格里没有在运行的 claude');
+    const [sidLine, , ...argv] = out.split('\n').filter((l, i) => i === 0 || l !== '');
+    const sid = sidLine.replace(/^SID\s*/, '').trim() || this.row.agent_session_id;
+    // keep the user's options, drop the ones that pick a conversation
+    const keep: string[] = [];
+    for (let i = 0; i < argv.length; i++) {
+      const a = argv[i];
+      if (a === '--resume' || a === '-r' || a === '--session-id') {
+        if (argv[i + 1] && !argv[i + 1].startsWith('-')) i++;
+        continue;
+      }
+      if (a === '--continue' || a === '-c' || a === '--fork-session' || a.startsWith('--resume=') || a.startsWith('--session-id=')) continue;
+      keep.push(a);
+    }
+    // a conversation without any message yet has no log, and --resume would fail on it
+    const hasLog = sid ? !!(await claudeTranscript(host, sid).catch(() => null)) : false;
+    const pick = sid ? (hasLog ? ['--resume', sid] : ['--session-id', sid]) : [];
+    const cmd = ['claude', ...pick, ...keep].map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : shq(a))).join(' ');
+    if (sid && sid !== this.row.agent_session_id) {
+      q.setTranscript.run(sid, null, this.row.id);
+      this.row.agent_session_id = sid;
+      this.row.transcript_path = null;
+    }
+    // give the shell a moment to come back to its prompt, then type the command
+    await new Promise((r) => setTimeout(r, 400));
+    await backend.keys(t, ['C-u']);
+    this.write(cmd + '\r');
+    this.update = false;
+    this.emit('state', this.stateView());
   }
 
   get alive() {
     return !!this.stream;
+  }
+
+  /**
+   * Before typing into Claude Code from the web page: if its input box already holds text
+   * (a half-typed draft, or a prompt an interrupt put back), clear it so ours isn't appended.
+   * Esc twice clears a non-empty box (it never exits Claude; on an empty box it would open
+   * /rewind, which is why we check first). Not while it is working or showing a menu.
+   */
+  async clearPromptInput(): Promise<void> {
+    if (this.row.agent !== 'claude' || !this.screen || this.status === 'busy' || this.status === 'waiting') return;
+    await this.screen.flush();
+    if (!this.screen?.hasPromptInput()) return;
+    const t = this.target;
+    await backend.keys(t, ['Escape']);
+    await new Promise((r) => setTimeout(r, 120));
+    await backend.keys(t, ['Escape']);
+    await new Promise((r) => setTimeout(r, 150));
   }
 
   write(data: string | Buffer) {
@@ -324,6 +407,7 @@ export function canUseHost(user: UserRow, h: HostRow): boolean {
 
 export function sessionView(user: UserRow) {
   const groups = groupIdsOf(user.id);
+  const folderOf = new Map(q.folderAssignments.all(user.id).map((a) => [a.session_id, a.folder_id]));
   const owners = new Map(q.users.all().map((u) => [u.id, u.username]));
   const hostNames = new Map(q.hosts.all().map((h) => [h.id, h.name]));
   return q.sessions
@@ -341,6 +425,8 @@ export function sessionView(user: UserRow) {
       groupId: row.group_id,
       share: row.share,
       adopted: !!row.adopted,
+      note: row.note,
+      folderId: folderOf.get(row.id) ?? null,
       tmux: row.adopted ? `${row.tmux_socket === 'default' ? '' : `-L ${row.tmux_socket} `}${row.tmux_name}` : null,
       access,
       status: live.get(row.id)?.status ?? 'dead',

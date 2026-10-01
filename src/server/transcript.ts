@@ -50,6 +50,14 @@ const stripTags = (s: string) => stripAnsi(s.replace(/<\/?[a-z-]+>/g, ' ')).repl
 const tagText = (s: string, tag: string) => stripAnsi(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(s)?.[1] ?? '').replace(/\s+/g, ' ').trim();
 
 function parseClaude(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
+  // a message sent while Claude was busy: queued, then handed to the running turn as an
+  // attachment (the queue-operation lines around it are bookkeeping and would duplicate it)
+  if (o.type === 'attachment' && o.attachment?.type === 'queued_command' && !o.isSidechain) {
+    const a = o.attachment;
+    const text = typeof a.prompt === 'string' ? a.prompt : blockText(a.prompt);
+    if (!text?.trim()) return [];
+    return a.commandMode && a.commandMode !== 'prompt' ? [{ role: 'meta', text: `${a.commandMode}: ${text}` }] : [{ role: 'user', text }];
+  }
   if ((o.type !== 'user' && o.type !== 'assistant') || o.isSidechain) return [];
   const content = o.message?.content;
   if (o.type === 'assistant') {
@@ -323,4 +331,48 @@ export async function findCodexRollout(host: Host, cwd: string, since: number, c
   }
   candidates.sort((a, b) => (a.ts < b.ts ? 1 : -1));
   return candidates[0] ?? null;
+}
+
+// ---------- Claude Code state (model, context usage) ----------
+
+export interface ClaudeState {
+  model: string;
+  /** tokens in the context at the last request: input + cache reads + cache writes */
+  contextTokens: number;
+  /** best guess of the window: 1M when the session evidently uses it, else 200k */
+  contextWindow: number;
+  permissionMode: string;
+}
+
+/** Read the end of the log for the latest model and token usage. */
+export async function claudeState(host: Host, file: string): Promise<ClaudeState> {
+  const { data, size } = await host.readTail(file, 1024 * 1024);
+  const text = data.toString('utf8');
+  // the first line is probably cut off unless we have the whole file
+  const lines = text.split('\n').slice(data.length < size ? 1 : 0);
+  const st: ClaudeState = { model: '', contextTokens: 0, contextWindow: 200_000, permissionMode: '' };
+  let oneM = /\(1M context\)|\[1m\]/i.test(text);
+  for (const line of lines) {
+    if (!line) continue;
+    if (line.includes('"permission-mode"')) {
+      try {
+        st.permissionMode = JSON.parse(line).permissionMode ?? st.permissionMode;
+      } catch {
+        /* partial */
+      }
+    } else if (line.includes('"usage"') && line.includes('"assistant"')) {
+      try {
+        const o = JSON.parse(line);
+        const u = o.message?.usage;
+        if (o.type !== 'assistant' || !u || o.isSidechain) continue;
+        st.model = o.message.model || st.model;
+        st.contextTokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+      } catch {
+        /* partial */
+      }
+    }
+  }
+  if (st.contextTokens > 200_000) oneM = true;
+  if (oneM) st.contextWindow = 1_000_000;
+  return st;
 }

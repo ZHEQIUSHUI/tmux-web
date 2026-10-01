@@ -10,6 +10,12 @@ export type AgentStatus = 'starting' | 'idle' | 'busy' | 'waiting' | 'offline' |
 const BUSY = /esc to interrupt/i;
 // permission prompts / pickers of Claude Code and Codex
 const WAITING = [/Do you want to /, /^\s*[❯›>]\s*\d+\.\s/m, /Enter to confirm/, /\(y\/n\)/i, /Press enter to continue/i, /Yes, (allow|proceed)/i];
+const MODES: [RegExp, string][] = [
+  [/bypass permissions on/i, 'bypassPermissions'],
+  [/accept edits on/i, 'acceptEdits'],
+  [/plan mode on/i, 'plan'],
+  [/auto mode on/i, 'auto'],
+];
 const SEPARATOR = /^\s*[─━═╌┄\-]{10,}\s*$/;
 const BOX_EDGE = /^\s*[╭╰┌└][─━]+[╮╯┐┘]\s*$/;
 const PROMPT_LINE = /^\s*[│|]?\s*[❯›>](\s|$)/;
@@ -70,11 +76,36 @@ export class Screen {
     return out;
   }
 
+  /**
+   * Whether Claude Code's input box holds text the user typed (or that an interrupt put back).
+   * Placeholders and history suggestions are drawn dim, so only non-dim text counts.
+   */
+  hasPromptInput(): boolean {
+    const buf = this.term.buffer.active;
+    for (let y = this.term.rows - 1; y >= Math.max(0, this.term.rows - 16); y--) {
+      const line = buf.getLine(buf.viewportY + y);
+      if (!line || !/^[❯>]\s/.test(line.translateToString(true))) continue;
+      for (let x = 1; x < line.length; x++) {
+        const cell = line.getCell(x);
+        const ch = cell?.getChars();
+        if (cell && ch && ch.trim()) return !cell.isDim();
+      }
+      return false;
+    }
+    return false;
+  }
+
   /** Classify the agent's state and pull out the text it is producing right now. */
-  analyze(): { status: AgentStatus; preview: string } {
+  analyze(): { status: AgentStatus; preview: string; mode: string; update: boolean } {
     const lines = this.lines().filter((l) => !NOISE.some((re) => re.test(l)));
     while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
     const text = lines.join('\n');
+    // Claude Code's footer shows the live permission mode ("⏵⏵ auto mode on", "⏸ plan mode on", ...)
+    const footer = lines.slice(-4).join('\n');
+    const mode = MODES.find(([re]) => re.test(footer))?.[1] ?? '';
+    // "✔ Update installed · Restart to update" in the footer: a new version is waiting
+    // (shown just above the input box, so look a bit higher than the footer)
+    const update = /(Update installed|·)\s*·?\s*Restart to (update|apply)/i.test(lines.slice(-8).join('\n'));
     const waiting = WAITING.some((re) => re.test(text));
     const status: AgentStatus = waiting ? 'waiting' : BUSY.test(text) ? 'busy' : 'idle';
 
@@ -110,7 +141,7 @@ export class Screen {
     while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
     const tail = kept.slice(-20);
     while (tail.length && !tail[0].trim()) tail.shift();
-    return { status, preview: tail.join('\n') };
+    return { status, preview: tail.join('\n'), mode, update };
   }
 
   dispose() {

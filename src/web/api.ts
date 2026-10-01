@@ -19,6 +19,9 @@ export interface SessionInfo {
   groupId: number | null;
   share: 'none' | 'view' | 'control';
   adopted: boolean;
+  note: string;
+  /** your folder for it (folders are personal) */
+  folderId: number | null;
   /** for adopted sessions: the user's tmux session (and -L socket if not default) */
   tmux: string | null;
   access: 'view' | 'control';
@@ -53,6 +56,13 @@ export interface HostInfo {
   error?: string;
   tmux?: string;
   home?: string;
+}
+
+export interface Folder {
+  id: number;
+  name: string;
+  note: string;
+  position: number;
 }
 
 export interface Group {

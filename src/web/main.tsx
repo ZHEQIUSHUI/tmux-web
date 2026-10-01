@@ -1,6 +1,6 @@
 import { render } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { api, type ChatItem, type Group, type HostInfo, type Me, type Page, type SessionInfo, type Status } from './api';
+import { api, type ChatItem, type Folder, type Group, type HostInfo, type Me, type Page, type SessionInfo, type Status } from './api';
 import { renderMarkdown } from './markdown';
 import './style.css';
 
@@ -81,6 +81,61 @@ function liveStream(url: () => string, handlers: Record<string, (data: any, ev: 
   };
 }
 
+// ---------------- theme ----------------
+
+type ThemePref = 'auto' | 'light' | 'dark';
+const THEME_LABEL: Record<ThemePref, string> = { auto: '跟随系统', light: '浅色', dark: '深色' };
+const darkMq = matchMedia('(prefers-color-scheme: dark)');
+
+/** Apply a theme preference: data-theme on <html>, and the browser bar color on phones. */
+function applyTheme(pref: ThemePref) {
+  const root = document.documentElement;
+  if (pref === 'auto') delete root.dataset.theme;
+  else root.dataset.theme = pref;
+  const dark = pref === 'dark' || (pref === 'auto' && darkMq.matches);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#111317' : '#f6f6f4');
+}
+const savedTheme = (): ThemePref => (store.get('tw:theme') as ThemePref) || 'auto';
+applyTheme(savedTheme());
+darkMq.addEventListener('change', () => applyTheme(savedTheme()));
+
+function useTheme(): [ThemePref, (t: ThemePref) => void] {
+  const [pref, setPref] = useState<ThemePref>(savedTheme);
+  return [
+    pref,
+    (t) => {
+      store.set('tw:theme', t === 'auto' ? null : t);
+      applyTheme(t);
+      setPref(t);
+    },
+  ];
+}
+
+/** Compact cycling button for the desktop sidebar. */
+function ThemeCycle() {
+  const [pref, set] = useTheme();
+  const next: Record<ThemePref, ThemePref> = { auto: 'light', light: 'dark', dark: 'auto' };
+  const icon = { auto: '◐', light: '☀', dark: '☾' }[pref];
+  return (
+    <button class="ghost small" onClick={() => set(next[pref])} title={`外观：${THEME_LABEL[pref]}（点击切换）`}>
+      {icon}
+    </button>
+  );
+}
+
+function ThemeSwitch() {
+  const [pref, set] = useTheme();
+  return (
+    <div class="tabs theme-switch">
+      {(['auto', 'light', 'dark'] as ThemePref[]).map((t) => (
+        <button key={t} class={pref === t ? 'on' : ''} onClick={() => set(t)}>
+          {THEME_LABEL[t]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Phone layout (list → session navigation) below this width. */
 function useNarrow() {
   const mq = useMemo(() => matchMedia('(max-width: 760px)'), []);
@@ -139,6 +194,12 @@ const Icon = {
       <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" stroke-linecap="round" />
     </svg>
   ),
+  folderPlus: () => (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+      <path d="M12 11v5M9.5 13.5h5" />
+    </svg>
+  ),
   user: () => (
     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
       <circle cx="12" cy="8" r="4" />
@@ -166,6 +227,8 @@ function useHashSession(): [number | null, (id: number | null) => void] {
 function Login({ onLogin }: { onLogin: (m: Me) => void }) {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [show, setShow] = useState(false);
+  const [shake, setShake] = useState(0);
   const submit = async (e: Event) => {
     e.preventDefault();
     const f = new FormData(e.target as HTMLFormElement);
@@ -175,27 +238,31 @@ function Login({ onLogin }: { onLogin: (m: Me) => void }) {
       onLogin(await api<Me>('POST', '/_tw/api/login', { username: f.get('username'), password: f.get('password') }));
     } catch (e: any) {
       setErr(e.message);
+      setShake((n) => n + 1);
     } finally {
       setBusy(false);
     }
   };
   return (
     <div class="login">
-      <form onSubmit={submit} class="card">
+      <div class="login-box">
+        <img class="login-logo" src="/_tw/icon-192.png" alt="" width="64" height="64" />
         <h1>tmux-web</h1>
-        <label>
-          账号
-          <input name="username" autocomplete="username" autocapitalize="off" required autofocus />
-        </label>
-        <label>
-          密码
-          <input name="password" type="password" autocomplete="current-password" required />
-        </label>
-        {err && <p class="error">{err}</p>}
-        <button class="primary" disabled={busy}>
-          {busy ? '登录中…' : '登录'}
-        </button>
-      </form>
+        <p class="login-sub">登录后管理你的 agent 会话</p>
+        <form onSubmit={submit} class={`login-form ${shake ? 'shake' : ''}`} key={shake}>
+          <input name="username" class="login-input" placeholder="账号" autocomplete="username" autocapitalize="off" spellcheck={false} required autoFocus={!coarsePointer} />
+          <div class="login-pw">
+            <input name="password" class="login-input" type={(show ? 'text' : 'password') as 'password'} placeholder="密码" autocomplete="current-password" required />
+            <button type="button" class="login-eye" onClick={() => setShow((v) => !v)} aria-label={show ? '隐藏密码' : '显示密码'}>
+              {show ? '隐藏' : '显示'}
+            </button>
+          </div>
+          {err && <p class="login-err">{err}</p>}
+          <button class="primary login-btn" disabled={busy}>
+            {busy ? <span class="spinner" /> : '登录'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
@@ -242,7 +309,8 @@ function Markdown({ id, text }: { id: string; text: string }) {
   return <div class="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-function Message({ it, onExpand }: { it: ChatItem; onExpand: (it: ChatItem) => void }) {
+function Message({ it, onExpand, onRewind }: { it: ChatItem; onExpand: (it: ChatItem) => void; onRewind?: () => void }) {
+  const [actions, setActions] = useState(false);
   const more = it.truncated && (
     <button class="link" onClick={() => onExpand(it)}>
       展开全文
@@ -250,11 +318,26 @@ function Message({ it, onExpand }: { it: ChatItem; onExpand: (it: ChatItem) => v
   );
   if (it.role === 'user')
     return (
-      <div class="msg user">
+      // tap (phones) or hover (desktop) shows what can be done with your own message
+      <div class={`msg user ${actions ? 'show-actions' : ''}`} onClick={() => onRewind && setActions((v) => !v)}>
         <div class="bubble">
           {it.text}
           {more}
         </div>
+        {onRewind && (
+          <div class="msg-actions">
+            <button
+              class="link"
+              onClick={(e) => {
+                e.stopPropagation();
+                setActions(false);
+                onRewind();
+              }}
+            >
+              撤回到这之前…
+            </button>
+          </div>
+        )}
       </div>
     );
   if (it.role === 'meta') return <div class="msg meta">{it.text}</div>;
@@ -292,6 +375,170 @@ const QUICK_KEYS: [string, string[], string][] = [
   ['^C', ['C-c'], 'Ctrl+C'],
 ];
 
+// ---------------- Claude Code controls ----------------
+
+/** Slash commands offered while typing "/". Interactive ones open a menu in the TUI. */
+const SLASH: [string, string, boolean][] = [
+  ['/model', '切换模型', true],
+  ['/permissions', '权限规则（允许/拒绝哪些工具）', true],
+  ['/usage', '套餐用量和额度', true],
+  ['/context', '上下文占用明细', true],
+  ['/rewind', '撤回：回到之前某条消息（可连代码一起撤销）', true],
+  ['/compact', '压缩上下文（可附加说明）', false],
+  ['/clear', '清空对话，开始新会话', false],
+  ['/status', '版本、账号、模型等状态', true],
+  ['/config', '设置', true],
+  ['/cost', '本次会话花费', false],
+  ['/mcp', 'MCP 服务器', true],
+  ['/agents', '子 agent 管理', true],
+  ['/resume', '切换到其他历史会话', true],
+  ['/memory', '编辑 CLAUDE.md 记忆', true],
+  ['/hooks', 'Hooks 配置', true],
+  ['/init', '为项目生成 CLAUDE.md', false],
+  ['/review', '代码审查', false],
+  ['/rename', '重命名会话', false],
+  ['/export', '导出对话', true],
+  ['/doctor', '检查安装和配置', true],
+  ['/login', '登录 / 切换账号', true],
+  ['/help', '所有命令', true],
+];
+
+/** A slash command without arguments that opens a menu in the TUI: best handled in the terminal. */
+function isInteractive(text: string): boolean {
+  const m = /^\s*(\/[\w-]+)\s*$/.exec(text);
+  return !!m && SLASH.some(([c, , interactive]) => c === m[1] && interactive);
+}
+
+interface ClaudeState {
+  model?: string;
+  contextTokens?: number;
+  contextWindow?: number;
+  permissionMode?: string;
+  /** live permission mode from the TUI footer */
+  mode?: string;
+}
+
+const MODE_LABEL: Record<string, string> = {
+  auto: '自动模式',
+  bypassPermissions: '跳过确认',
+  acceptEdits: '自动接受编辑',
+  plan: '计划模式',
+  default: '每次确认',
+};
+
+/** claude-opus-5-5 → Opus 5.5, claude-fable-5 → Fable 5 */
+function modelName(id?: string): string {
+  if (!id) return '';
+  const parts = id.replace(/^claude-/, '').replace(/-\d{8}$/, '').split('-');
+  const name = parts.filter((p) => !/^\d+$/.test(p)).map((p) => p[0].toUpperCase() + p.slice(1));
+  const ver = parts.filter((p) => /^\d+$/.test(p)).join('.');
+  return [...name, ver].filter(Boolean).join(' ');
+}
+
+const fmtTokens = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+
+/** Thin bar above the chat: model · permission mode · context used. Tap for the control sheet. */
+function ClaudeBar({ st, update, onOpen, onRestart }: { st: ClaudeState | null; update: boolean; onOpen: () => void; onRestart?: () => void }) {
+  // always rendered (fixed height) so the chat below doesn't jump when the data arrives
+  st ||= {};
+  const mode = st.mode || st.permissionMode || '';
+  const pct = st.contextTokens && st.contextWindow ? Math.min(100, (st.contextTokens / st.contextWindow) * 100) : null;
+  const level = pct === null ? '' : pct >= 80 ? 'hi' : pct >= 50 ? 'mid' : 'lo';
+  return (
+    <div class="cbar">
+      {update && onRestart && (
+        <button class="cbar-update" onClick={onRestart} title="Claude Code 已更新，重启后生效（对话会接着继续）">
+          有新版本 · 重启
+        </button>
+      )}
+      <button class="cbar-main" onClick={onOpen} title="Claude 状态与设置">
+      <span class="cbar-model">{modelName(st.model) || 'Claude'}</span>
+      {!st.model && <span class="cbar-loading">读取状态…</span>}
+      {mode && <span class={`cbar-mode ${mode}`}>{MODE_LABEL[mode] ?? mode}</span>}
+      {pct !== null && (
+        <span class="cbar-ctx">
+          <span class="cbar-meter">
+            <span class={`cbar-fill ${level}`} style={{ width: `${pct}%` }} />
+          </span>
+          上下文 {fmtTokens(st.contextTokens!)} / {fmtTokens(st.contextWindow!)}
+        </span>
+      )}
+      <span class="cbar-more">
+        <Icon.more />
+      </span>
+      </button>
+    </div>
+  );
+}
+
+/** Control sheet: everything else goes through Claude Code's own commands in the TUI. */
+function ClaudePanel(props: { st: ClaudeState | null; canControl: boolean; onClose: () => void; run: (cmd: string) => void; sendKeys: (k: string[]) => void; onRestart: () => void }) {
+  const { st } = props;
+  const mode = st?.mode || st?.permissionMode || '';
+  const pct = st?.contextTokens && st?.contextWindow ? Math.round((st.contextTokens / st.contextWindow) * 100) : null;
+  const act = (cmd: string, confirmText?: string) => () => {
+    if (confirmText && !confirm(confirmText)) return;
+    props.run(cmd);
+    props.onClose();
+  };
+  return (
+    <Modal title="Claude" onClose={props.onClose}>
+      <div class="cpanel">
+        <div class="cp-row">
+          <span class="dim">模型</span>
+          <b>{modelName(st?.model) || '—'}</b>
+          {props.canControl && (
+            <button onClick={act('/model')}>切换…</button>
+          )}
+        </div>
+        <div class="cp-row">
+          <span class="dim">权限模式</span>
+          <b>{MODE_LABEL[mode] ?? (mode || '—')}</b>
+          {props.canControl && (
+            <button onClick={() => props.sendKeys(['BTab'])} title="Shift+Tab">
+              切换下一个
+            </button>
+          )}
+        </div>
+        <div class="cp-row">
+          <span class="dim">上下文</span>
+          <b>{st?.contextTokens ? `${fmtTokens(st.contextTokens)} / ${fmtTokens(st.contextWindow!)}${pct !== null ? `（${pct}%）` : ''}` : '—'}</b>
+          {props.canControl && <button onClick={act('/context')}>明细…</button>}
+        </div>
+        {props.canControl && (
+          <div class="cp-actions">
+            <button onClick={act('/rewind')}>撤回 /rewind</button>
+            <button onClick={act('/usage')}>用量 /usage</button>
+            <button onClick={act('/permissions')}>权限规则 /permissions</button>
+            <button onClick={act('/compact', '压缩上下文？Claude 会把之前的对话总结成摘要，释放空间。')}>压缩上下文 /compact</button>
+            <button onClick={act('/clear', '清空对话、开始新会话？之前的对话仍可通过「从历史会话继续」找回。')}>清空对话 /clear</button>
+            <button onClick={act('/status')}>状态 /status</button>
+            <button onClick={act('/config')}>设置 /config</button>
+            <button
+              class="wide"
+              onClick={() => {
+                props.onClose();
+                props.onRestart();
+              }}
+            >
+              重启 Claude（更新版本后用，对话会接着继续）
+            </button>
+          </div>
+        )}
+        <p class="dim small">带「…」的会打开 Claude 自己的菜单，自动切到终端操作。也可以在输入框里直接输入任何 / 命令。</p>
+      </div>
+    </Modal>
+  );
+}
+
+/** Restart only the claude process; asks first if it is in the middle of something. */
+async function restartAgent(session: SessionInfo, status: Status): Promise<boolean> {
+  const busy = status === 'busy' || status === 'waiting';
+  if (busy && !confirm('Claude 正在执行任务，重启会中断它。确定重启？')) return false;
+  await api('POST', `/_tw/api/sessions/${session.id}/restart-agent`);
+  return true;
+}
+
 /** A message sent from this page that hasn't shown up in the agent's log yet. */
 interface Pending {
   key: number;
@@ -300,17 +547,43 @@ interface Pending {
 }
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
 
-function ChatView({ session }: { session: SessionInfo }) {
-  const [items, setItems] = useState<ChatItem[]>([]);
+/** What a chat view had, so coming back to a session shows it at once (and where you were). */
+interface ChatCache {
+  items: ChatItem[];
+  page: { start: number; hasMore: boolean; pending: boolean };
+  /** log offset the live stream continues from */
+  end: number;
+  at: number;
+  /** null = was pinned to the bottom */
+  scrollTop: number | null;
+  claude: ClaudeState | null;
+}
+const chatCache = new Map<number, ChatCache>();
+const CACHE_FRESH_MS = 30 * 60 * 1000;
+
+function ChatView({ session, onOpenTerminal }: { session: SessionInfo; onOpenTerminal: () => void }) {
+  const cached = useMemo(() => {
+    const c = chatCache.get(session.id);
+    return c && Date.now() - c.at < CACHE_FRESH_MS ? c : undefined;
+  }, [session.id]);
+  const [items, setItems] = useState<ChatItem[]>(cached?.items ?? []);
+  const [claude, setClaude] = useState<ClaudeState | null>(cached?.claude ?? null);
+  const [panel, setPanel] = useState(false);
+  const [update, setUpdate] = useState(false);
+  const isClaude = session.agent === 'claude';
   // shown right away when you press send; removed once the agent's log has the message
   const [pending, setPending] = useState<Pending[]>([]);
-  const [page, setPage] = useState<{ start: number; hasMore: boolean; pending: boolean } | null>(null);
+  const [page, setPage] = useState<{ start: number; hasMore: boolean; pending: boolean } | null>(cached?.page ?? null);
+  const endRef = useRef(cached?.end ?? 0);
   const [state, setState] = useState<{ status: Status; preview: string; error?: string }>({ status: session.status, preview: '' });
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState('');
   const [online, setOnline] = useState(true);
   const scroller = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
+  const stick = useRef(cached?.scrollTop == null);
+  const restoreTop = useRef(cached?.scrollTop ?? null);
+  // last scroll position, kept as we go: the element is already gone when we unmount
+  const lastTop = useRef<number | null>(cached?.scrollTop ?? null);
   const anchor = useRef<{ height: number; top: number } | null>(null);
   const id = session.id;
   // bumped when the agent switches to another conversation (/clear): start over
@@ -320,22 +593,16 @@ function ChatView({ session }: { session: SessionInfo }) {
   useEffect(() => {
     let stop: (() => void) | null = null;
     let cancelled = false;
-    setItems([]);
-    setPage(null);
     setError('');
-    stick.current = true;
-    api<Page>('GET', `/_tw/api/sessions/${id}/messages?limit=30`)
-      .then((p) => {
-        if (cancelled) return;
-        setItems(p.items);
-        setPage({ start: p.start, hasMore: p.hasMore, pending: !!p.pending });
-        // resume from the last byte offset we have when the stream has to be reopened
-        let offset = p.end;
+    // resume from the last byte offset we have (also when the stream has to be reopened)
+    const begin = (end: number) => {
+        let offset = end;
+        endRef.current = end;
         stop = liveStream(
           () => `/_tw/api/sessions/${id}/stream?from=${offset}`,
           {
             msg: (fresh: ChatItem[], ev) => {
-              if (ev.lastEventId) offset = Number(ev.lastEventId);
+              if (ev.lastEventId) offset = endRef.current = Number(ev.lastEventId);
               if (fresh.length) {
                 setItems((cur) => {
                   const seen = new Set(cur.map((i) => i.id));
@@ -346,18 +613,83 @@ function ChatView({ session }: { session: SessionInfo }) {
               }
               setPage((pg) => (pg && pg.pending ? { ...pg, pending: false } : pg));
             },
-            state: setState,
-            reset: () => setGeneration((g) => g + 1),
+            state: (st: { status: Status; preview: string; error?: string; mode?: string; update?: boolean }) => {
+              setState(st);
+              setUpdate(!!st.update);
+              if (st.mode !== undefined) setClaude((c) => (c ? { ...c, mode: st.mode } : c));
+            },
+            reset: () => {
+              chatCache.delete(id);
+              setGeneration((g) => g + 1);
+            },
           },
           setOnline,
         );
-      })
-      .catch((e) => !cancelled && setError(e.message));
+    };
+    if (generation === 0 && cached) {
+      // shown from the cache already: just continue the stream from where it was
+      begin(cached.end);
+    } else {
+      setItems([]);
+      setPage(null);
+      stick.current = true;
+      api<Page>('GET', `/_tw/api/sessions/${id}/messages?limit=30`)
+        .then((p) => {
+          if (cancelled) return;
+          setItems(p.items);
+          setPage({ start: p.start, hasMore: p.hasMore, pending: !!p.pending });
+          begin(p.end);
+        })
+        .catch((e) => !cancelled && setError(e.message));
+    }
     return () => {
       cancelled = true;
       stop?.();
     };
   }, [id, generation]);
+
+  // remember the view for next time
+  useEffect(() => {
+    if (!page) return;
+    chatCache.set(id, { items, page, end: endRef.current, at: Date.now(), scrollTop: chatCache.get(id)?.scrollTop ?? null, claude });
+    if (chatCache.size > 20) chatCache.delete(chatCache.keys().next().value!);
+  }, [items, page, claude]);
+  useEffect(
+    () => () => {
+      const c = chatCache.get(id);
+      if (c) c.scrollTop = stick.current ? null : lastTop.current;
+    },
+    [id],
+  );
+
+  // model + context usage: refresh when the conversation moves on
+  const lastAssistant = items.length ? items[items.length - 1].id : '';
+  const firstState = useRef(true);
+  useEffect(() => {
+    if (!isClaude) return;
+    const delay = firstState.current ? 0 : 800;
+    firstState.current = false;
+    const t = setTimeout(() => {
+      api<ClaudeState | null>('GET', `/_tw/api/sessions/${id}/claude-state`).then(
+        (st) => st && setClaude((c) => ({ ...st, mode: st.mode || c?.mode })),
+        () => {},
+      );
+    }, delay);
+    return () => clearTimeout(t);
+  }, [id, lastAssistant, state.status === 'idle']);
+
+  const runCommand = (cmd: string) =>
+    api('POST', `/_tw/api/sessions/${id}/input`, { text: cmd })
+      .then(() => isInteractive(cmd) && onOpenTerminal())
+      .catch((e) => setError(e.message));
+  const sendKeys = (keys: string[]) => api('POST', `/_tw/api/sessions/${id}/keys`, { keys }).catch((e) => setError(e.message));
+  const restartClaude = () => restartAgent(session, state.status).catch((e) => setError(e.message));
+  // Claude Code's own rewind menu: pick the message to go back before, optionally undoing code too
+  const canRewind = isClaude && session.access === 'control';
+  const rewind = () => {
+    if (state.status === 'busy') sendKeys(['Escape']);
+    runCommand('/rewind');
+  };
 
   const loadOlder = useCallback(async () => {
     if (!page?.hasMore || loadingOlder) return;
@@ -390,7 +722,10 @@ function ChatView({ session }: { session: SessionInfo }) {
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    if (anchor.current) {
+    if (restoreTop.current !== null) {
+      el.scrollTop = restoreTop.current;
+      restoreTop.current = null;
+    } else if (anchor.current) {
       el.scrollTop = anchor.current.top + (el.scrollHeight - anchor.current.height);
       anchor.current = null;
     } else if (stick.current) el.scrollTop = el.scrollHeight;
@@ -399,6 +734,7 @@ function ChatView({ session }: { session: SessionInfo }) {
   const onScroll = () => {
     const el = scroller.current!;
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    lastTop.current = el.scrollTop;
     if (el.scrollTop < 200 && page?.hasMore && !loadingOlder) loadOlder();
   };
 
@@ -407,6 +743,8 @@ function ChatView({ session }: { session: SessionInfo }) {
 
   return (
     <div class="chat">
+      {isClaude && <ClaudeBar st={claude} update={update} onOpen={() => setPanel(true)} onRestart={session.access === 'control' ? restartClaude : undefined} />}
+      {panel && <ClaudePanel st={claude} canControl={session.access === 'control'} onClose={() => setPanel(false)} run={runCommand} sendKeys={sendKeys} onRestart={restartClaude} />}
       <div class="scroller" ref={scroller} onScroll={onScroll}>
         <div class="messages">
           {page?.hasMore && (
@@ -418,7 +756,7 @@ function ChatView({ session }: { session: SessionInfo }) {
             <div class="empty">{session.agent === 'bash' ? 'Shell 会话没有对话记录，请切换到「终端」。' : page.pending ? '还没有对话。在下方输入开始。' : '没有消息'}</div>
           )}
           {!page && !error && <div class="empty">加载中…</div>}
-          {blocks.map((b) => (b.kind === 'tools' ? <ToolGroup key={b.items[0].id} items={b.items} onExpand={expand} /> : <Message key={b.it.id} it={b.it} onExpand={expand} />))}
+          {blocks.map((b) => (b.kind === 'tools' ? <ToolGroup key={b.items[0].id} items={b.items} onExpand={expand} /> : <Message key={b.it.id} it={b.it} onExpand={expand} onRewind={canRewind ? rewind : undefined} />))}
           {pending.map((p) => (
             <div key={p.key} class="msg user pending">
               <div class="bubble">
@@ -449,6 +787,9 @@ function ChatView({ session }: { session: SessionInfo }) {
         <Composer
           sessionId={id}
           status={state.status}
+          slash={isClaude}
+          agent={session.agent}
+          onInteractive={onOpenTerminal}
           onPending={(text) => {
             // a shell has no chat log to confirm the message: don't show a placeholder
             if (session.agent === 'bash') return () => {};
@@ -473,7 +814,16 @@ function ChatView({ session }: { session: SessionInfo }) {
   );
 }
 
-function Composer({ sessionId, status, onPending }: { sessionId: number; status: Status; onPending: (text: string) => (ok: boolean) => void }) {
+function Composer(props: {
+  sessionId: number;
+  status: Status;
+  /** offer Claude Code slash commands */
+  slash?: boolean;
+  agent?: SessionInfo['agent'];
+  onInteractive?: () => void;
+  onPending: (text: string) => (ok: boolean) => void;
+}) {
+  const { sessionId, status, onPending } = props;
   const draftKey = `tw:draft:${sessionId}`;
   const [text, setText] = useState(() => store.get(draftKey) || '');
   const [sending, setSending] = useState(false);
@@ -504,10 +854,14 @@ function Composer({ sessionId, status, onPending }: { sessionId: number; status:
     setSending(true);
     setErr('');
     update('');
-    const done = onPending(msg);
+    // slash commands don't show up as chat messages: no placeholder bubble for them
+    const isCommand = /^\s*\//.test(msg);
+    const done = isCommand ? () => {} : onPending(msg);
     try {
       await api('POST', `/_tw/api/sessions/${sessionId}/input`, { text: msg });
       done(true);
+      // menus like /model or /usage are operated in the TUI itself
+      if (props.slash && isInteractive(msg)) props.onInteractive?.();
     } catch (e: any) {
       done(false);
       setErr(e.message);
@@ -523,16 +877,46 @@ function Composer({ sessionId, status, onPending }: { sessionId: number; status:
   };
 
   const key = (keys: string[]) => api('POST', `/_tw/api/sessions/${sessionId}/keys`, { keys }).catch((e) => setErr(e.message));
+  // interrupt what the agent is doing: Esc for Claude Code / Codex, Ctrl+C in a shell
+  const running = status === 'busy' || status === 'waiting';
+  const stop = () => key(props.agent === 'bash' ? ['C-c'] : ['Escape']);
 
   const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && running && !e.isComposing) {
+      e.preventDefault();
+      stop();
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !coarse) {
       e.preventDefault();
       send();
     }
   };
 
+  // "/mo" → suggestions; only while the box holds a single command word
+  const slashMatch = props.slash ? /^\/([\w-]*)$/.exec(text) : null;
+  const suggestions = slashMatch ? SLASH.filter(([c]) => c.startsWith('/' + slashMatch[1])).slice(0, 8) : [];
+
   return (
     <div class="composer">
+      {suggestions.length > 0 && (
+        <div class="slash-list">
+          {suggestions.map(([cmd, desc, interactive]) => (
+            <button
+              key={cmd}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                update(cmd + (interactive ? '' : ' '));
+                ta.current?.focus();
+              }}
+            >
+              <b>{cmd}</b>
+              <span class="dim">{desc}</span>
+              {interactive && <span class="tag">菜单</span>}
+            </button>
+          ))}
+        </div>
+      )}
       {keysOpen && (
         <div class="keys">
           {QUICK_KEYS.map(([label, keys, title]) => (
@@ -557,6 +941,12 @@ function Composer({ sessionId, status, onPending }: { sessionId: number; status:
           onInput={(e) => update((e.target as HTMLTextAreaElement).value)}
           onKeyDown={onKeyDown}
         />
+        {running && (
+          <button class={`stop ${coarse ? 'round' : ''}`} aria-label="停止" title="停止当前输出（Esc）" onMouseDown={(e) => e.preventDefault()} onClick={stop}>
+            <span class="stop-square" />
+            {!coarse && '停止'}
+          </button>
+        )}
         <button class={`primary send ${coarse ? 'round' : ''}`} aria-label="发送" onMouseDown={(e) => e.preventDefault()} onClick={send} disabled={sending || !text.trim()}>
           {sending ? '…' : coarse ? <Icon.send /> : '发送'}
         </button>
@@ -1014,7 +1404,7 @@ function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => void; o
   );
 }
 
-function SessionSettings({ me, session, onClose }: { me: Me; session: SessionInfo; onClose: () => void }) {
+function SessionSettings({ me, session, folders, onClose }: { me: Me; session: SessionInfo; folders: Folder[]; onClose: () => void }) {
   const [err, setErr] = useState('');
   const groups = useGroups(me);
   const owner = me.role === 'admin' || session.owner === me.username;
@@ -1022,8 +1412,20 @@ function SessionSettings({ me, session, onClose }: { me: Me; session: SessionInf
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target as HTMLFormElement)) as Record<string, string>;
     try {
-      await api('PATCH', `/_tw/api/sessions/${session.id}`, { name: f.name, groupId: f.groupId ? Number(f.groupId) : null, share: f.groupId ? f.share : 'none' });
+      const patch: Record<string, unknown> = {};
+      if (session.access === 'control') patch.note = f.note ?? '';
+      if (owner) Object.assign(patch, { name: f.name, groupId: f.groupId ? Number(f.groupId) : null, share: f.groupId ? f.share : 'none' });
+      if (Object.keys(patch).length) await api('PATCH', `/_tw/api/sessions/${session.id}`, patch);
+      const folderId = f.folderId ? Number(f.folderId) : null;
+      if (folderId !== session.folderId) await api('PUT', `/_tw/api/sessions/${session.id}/folder`, { folderId });
       onClose();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+  };
+  const restartClaude = async () => {
+    try {
+      if (await restartAgent(session, session.status)) onClose();
     } catch (e: any) {
       setErr(e.message);
     }
@@ -1055,20 +1457,41 @@ function SessionSettings({ me, session, onClose }: { me: Me; session: SessionInf
         </p>
         {session.adopted && <p class="small">接管自你的 tmux 会话 <code>{session.tmux}</code>。删除只是停止接管；「重启」会关掉原会话，并在 tmux-web 里恢复对话。</p>}
         {owner && (
-          <>
-            <label>
-              名称
-              <input name="name" defaultValue={session.name} maxLength={60} />
-            </label>
-            <ShareFields groups={groups} groupId={session.groupId} share={session.share === 'none' ? 'view' : session.share} />
-            <button class="primary">保存</button>
-          </>
+          <label>
+            名称
+            <input name="name" defaultValue={session.name} maxLength={60} />
+          </label>
         )}
+        {session.access === 'control' && (
+          <label>
+            备注
+            <textarea name="note" rows={2} maxLength={500} defaultValue={session.note} placeholder="显示在会话名下面，比如在做什么、注意事项" />
+          </label>
+        )}
+        <label>
+          文件夹
+          <select name="folderId" defaultValue={session.folderId ? String(session.folderId) : ''}>
+            <option value="">未分组</option>
+            {folders.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+          </select>
+          {!folders.length && <small>还没有文件夹，可以在会话列表上方新建</small>}
+        </label>
+        {owner && <ShareFields groups={groups} groupId={session.groupId} share={session.share === 'none' ? 'view' : session.share} />}
+        <button class="primary">保存</button>
         {err && <p class="error">{err}</p>}
         <div class="row-actions">
+          {session.access === 'control' && session.agent === 'claude' && (
+            <button type="button" onClick={restartClaude} title="只重启 claude 进程，对话接着继续（更新版本后用）">
+              重启 Claude
+            </button>
+          )}
           {session.access === 'control' && (
-            <button type="button" onClick={restart}>
-              重启
+            <button type="button" onClick={restart} title="关闭整个 tmux 会话再重建">
+              {session.adopted ? '迁移到 tmux-web' : '重建会话'}
             </button>
           )}
           {owner && (
@@ -1328,13 +1751,177 @@ function AdminModal({ me, onClose }: { me: Me; onClose: () => void }) {
 
 // ---------------- shell ----------------
 
-function Sidebar(props: { me: Me; hostBanner: boolean; sessions: SessionInfo[]; current: number | null; onPick: (id: number) => void; onNew: () => void; onAdmin: () => void; onPassword: () => void; onLogout: () => void }) {
+// ---------------- folders ----------------
+
+interface SessionGroup {
+  folder: Folder | null;
+  sessions: SessionInfo[];
+}
+
+/** Sessions by folder (folders in their order, unfiled last). Without folders: one plain group. */
+function groupByFolder(sessions: SessionInfo[], folders: Folder[]): SessionGroup[] {
+  if (!folders.length) return [{ folder: null, sessions }];
+  const ids = new Set(folders.map((f) => f.id));
+  const groups: SessionGroup[] = folders.map((f) => ({ folder: f, sessions: sessions.filter((s) => s.folderId === f.id) }));
+  groups.push({ folder: null, sessions: sessions.filter((s) => s.folderId === null || !ids.has(s.folderId)) });
+  return groups;
+}
+
+/** Which folders are collapsed; remembered in this browser. "u" = the unfiled group. */
+function useCollapsed(): [Set<string>, (key: string) => void] {
+  const [set, setSet] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(store.get('tw:collapsed') || '[]'));
+    } catch {
+      return new Set();
+    }
+  });
+  const toggle = (key: string) =>
+    setSet((cur) => {
+      const next = new Set(cur);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      store.set('tw:collapsed', JSON.stringify([...next]));
+      return next;
+    });
+  return [set, toggle];
+}
+
+const Chevron = ({ open }: { open: boolean }) => (
+  <svg class={`chev ${open ? 'open' : ''}`} viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 6l6 6-6 6" />
+  </svg>
+);
+
+/** Create / rename / annotate / delete a folder. */
+function FolderModal({ folder, onClose }: { folder: Folder | null; onClose: () => void }) {
+  const [err, setErr] = useState('');
+  const save = async (e: Event) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target as HTMLFormElement)) as Record<string, string>;
+    try {
+      if (folder) await api('PATCH', `/_tw/api/folders/${folder.id}`, f);
+      else await api('POST', '/_tw/api/folders', f);
+      onClose();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+  };
+  const remove = async () => {
+    if (!folder || !confirm(`删除文件夹「${folder.name}」？里面的会话会移到「未分组」，不会被删除。`)) return;
+    try {
+      await api('DELETE', `/_tw/api/folders/${folder.id}`);
+      onClose();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+  };
+  return (
+    <Modal title={folder ? '编辑文件夹' : '新建文件夹'} onClose={onClose}>
+      <form class="form" onSubmit={save}>
+        <label>
+          名称
+          <input name="name" defaultValue={folder?.name ?? ''} required maxLength={40} autoFocus={!coarsePointer} />
+        </label>
+        <label>
+          备注
+          <textarea name="note" rows={3} maxLength={500} defaultValue={folder?.note ?? ''} placeholder="比如这组会话是做什么的" />
+        </label>
+        {err && <p class="error">{err}</p>}
+        <button class="primary">{folder ? '保存' : '创建'}</button>
+        {folder && (
+          <div class="row-actions">
+            <button type="button" class="danger" onClick={remove}>
+              删除文件夹
+            </button>
+          </div>
+        )}
+      </form>
+    </Modal>
+  );
+}
+
+/** A collapsible folder header: arrow, name, count, note; drop target for dragged sessions. */
+function FolderHeader(props: { group: SessionGroup; open: boolean; onToggle: () => void; onEdit?: () => void; onDropSession?: (id: number) => void; big?: boolean }) {
+  const { folder, sessions } = props.group;
+  const [over, setOver] = useState(false);
+  const waiting = sessions.filter((s) => s.status === 'waiting').length;
+  return (
+    <div
+      class={`folder-head ${props.big ? 'big' : ''} ${over ? 'drop' : ''}`}
+      onDragOver={(e) => {
+        if (!props.onDropSession) return;
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        setOver(false);
+        const id = Number(e.dataTransfer?.getData('text/tw-session'));
+        if (id && props.onDropSession) props.onDropSession(id);
+      }}
+    >
+      <button class="folder-toggle" onClick={props.onToggle} aria-expanded={props.open}>
+        <Chevron open={props.open} />
+        <span class="folder-name">{folder ? folder.name : '未分组'}</span>
+        <span class="folder-count">{sessions.length}</span>
+        {!props.open && waiting > 0 && <span class="dot waiting" title={`${waiting} 个等待确认`} />}
+      </button>
+      {folder && props.onEdit && (
+        <button class="icon-btn folder-edit" onClick={props.onEdit} aria-label="编辑文件夹">
+          <Icon.more />
+        </button>
+      )}
+      {folder?.note && props.open && <div class="folder-note">{folder.note}</div>}
+    </div>
+  );
+}
+
+const moveToFolder = (sessionId: number, folderId: number | null) => api('PUT', `/_tw/api/sessions/${sessionId}/folder`, { folderId }).catch((e) => alert(e.message));
+
+function Sidebar(props: {
+  me: Me;
+  hostBanner: boolean;
+  sessions: SessionInfo[];
+  folders: Folder[];
+  current: number | null;
+  onPick: (id: number) => void;
+  onNew: () => void;
+  onAdmin: () => void;
+  onPassword: () => void;
+  onLogout: () => void;
+  onEditFolder: (f: Folder | null) => void;
+}) {
   const { me, sessions, current } = props;
   const multiHost = new Set(sessions.map((s) => s.hostId)).size > 1;
+  const [collapsed, toggle] = useCollapsed();
+  const groups = groupByFolder(sessions, props.folders);
+  const item = (s: SessionInfo) => (
+    <button
+      key={s.id}
+      class={`session-item ${s.id === current ? 'active' : ''}`}
+      onClick={() => props.onPick(s.id)}
+      draggable={!coarsePointer && props.folders.length > 0}
+      onDragStart={(e) => e.dataTransfer?.setData('text/tw-session', String(s.id))}
+      title={s.note || undefined}
+    >
+      <span class={`dot ${s.status}`} title={STATUS_LABEL[s.status]} />
+      <span class="s-main">
+        <span class="s-name">{s.name}</span>
+        <span class="s-sub">
+          {s.note ||
+            `${AGENT_LABEL[s.agent]}${multiHost ? ` · ${s.host}` : ''}${s.owner !== me.username ? ` · ${s.owner}` : ''}${s.access === 'view' ? ' · 只读' : ''}`}
+        </span>
+      </span>
+    </button>
+  );
   return (
     <aside class="sidebar">
       <div class="side-head">
         <span class="brand">tmux-web</span>
+        <button class="icon-btn" onClick={() => props.onEditFolder(null)} aria-label="新建文件夹" title="新建文件夹">
+          <Icon.folderPlus />
+        </button>
         <button class="primary small-btn" onClick={props.onNew}>
           ＋ 新建
         </button>
@@ -1345,25 +1932,30 @@ function Sidebar(props: { me: Me; hostBanner: boolean; sessions: SessionInfo[]; 
         </button>
       )}
       <nav class="session-list">
-        {sessions.map((s) => (
-          <button key={s.id} class={`session-item ${s.id === current ? 'active' : ''}`} onClick={() => props.onPick(s.id)}>
-            <span class={`dot ${s.status}`} title={STATUS_LABEL[s.status]} />
-            <span class="s-main">
-              <span class="s-name">{s.name}</span>
-              <span class="s-sub">
-                {AGENT_LABEL[s.agent]}
-                {multiHost ? ` · ${s.host}` : ''}
-                {s.owner !== me.username ? ` · ${s.owner}` : ''}
-                {s.access === 'view' ? ' · 只读' : ''}
-              </span>
-            </span>
-          </button>
-        ))}
+        {groups.map((g) => {
+          const key = g.folder ? String(g.folder.id) : 'u';
+          const open = !collapsed.has(key);
+          if (!g.folder && groups.length === 1) return g.sessions.map(item);
+          if (!g.folder && !g.sessions.length) return null;
+          return (
+            <div class="folder" key={key}>
+              <FolderHeader
+                group={g}
+                open={open}
+                onToggle={() => toggle(key)}
+                onEdit={g.folder ? () => props.onEditFolder(g.folder) : undefined}
+                onDropSession={(id) => moveToFolder(id, g.folder?.id ?? null)}
+              />
+              {open && <div class="folder-body">{g.sessions.length ? g.sessions.map(item) : <p class="dim small folder-empty">空文件夹。拖动会话到这里，或在会话设置里选择文件夹。</p>}</div>}
+            </div>
+          );
+        })}
         {!sessions.length && <p class="dim small pad">还没有会话，点「新建」开始。</p>}
       </nav>
       <div class="side-foot">
         <span class="dim small">{me.username}</span>
         <span class="spacer" />
+        <ThemeCycle />
         {me.role === 'admin' && (
           <button class="ghost small" onClick={props.onAdmin}>
             账号
@@ -1486,7 +2078,7 @@ const VIEWS: [Tab, string, () => any][] = [
   ['preview', '预览', Icon.globe],
 ];
 
-function SessionPane({ me, session, narrow, onBack }: { me: Me; session: SessionInfo; narrow: boolean; onBack: () => void }) {
+function SessionPane({ me, session, folders, narrow, onBack }: { me: Me; session: SessionInfo; folders: Folder[]; narrow: boolean; onBack: () => void }) {
   const tabKey = `tw:tab:${session.id}`;
   const initialTab = (): Tab => (store.get(tabKey) as Tab) || (session.agent === 'bash' ? 'term' : 'chat');
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -1532,10 +2124,10 @@ function SessionPane({ me, session, narrow, onBack }: { me: Me; session: Session
           <Icon.more />
         </button>
       </header>
-      {tab === 'chat' && <ChatView key={session.id} session={session} />}
+      {tab === 'chat' && <ChatView key={session.id} session={session} onOpenTerminal={() => pick('term')} />}
       {tab === 'term' && <TerminalView key={session.id} sessionId={session.id} canWrite={session.access === 'control'} />}
       {tab === 'preview' && <PreviewView key={session.id} session={session} />}
-      {settings && <SessionSettings me={me} session={session} onClose={() => setSettings(false)} />}
+      {settings && <SessionSettings me={me} session={session} folders={folders} onClose={() => setSettings(false)} />}
     </section>
   );
 }
@@ -1546,46 +2138,99 @@ const shortPath = (p: string) => {
   return parts.length > 2 ? '…/' + parts.slice(-2).join('/') : p;
 };
 
-/** Phone home screen: session cards, a floating + button, account menu. */
-function MobileHome(props: { me: Me; sessions: SessionInfo[] | null; hostBanner: boolean; onPick: (id: number) => void; onNew: () => void; onMenu: () => void; onAdmin: () => void }) {
+/** Phone home screen: grouped session rows (iOS-style lists), search, a floating + button. */
+function MobileHome(props: {
+  me: Me;
+  sessions: SessionInfo[] | null;
+  folders: Folder[];
+  hostBanner: boolean;
+  onPick: (id: number) => void;
+  onNew: () => void;
+  onMenu: () => void;
+  onAdmin: () => void;
+  onEditFolder: (f: Folder | null) => void;
+}) {
   const { sessions } = props;
   const multiHost = new Set((sessions || []).map((s) => s.hostId)).size > 1;
-  // sessions waiting for a decision first, then the busy ones
+  const [collapsed, toggle] = useCollapsed();
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+  // within a group: sessions waiting for a decision first, then the busy ones
   const order: Record<string, number> = { waiting: 0, busy: 1 };
-  const sorted = [...(sessions || [])].sort((a, b) => (order[a.status] ?? 2) - (order[b.status] ?? 2));
+  const shown = (sessions || []).filter((s) => !q || `${s.name} ${s.note} ${s.cwd} ${s.host}`.toLowerCase().includes(q));
+  const sorted = [...shown].sort((a, b) => (order[a.status] ?? 2) - (order[b.status] ?? 2));
+  const groups = groupByFolder(sorted, q ? [] : props.folders);
+  const count = (st: Status) => (sessions || []).filter((s) => s.status === st).length;
+  const summary = sessions
+    ? [`${sessions.length} 个会话`, count('busy') && `${count('busy')} 个运行中`, count('waiting') && `${count('waiting')} 个等待确认`].filter(Boolean).join(' · ')
+    : '';
+  const row = (s: SessionInfo) => (
+    <button key={s.id} class={`m-row ${s.status}`} onClick={() => props.onPick(s.id)}>
+      <span class={`m-badge ${s.agent}`}>
+        {AGENT_LABEL[s.agent].slice(0, 1)}
+        <span class={`m-dot dot ${s.status}`} />
+      </span>
+      <span class="m-main">
+        <span class="m-name">{s.name}</span>
+        <span class="m-sub">
+          {s.note || (
+            <span class="mono">
+              {multiHost ? `${s.host}:` : ''}
+              {shortPath(s.cwd)}
+            </span>
+          )}
+        </span>
+      </span>
+      {s.status !== 'idle' && <span class={`m-pill ${s.status}`}>{STATUS_LABEL[s.status]}</span>}
+      <span class="m-chev">
+        <Chevron open={false} />
+      </span>
+    </button>
+  );
   return (
     <section class="m-home">
       <header class="m-head">
-        <h1>会话</h1>
+        <div class="m-title">
+          <h1>会话</h1>
+          {summary && <span class="m-summary">{summary}</span>}
+        </div>
+        <button class="icon-btn" onClick={() => props.onEditFolder(null)} aria-label="新建文件夹">
+          <Icon.folderPlus />
+        </button>
         <button class="icon-btn" onClick={props.onMenu} aria-label="我的">
           <Icon.user />
         </button>
       </header>
-      {props.hostBanner && (
-        <button class="host-banner" onClick={props.onAdmin}>
-          有主机连不上，点此查看
-        </button>
-      )}
       <div class="m-list">
+        {sessions && sessions.length > 4 && (
+          <label class="m-search">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M20 20l-3.5-3.5" />
+            </svg>
+            <input type="search" value={query} onInput={(e) => setQuery((e.target as HTMLInputElement).value)} placeholder="搜索名称、备注、路径" />
+          </label>
+        )}
+        {props.hostBanner && (
+          <button class="host-banner" onClick={props.onAdmin}>
+            有主机连不上，点此查看
+          </button>
+        )}
         {sessions === null && <p class="dim pad">加载中…</p>}
         {sessions?.length === 0 && <p class="dim pad">还没有会话，点右下角 ＋ 新建，或导入已有的 tmux 会话。</p>}
-        {sorted.map((s) => (
-          <button key={s.id} class={`m-card ${s.status}`} onClick={() => props.onPick(s.id)}>
-            <span class={`m-badge ${s.agent}`}>{AGENT_LABEL[s.agent].slice(0, 1)}</span>
-            <span class="m-main">
-              <span class="m-name">{s.name}</span>
-              <span class="m-sub">
-                {multiHost ? `${s.host} · ` : ''}
-                {shortPath(s.cwd)}
-                {s.owner !== props.me.username ? ` · ${s.owner}` : ''}
-              </span>
-            </span>
-            <span class={`m-status ${s.status}`}>
-              <span class={`dot ${s.status}`} />
-              {STATUS_LABEL[s.status]}
-            </span>
-          </button>
-        ))}
+        {q && !shown.length && <p class="dim pad">没有匹配的会话</p>}
+        {groups.map((g) => {
+          const key = g.folder ? String(g.folder.id) : 'u';
+          const open = q ? true : !collapsed.has(key);
+          const plain = !g.folder && groups.length === 1;
+          if (!g.sessions.length && (plain || !g.folder)) return null;
+          return (
+            <div class="m-section" key={key}>
+              {!plain && <FolderHeader big group={g} open={open} onToggle={() => toggle(key)} onEdit={g.folder ? () => props.onEditFolder(g.folder) : undefined} />}
+              {open && (g.sessions.length ? <div class="m-group">{g.sessions.map(row)}</div> : <p class="dim small folder-empty">空文件夹。在会话设置里可以把会话放进来。</p>)}
+            </div>
+          );
+        })}
       </div>
       <button class="fab" onClick={props.onNew} aria-label="新建会话">
         <Icon.plus />
@@ -1597,6 +2242,10 @@ function MobileHome(props: { me: Me; sessions: SessionInfo[] | null; hostBanner:
 function MenuSheet({ me, onClose, onAdmin, onPassword, onLogout }: { me: Me; onClose: () => void; onAdmin: () => void; onPassword: () => void; onLogout: () => void }) {
   return (
     <Modal title={me.username} onClose={onClose}>
+      <div class="sheet-theme">
+        <span class="dim small">外观</span>
+        <ThemeSwitch />
+      </div>
       <div class="sheet-list">
         {me.role === 'admin' && <button onClick={onAdmin}>主机、账号与分组</button>}
         <button onClick={onPassword}>修改密码</button>
@@ -1613,6 +2262,9 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
   const [current, setCurrent] = useHashSession();
   const [modal, setModal] = useState<'new' | 'admin' | 'password' | 'menu' | null>(null);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  // folder being edited; null = creating one; undefined = dialog closed
+  const [editFolder, setEditFolder] = useState<Folder | null | undefined>(undefined);
   const [hostBanner, setHostBanner] = useState(false);
   useEffect(() => {
     if (me.role !== 'admin' || modal) return;
@@ -1625,6 +2277,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
         () => '/_tw/api/events',
         {
           sessions: setSessions,
+          folders: setFolders,
           status: ({ id, status }) => setSessions((cur) => cur && cur.map((s) => (s.id === id ? { ...s, status } : s))),
         },
         // a 401 also ends up as an error: confirm the login is still valid
@@ -1634,7 +2287,18 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   );
 
   const session = sessions?.find((s) => s.id === current) ?? null;
-  const pick = (id: number) => setCurrent(id);
+  // opened from the list: "back" is a real history step back (same as the system back gesture)
+  const fromList = useRef(false);
+  const pick = (id: number) => {
+    fromList.current = current === null;
+    setCurrent(id);
+  };
+  const back = () => {
+    if (fromList.current) {
+      fromList.current = false;
+      history.back();
+    } else setCurrent(null);
+  };
   const logout = async () => {
     await api('POST', '/_tw/api/logout').catch(() => {});
     onLogout();
@@ -1647,17 +2311,33 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   return (
     <div class="app">
       {narrow ? (
-        session ? (
-          <SessionPane me={me} session={session} narrow onBack={() => setCurrent(null)} />
-        ) : (
-          <MobileHome me={me} sessions={sessions} hostBanner={hostBanner} onPick={pick} onNew={() => setModal('new')} onMenu={() => setModal('menu')} onAdmin={() => setModal('admin')} />
-        )
+        <>
+          {/* the list stays mounted under the session view: going back keeps its scroll and state */}
+          <MobileHome
+            me={me}
+            sessions={sessions}
+            folders={folders}
+            hostBanner={hostBanner}
+            onPick={pick}
+            onNew={() => setModal('new')}
+            onMenu={() => setModal('menu')}
+            onAdmin={() => setModal('admin')}
+            onEditFolder={setEditFolder}
+          />
+          {session && (
+            <div class="m-push">
+              <SessionPane me={me} session={session} folders={folders} narrow onBack={back} />
+            </div>
+          )}
+        </>
       ) : (
         <>
           <Sidebar
             me={me}
             hostBanner={hostBanner}
             sessions={sessions || []}
+            folders={folders}
+            onEditFolder={setEditFolder}
             current={current}
             onPick={pick}
             onNew={() => setModal('new')}
@@ -1666,7 +2346,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             onLogout={logout}
           />
           {session ? (
-            <SessionPane me={me} session={session} narrow={false} onBack={() => setCurrent(null)} />
+            <SessionPane me={me} session={session} folders={folders} narrow={false} onBack={() => setCurrent(null)} />
           ) : (
             <section class="pane placeholder">
               <p class="dim">{sessions === null ? '加载中…' : '从左侧选择一个会话，或新建一个。'}</p>
@@ -1674,6 +2354,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
           )}
         </>
       )}
+      {editFolder !== undefined && <FolderModal folder={editFolder} onClose={() => setEditFolder(undefined)} />}
       {modal === 'menu' && <MenuSheet me={me} onClose={() => setModal(null)} onAdmin={() => setModal('admin')} onPassword={() => setModal('password')} onLogout={logout} />}
       {modal === 'new' && (
         <NewSession

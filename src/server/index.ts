@@ -1,7 +1,7 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { config } from './config.js';
-import { db, groupIdsOf, q, type Agent, type HostRow, type Role, type Share, type UserRow } from './db.js';
+import { db, groupIdsOf, q, type Agent, type FolderRow, type HostRow, type Role, type Share, type UserRow } from './db.js';
 import { clientIp, currentUser, endSession, isSecureRequest, hashPassword, loginLockedFor, recordLogin, sameOrigin, startSession, verifyLogin, verifyPassword } from './auth.js';
 import { HttpError, readJson, sendJson, serveStatic, Sse } from './http.js';
 import { ensureSshKey, forgetHost, getHost, publicKey } from './host.js';
@@ -24,13 +24,17 @@ import {
   updateSession,
   type Access,
 } from './sessions.js';
-import { followLog, readFull, readPage } from './transcript.js';
+import { claudeState, followLog, readFull, readPage } from './transcript.js';
 import { parsePreviewPath, previewCookie, proxyHttp, proxyUpgrade, readPreviewCookie, type ProxyTarget } from './proxy.js';
 
 // ---------- helpers ----------
 
 const USERNAME = /^[a-z][a-z0-9_-]{1,30}$/;
 const ALLOWED_KEYS = new Set(['Enter', 'Escape', 'Tab', 'BTab', 'Up', 'Down', 'Left', 'Right', 'Space', 'BSpace', 'C-c', 'C-d', 'C-l', 'y', 'n', '1', '2', '3', '4', '5', '6', '7', '8', '9']);
+
+function folderView(f: FolderRow) {
+  return { id: f.id, name: f.name, note: f.note, position: f.position };
+}
 
 function publicUser(u: UserRow) {
   return { id: u.id, username: u.username, role: u.role, disabled: !!u.disabled, groups: groupIdsOf(u.id) };
@@ -141,8 +145,15 @@ route('POST', '/_tw/api/sessions', async (req, res) => {
 route('PATCH', '/_tw/api/sessions/:id', async (req, res, [id]) => {
   const user = requireUser(req);
   const { row } = sessionFor(user, id, 'control');
-  if (row.owner_id !== user.id && user.role !== 'admin') throw new HttpError(403, '只有创建者可以修改');
   const b = await readJson(req);
+  // anyone who can operate a session may annotate it
+  if (typeof b.note === 'string') {
+    q.setNote.run(b.note.trim().slice(0, 500), row.id);
+    hub.emit('list');
+  }
+  const changesMore = b.name !== undefined || b.groupId !== undefined || b.share !== undefined;
+  if (!changesMore) return sendJson(req, res, 200, { ok: true });
+  if (row.owner_id !== user.id && user.role !== 'admin') throw new HttpError(403, '只有创建者可以修改');
   updateSession(row.id, {
     name: typeof b.name === 'string' && b.name.trim() ? b.name.trim().slice(0, 60) : undefined,
     groupId: b.groupId === undefined ? undefined : b.groupId ? Number(b.groupId) : null,
@@ -151,11 +162,77 @@ route('PATCH', '/_tw/api/sessions/:id', async (req, res, [id]) => {
   sendJson(req, res, 200, { ok: true });
 });
 
+/** Put a session into one of your folders (folderId null: take it out). */
+route('PUT', '/_tw/api/sessions/:id/folder', async (req, res, [id]) => {
+  const user = requireUser(req);
+  const { row } = sessionFor(user, id, 'view');
+  const { folderId } = await readJson(req);
+  if (folderId === null || folderId === undefined) q.unassignFolder.run(user.id, row.id);
+  else {
+    const f = q.folderById.get(Number(folderId));
+    if (!f || f.owner_id !== user.id) throw new HttpError(404, '文件夹不存在');
+    q.assignFolder.run(user.id, row.id, f.id);
+  }
+  hub.emit('list');
+  sendJson(req, res, 200, { ok: true });
+});
+
+// --- folders (personal) ---
+
+route('GET', '/_tw/api/folders', (req, res) => {
+  sendJson(req, res, 200, q.foldersOf.all(requireUser(req).id).map(folderView));
+});
+
+route('POST', '/_tw/api/folders', async (req, res) => {
+  const user = requireUser(req);
+  const b = await readJson(req);
+  const name = String(b.name || '').trim().slice(0, 40);
+  if (!name) throw new HttpError(400, '文件夹名不能为空');
+  const position = Math.max(0, ...q.foldersOf.all(user.id).map((f) => f.position + 1));
+  const info = q.insertFolder.run(user.id, name, String(b.note || '').trim().slice(0, 500), position, Date.now());
+  hub.emit('list');
+  sendJson(req, res, 200, folderView(q.folderById.get(Number(info.lastInsertRowid))!));
+});
+
+route('PATCH', '/_tw/api/folders/:id', async (req, res, [id]) => {
+  const user = requireUser(req);
+  const f = q.folderById.get(Number(id));
+  if (!f || f.owner_id !== user.id) throw new HttpError(404, '文件夹不存在');
+  const b = await readJson(req);
+  const name = typeof b.name === 'string' && b.name.trim() ? b.name.trim().slice(0, 40) : f.name;
+  const note = typeof b.note === 'string' ? b.note.trim().slice(0, 500) : f.note;
+  const position = Number.isFinite(b.position) ? Number(b.position) : f.position;
+  q.updateFolder.run(name, note, position, f.id);
+  hub.emit('list');
+  sendJson(req, res, 200, folderView(q.folderById.get(f.id)!));
+});
+
+route('DELETE', '/_tw/api/folders/:id', (req, res, [id]) => {
+  const user = requireUser(req);
+  const f = q.folderById.get(Number(id));
+  if (!f || f.owner_id !== user.id) throw new HttpError(404, '文件夹不存在');
+  // its sessions just become unfiled
+  q.deleteFolder.run(f.id);
+  hub.emit('list');
+  sendJson(req, res, 200, { ok: true });
+});
+
 route('DELETE', '/_tw/api/sessions/:id', async (req, res, [id]) => {
   const user = requireUser(req);
   const { row } = sessionFor(user, id, 'control');
   if (row.owner_id !== user.id && user.role !== 'admin') throw new HttpError(403, '只有创建者可以删除');
   await deleteSession(row.id);
+  sendJson(req, res, 200, { ok: true });
+});
+
+/** Restart just the claude process (keeps the tmux session and the conversation). */
+route('POST', '/_tw/api/sessions/:id/restart-agent', async (req, res, [id]) => {
+  const { live } = sessionFor(requireUser(req), id, 'control');
+  try {
+    await live.restartAgent();
+  } catch (e: any) {
+    throw new HttpError(400, e.message);
+  }
   sendJson(req, res, 200, { ok: true });
 });
 
@@ -186,6 +263,20 @@ route('GET', '/_tw/api/sessions/:id/message', async (req, res, [id], url) => {
   sendJson(req, res, 200, await readFull(row.agent, live.host, file, Number(url.searchParams.get('off'))));
 });
 
+/** Claude Code's model and context usage, from the end of its log. */
+route('GET', '/_tw/api/sessions/:id/claude-state', async (req, res, [id]) => {
+  const { row, live } = sessionFor(requireUser(req), id, 'view');
+  if (row.agent !== 'claude') return sendJson(req, res, 200, null);
+  await live.syncClaudeSession();
+  const file = await live.transcriptPath().catch(() => null);
+  if (!file || !live.host) return sendJson(req, res, 200, { mode: live.mode });
+  try {
+    sendJson(req, res, 200, { ...(await claudeState(live.host, file)), mode: live.mode });
+  } catch (e: any) {
+    throw new HttpError(502, e.message);
+  }
+});
+
 /**
  * Live stream for one session: new chat items (event id = byte offset, so EventSource's
  * automatic reconnect resumes exactly where it left off), plus status/preview of the screen.
@@ -212,7 +303,7 @@ route('GET', '/_tw/api/sessions/:id/stream', (req, res, [id], url) => {
     stopFollow?.();
     live.off('state', onState);
   });
-  sse.send('state', { status: live.status, preview: live.preview, error: live.error });
+  sse.send('state', live.stateView());
   live.on('state', onState);
   if (row.agent === 'bash') return;
 
@@ -237,6 +328,7 @@ route('POST', '/_tw/api/sessions/:id/input', async (req, res, [id]) => {
   const { text, submit = true } = await readJson(req);
   if (typeof text !== 'string') throw new HttpError(400, 'text required');
   if (!live.alive) throw new HttpError(409, 'session 已停止');
+  if (text) await live.clearPromptInput();
   if (text && submit) await backend.submit(live.target, text);
   else if (text) await backend.paste(live.target, text);
   else if (submit) await backend.keys(live.target, ['Enter']);
@@ -260,6 +352,7 @@ route('GET', '/_tw/api/events', (req, res) => {
     if (!fresh || fresh.disabled) return;
     const list = sessionView(fresh);
     visible = new Set(list.map((s) => s.id));
+    sse.send('folders', q.foldersOf.all(fresh.id).map(folderView));
     sse.send('sessions', list);
   };
   const onStatus = (id: number, status: string) => {
