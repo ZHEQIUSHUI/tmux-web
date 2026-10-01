@@ -46,6 +46,11 @@ export interface SessionRow {
   cwd: string;
   args: string;
   host_id: number;
+  /** tmux server (-L) and session name; null = ours (config socket, tw-<id>) */
+  tmux_socket: string | null;
+  tmux_name: string | null;
+  /** 1 = an existing tmux session we attached to: never resized or killed by us */
+  adopted: number;
   created_at: number;
 }
 
@@ -103,6 +108,16 @@ create table if not exists auth_tokens (
 );
 `);
 
+// columns added after the first release
+for (const [col, ddl] of [
+  ['tmux_socket', 'alter table sessions add column tmux_socket text'],
+  ['tmux_name', 'alter table sessions add column tmux_name text'],
+  ['adopted', 'alter table sessions add column adopted integer not null default 0'],
+]) {
+  const cols = (db.prepare('pragma table_info(sessions)').all() as { name: string }[]).map((c) => c.name);
+  if (!cols.includes(col)) db.exec(ddl);
+}
+
 export const q = {
   userById: db.prepare<[number], UserRow>('select * from users where id = ?'),
   userByName: db.prepare<[string], UserRow>('select * from users where username = ?'),
@@ -134,6 +149,12 @@ export const q = {
   ),
   deleteSession: db.prepare('delete from sessions where id = ?'),
   setCwd: db.prepare('update sessions set cwd = ? where id = ?'),
+  insertAdopted: db.prepare(
+    `insert into sessions (name, owner_id, group_id, share, agent, agent_session_id, cwd, args, host_id, tmux_socket, tmux_name, adopted, created_at)
+     values (?, ?, null, 'none', ?, ?, ?, '', ?, ?, ?, 1, ?)`,
+  ),
+  /** an adopted session whose tmux is gone becomes one of ours */
+  unadopt: db.prepare('update sessions set tmux_socket = null, tmux_name = null, adopted = 0 where id = ?'),
   setTranscript: db.prepare('update sessions set agent_session_id = ?, transcript_path = ? where id = ?'),
 
   tokenUser: db.prepare<[string, number], UserRow>(

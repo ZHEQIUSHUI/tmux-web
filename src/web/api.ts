@@ -18,6 +18,9 @@ export interface SessionInfo {
   owner: string;
   groupId: number | null;
   share: 'none' | 'view' | 'control';
+  adopted: boolean;
+  /** for adopted sessions: the user's tmux session (and -L socket if not default) */
+  tmux: string | null;
   access: 'view' | 'control';
   status: Status;
 }

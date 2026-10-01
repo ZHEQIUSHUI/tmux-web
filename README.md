@@ -6,6 +6,8 @@
 - 对话只加载最后 30 条，往上滚动时再按需加载更早的；生成过程中显示实时画面
 - 网页服务跑在 Docker 里，**tmux 和 agent 跑在宿主机上**：通过 SSH 执行，用的是宿主机自己的 tmux、claude、codex 和全部命令
 - 可以通过 SSH 管理**多台主机**；支持账号和分组
+- 可以**导入主机上已有的 tmux 会话**：里面的程序不重启，你在本机照常 attach，网页上同时可见
+- 手机端按终端 App 的方式设计：会话卡片列表、终端附加键栏（Ctrl/Alt/Esc/方向键/粘贴）、双指缩放字号，可以添加到主屏幕
 
 ## 快速开始
 
@@ -27,6 +29,23 @@ docker compose logs        # 第一次启动时，日志里会打印需要添加
 - 开着 sshd
 - 装了 tmux（3.0 以上）
 - 装了 claude 或 codex，并且已经登录。直接用你平时那份就行，由你自己更新
+
+## 不用 Docker：直接在主机上运行（systemd）
+
+如果主机的 sshd 不允许只用密钥登录（比如开了「公钥 + 密码」双因子），或者你本来就不想用 Docker，可以直接在主机上以普通用户运行。这种方式不经过 SSH，tmux 和 agent 以当前用户身份运行：
+
+```bash
+git clone https://github.com/ZHEQIUSHUI/tmux-web.git ~/tmux-web && cd ~/tmux-web
+npm ci && npm run build
+mkdir -p ~/.config/systemd/user && cp deploy/tmux-web.service ~/.config/systemd/user/
+# 第一次启动时用环境变量创建管理员，之后可以在网页上修改密码
+systemctl --user set-environment ADMIN_PASSWORD=换成你的密码
+systemctl --user daemon-reload && systemctl --user enable --now tmux-web
+systemctl --user unset-environment ADMIN_PASSWORD
+loginctl enable-linger "$USER"   # 不登录也开机启动
+```
+
+服务文件里设置了 `KillMode=process`：重启或停止服务时只结束网页服务这一个进程，tmux 会话和里面的 agent 都会保留。升级时执行 `git pull && npm run build && systemctl --user restart tmux-web`。
 
 ## 原理
 

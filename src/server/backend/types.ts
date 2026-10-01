@@ -4,6 +4,8 @@ import type { Host } from '../host.js';
 /** One terminal session (a single pane) on a host. */
 export interface PaneTarget {
   name: string;
+  /** tmux server socket name (-L) */
+  socket: string;
   host: Host;
 }
 
@@ -18,7 +20,7 @@ export interface PaneCapture {
 
 /**
  * Live connection to a pane.
- * events: 'data' (Buffer of raw terminal output), 'exit' ()
+ * events: 'data' (Buffer of raw terminal output), 'exit' (), 'layout' (pane size may have changed)
  */
 export interface PaneStream extends EventEmitter {
   /** raw input bytes, as a terminal would send them */

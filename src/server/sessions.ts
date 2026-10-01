@@ -36,6 +36,10 @@ function agentCommand(row: SessionRow, resume: boolean): string {
   return `exec bash -lc ${shq(`export LANG="\${LANG:-C.UTF-8}"; ${cmd}exec bash -l`)}`;
 }
 
+function paneOf(row: SessionRow, host: Host): PaneTarget {
+  return { name: row.tmux_name ?? tmuxName(row.id), socket: row.tmux_socket ?? config.tmuxSocket, host };
+}
+
 class HostDown extends Error {}
 
 async function readyHost(id: number): Promise<Host> {
@@ -69,7 +73,12 @@ export class LiveSession extends EventEmitter {
   }
 
   get target(): PaneTarget {
-    return { name: tmuxName(this.row.id), host: this.host! };
+    return paneOf(this.row, this.host!);
+  }
+
+  /** An existing tmux session we attached to: its size and lifetime stay the user's. */
+  get adopted() {
+    return !!this.row.adopted;
   }
 
   /** Attach to the tmux session, (re)creating it if needed. */
@@ -83,7 +92,15 @@ export class LiveSession extends EventEmitter {
     if (this.stream) return;
     try {
       const host = await readyHost(this.row.host_id);
-      const t = { name: tmuxName(this.row.id), host };
+      let t = paneOf(this.row, host);
+      if (!(await backend.has(t)) && this.row.adopted) {
+        // the adopted tmux session is gone (e.g. host rebooted): continue it as one of ours
+        q.unadopt.run(this.row.id);
+        this.row = q.sessionById.get(this.row.id)!;
+        t = paneOf(this.row, host);
+        resume = true;
+        hub.emit('list');
+      }
       if (!(await backend.has(t))) {
         await backend.create(t, {
           cwd: this.row.cwd,
@@ -130,6 +147,17 @@ export class LiveSession extends EventEmitter {
       screen.write(buf);
       this.emit('data', buf);
       this.scheduleAnalyze();
+    });
+    // someone resized the window (e.g. the user's own terminal on an adopted session): follow it
+    stream.on('layout', () => {
+      backend
+        .capture(t)
+        .then((cap) => {
+          if (this.screen !== screen || (cap.cols === screen.cols && cap.rows === screen.rows)) return;
+          screen.resize(cap.cols, cap.rows);
+          this.emit('size', cap.cols, cap.rows);
+        })
+        .catch(() => {});
     });
     stream.on('exit', () => {
       if (this.stream !== stream) return;
@@ -204,9 +232,35 @@ export class LiveSession extends EventEmitter {
   }
 
   resize(cols: number, rows: number) {
-    if (!this.stream || !this.screen) return;
+    if (!this.stream || !this.screen || this.adopted) return;
     this.stream.resize(cols, rows);
     this.screen.resize(cols, rows);
+  }
+
+  /**
+   * Claude Code switches to a new session id on /clear and some resumes. Ask the claude process
+   * in the pane which conversation it is on (~/.claude/sessions/<pid>.json) and follow it.
+   */
+  async syncClaudeSession(): Promise<void> {
+    const r = this.row;
+    const host = this.host;
+    if (r.agent !== 'claude' || !host || !this.stream) return;
+    const t = this.target;
+    const id = (
+      await host
+        .shText(
+          `pp=$(tmux -L "$1" display-message -p -t "=$2:" '#{pane_pid}' 2>/dev/null) || exit 0; ` +
+            `for p in $pp $(pgrep -P "$pp" 2>/dev/null); do f="$HOME/.claude/sessions/$p.json"; ` +
+            `[ -f "$f" ] && { sed -n 's/.*"sessionId" *: *"\\([0-9a-f-]*\\)".*/\\1/p' "$f" | head -n1; exit 0; }; done`,
+          [t.socket, t.name],
+        )
+        .catch(() => '')
+    ).trim();
+    if (id && /^[0-9a-f-]{36}$/.test(id) && id !== r.agent_session_id) {
+      q.setTranscript.run(id, null, r.id);
+      r.agent_session_id = id;
+      r.transcript_path = null;
+    }
   }
 
   /** Path of the agent's JSONL log on the host, once the agent has written it. */
@@ -283,6 +337,8 @@ export function sessionView(user: UserRow) {
       owner: owners.get(row.owner_id) ?? '?',
       groupId: row.group_id,
       share: row.share,
+      adopted: !!row.adopted,
+      tmux: row.adopted ? `${row.tmux_socket === 'default' ? '' : `-L ${row.tmux_socket} `}${row.tmux_name}` : null,
       access,
       status: live.get(row.id)?.status ?? 'dead',
     }));
@@ -348,7 +404,8 @@ export async function deleteSession(id: number) {
   const s = live.get(id);
   if (s) {
     s.stop();
-    if (s.host) await backend.kill(s.target).catch(() => {});
+    // an adopted session belongs to the user's own tmux: just stop watching it
+    if (s.host && !s.adopted) await backend.kill(s.target).catch(() => {});
     live.delete(id);
   }
   q.deleteSession.run(id);
@@ -369,6 +426,61 @@ export function updateSession(id: number, patch: { name?: string; groupId?: numb
 
 export async function deleteSessionsOf(userId: number) {
   for (const row of q.sessions.all().filter((r) => r.owner_id === userId)) await deleteSession(row.id);
+}
+
+// ---------- adopting existing tmux sessions ----------
+
+export interface ExistingTmux {
+  socket: string;
+  name: string;
+  cwd: string;
+  command: string;
+  agent: Agent;
+  /** Claude Code conversation running in it, if any */
+  claudeSession?: string;
+  attached: boolean;
+  /** already shown in tmux-web */
+  adoptedAs?: number;
+}
+
+/** The user's own tmux sessions on a host (default server), with what runs in them. */
+export async function listExistingTmux(host: Host, socket = 'default'): Promise<ExistingTmux[]> {
+  const out = await host.shText(
+    `tmux -L "$1" list-panes -a -F '#{session_name}\t#{window_index}.#{pane_index}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}\t#{session_attached}' 2>/dev/null | ` +
+      `while IFS="$(printf '\t')" read -r s wp pp cmd cwd att; do ` +
+      `[ "$wp" = "0.0" ] || continue; sid=; for p in $pp $(pgrep -P "$pp" 2>/dev/null); do f="$HOME/.claude/sessions/$p.json"; ` +
+      `[ -f "$f" ] && sid=$(sed -n 's/.*"sessionId" *: *"\\([0-9a-f-]*\\)".*/\\1/p' "$f" | head -n1) && break; done; ` +
+      `printf '%s\t%s\t%s\t%s\t%s\n' "$s" "$cmd" "$cwd" "$att" "$sid"; done`,
+    [socket],
+  );
+  const adopted = new Map(
+    q.sessions
+      .all()
+      .filter((r) => r.adopted && r.host_id === host.row.id)
+      .map((r) => [`${r.tmux_socket}/${r.tmux_name}`, r.id]),
+  );
+  return out
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [name, command, cwd, att, sid] = line.split('\t');
+      const agent: Agent = sid || command === 'claude' ? 'claude' : command === 'codex' ? 'codex' : 'bash';
+      return { socket, name, cwd, command, agent, claudeSession: sid || undefined, attached: att !== '0', adoptedAs: adopted.get(`${socket}/${name}`) };
+    });
+}
+
+/** Show an existing tmux session in tmux-web without restarting anything in it. */
+export async function adoptSession(owner: UserRow, host: Host, socket: string, name: string) {
+  const found = (await listExistingTmux(host, socket)).find((e) => e.name === name);
+  if (!found) throw new Error(`tmux 会话 ${name} 不存在`);
+  if (found.adoptedAs) return q.sessionById.get(found.adoptedAs)!;
+  const info = q.insertAdopted.run(name, owner.id, found.agent, found.claudeSession ?? null, found.cwd, host.row.id, socket, name, Date.now());
+  const row = q.sessionById.get(Number(info.lastInsertRowid))!;
+  const s = new LiveSession(row);
+  live.set(row.id, s);
+  await s.start(true);
+  hub.emit('list');
+  return row;
 }
 
 /** Directories offered when creating a session: the host user's home and what's under it. */

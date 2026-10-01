@@ -1,5 +1,4 @@
 import { EventEmitter } from 'node:events';
-import { config } from '../config.js';
 import type { PaneCapture, PaneStream, PaneTarget, SessionBackend } from './types.js';
 
 /**
@@ -7,11 +6,11 @@ import type { PaneCapture, PaneStream, PaneTarget, SessionBackend } from './type
  * (-f /dev/null), so the user's own tmux sessions and ~/.tmux.conf are untouched; -u forces
  * UTF-8 even when the remote shell has no locale.
  */
-const tmux = (...args: string[]) => ['tmux', '-u', '-L', config.tmuxSocket, '-f', '/dev/null', ...args];
+const tmux = (socket: string, ...args: string[]) => ['tmux', '-u', '-L', socket, '-f', '/dev/null', ...args];
 
 async function run(t: PaneTarget, args: string[], input?: string | Buffer): Promise<string> {
   try {
-    return (await t.host.exec(tmux(...args), input)).toString('utf8');
+    return (await t.host.exec(tmux(t.socket, ...args), input)).toString('utf8');
   } catch (e: any) {
     e.message = `tmux ${args[0]}: ${e.message}`;
     throw e;
@@ -56,7 +55,7 @@ class ControlStream extends EventEmitter implements PaneStream {
 
   constructor(private t: PaneTarget) {
     super();
-    this.child = t.host.spawn(tmux('-C', 'attach-session', '-t', `=${t.name}`));
+    this.child = t.host.spawn(tmux(t.socket, '-C', 'attach-session', '-t', `=${t.name}`));
     this.child.stdout.on('data', (chunk: Buffer) => this.onChunk(chunk));
     this.child.stderr.resume();
     this.child.on('close', () => this.finish());
@@ -83,6 +82,8 @@ class ControlStream extends EventEmitter implements PaneStream {
       if (sp !== -1) this.emit('data', decodeOutput(line, sp + 1));
     } else if (line.subarray(0, 5).toString() === '%exit') {
       this.finish();
+    } else if (line.subarray(0, 14).toString() === '%layout-change') {
+      this.emit('layout');
     }
   }
 

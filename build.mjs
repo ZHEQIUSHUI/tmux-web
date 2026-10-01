@@ -74,7 +74,20 @@ function report() {
   console.log(rows.join('\n'));
 }
 
-fs.rmSync(webOut, { recursive: true, force: true });
+// Keep earlier hashed assets for a while: pages opened before a rebuild still load their lazy
+// chunks (the terminal) by the old names. Everything else is rebuilt from scratch.
+const assetsDir = path.join(webOut, '_tw', 'assets');
+const KEEP_MS = 7 * 24 * 3600 * 1000;
+for (const ent of fs.existsSync(webOut) ? fs.readdirSync(webOut) : []) {
+  if (ent !== '_tw') fs.rmSync(path.join(webOut, ent), { recursive: true, force: true });
+}
+for (const ent of fs.existsSync(path.join(webOut, '_tw')) ? fs.readdirSync(path.join(webOut, '_tw')) : []) {
+  if (ent !== 'assets') fs.rmSync(path.join(webOut, '_tw', ent), { recursive: true, force: true });
+}
+for (const ent of fs.existsSync(assetsDir) ? fs.readdirSync(assetsDir) : []) {
+  const p = path.join(assetsDir, ent);
+  if (Date.now() - fs.statSync(p).mtimeMs > KEEP_MS) fs.rmSync(p, { force: true });
+}
 fs.mkdirSync(webOut, { recursive: true });
 // icons + manifest. Everything of ours lives under /_tw/ so proxied apps can use any other path.
 fs.cpSync('src/web/public', path.join(webOut, '_tw'), { recursive: true });

@@ -7,7 +7,9 @@ import { HttpError, readJson, sendJson, serveStatic, Sse } from './http.js';
 import { ensureSshKey, forgetHost, getHost, publicKey } from './host.js';
 import {
   accessOf,
+  adoptSession,
   backend,
+  listExistingTmux,
   createSession,
   deleteSession,
   canUseHost,
@@ -160,6 +162,7 @@ route('POST', '/_tw/api/sessions/:id/restart', async (req, res, [id]) => {
 
 route('GET', '/_tw/api/sessions/:id/messages', async (req, res, [id], url) => {
   const { row, live } = sessionFor(requireUser(req), id, 'view');
+  await live.syncClaudeSession();
   const file = row.agent === 'bash' ? null : await live.transcriptPath().catch(() => null);
   if (!file || !live.host) return sendJson(req, res, 200, { items: [], start: 0, end: 0, hasMore: false, pending: row.agent !== 'bash' });
   const before = url.searchParams.has('before') ? Number(url.searchParams.get('before')) : null;
@@ -189,9 +192,18 @@ route('GET', '/_tw/api/sessions/:id/stream', (req, res, [id], url) => {
   const offset = Number(lastId ?? url.searchParams.get('from') ?? 0) || 0;
   let stopFollow: (() => void) | null = null;
   let timer: NodeJS.Timeout | null = null;
+  let following: string | null = null;
   const onState = (st: { status: string; preview: string }) => sse.send('state', st);
+  // the agent may switch conversations (/clear): then the page has to start over from the new log
+  const watchSwitch = setInterval(async () => {
+    if (!following) return;
+    await live.syncClaudeSession();
+    const file = await live.transcriptPath().catch(() => null);
+    if (file && file !== following) sse.send('reset', 0);
+  }, 10000);
   const sse = new Sse(req, res, () => {
     if (timer) clearTimeout(timer);
+    clearInterval(watchSwitch);
     stopFollow?.();
     live.off('state', onState);
   });
@@ -209,6 +221,7 @@ route('GET', '/_tw/api/sessions/:id/stream', (req, res, [id], url) => {
       timer = setTimeout(waitForLog, 2000);
       return;
     }
+    following = file;
     stopFollow = followLog(row.agent, host, file, offset, (items, end) => sse.send('msg', items, end));
   };
   waitForLog();
@@ -385,6 +398,35 @@ route('GET', '/_tw/api/hosts/:id/ports', async (req, res, [id]) => {
   }
 });
 
+/** The user's existing tmux sessions on a host, for adopting them into tmux-web. */
+route('GET', '/_tw/api/hosts/:id/tmux', async (req, res, [id]) => {
+  const user = requireUser(req);
+  const h = q.hostById.get(Number(id));
+  if (!h || !canUseHost(user, h)) throw new HttpError(404, '主机不存在');
+  try {
+    sendJson(req, res, 200, await listExistingTmux(getHost(h.id)!));
+  } catch (e: any) {
+    throw new HttpError(502, e.message);
+  }
+});
+
+route('POST', '/_tw/api/hosts/:id/adopt', async (req, res, [id]) => {
+  const user = requireUser(req);
+  const h = q.hostById.get(Number(id));
+  if (!h || !canUseHost(user, h)) throw new HttpError(404, '主机不存在');
+  const b = await readJson(req);
+  const name = String(b.name || '');
+  const socket = String(b.socket || 'default');
+  if (!/^[\w.@-]+$/.test(name) || !/^[\w.-]+$/.test(socket)) throw new HttpError(400, '名称无效');
+  if (socket === config.tmuxSocket) throw new HttpError(400, '这是 tmux-web 自己的会话');
+  try {
+    const row = await adoptSession(user, getHost(h.id)!, socket, name);
+    sendJson(req, res, 200, { id: row.id });
+  } catch (e: any) {
+    throw new HttpError(400, e.message);
+  }
+});
+
 route('POST', '/_tw/api/hosts/:id/check', async (req, res, [id]) => {
   requireAdmin(req);
   const host = getHost(Number(id));
@@ -538,16 +580,19 @@ function attachTerminal(ws: WebSocket, live: NonNullable<ReturnType<typeof getLi
     timer ??= setTimeout(flush, 33);
   };
   const onExit = () => ws.close(4000, 'exited');
+  const onSize = (cols: number, rows: number) => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ type: 'size', cols, rows }));
 
   const begin = async () => {
     if (!live.screen) await live.start(true).catch(() => {});
     const screen = live.screen;
     if (!screen) return ws.close(4000, live.status === 'offline' ? 'offline' : 'exited');
     await screen.flush();
-    ws.send(JSON.stringify({ type: 'hello', cols: screen.cols, rows: screen.rows, canWrite }));
+    // adopted sessions keep the size the user's own terminal gives them
+    ws.send(JSON.stringify({ type: 'hello', cols: screen.cols, rows: screen.rows, canWrite, fixedSize: live.adopted }));
     ws.send(Buffer.from(screen.snapshot()));
     live.on('data', onData);
     live.on('exit', onExit);
+    live.on('size', onSize);
   };
   begin();
 
@@ -570,6 +615,7 @@ function attachTerminal(ws: WebSocket, live: NonNullable<ReturnType<typeof getLi
   ws.on('close', () => {
     live.off('data', onData);
     live.off('exit', onExit);
+    live.off('size', onSize);
     if (timer) clearTimeout(timer);
   });
 }

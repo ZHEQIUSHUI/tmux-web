@@ -81,6 +81,72 @@ function liveStream(url: () => string, handlers: Record<string, (data: any, ev: 
   };
 }
 
+/** Phone layout (list → session navigation) below this width. */
+function useNarrow() {
+  const mq = useMemo(() => matchMedia('(max-width: 760px)'), []);
+  const [narrow, setNarrow] = useState(mq.matches);
+  useEffect(() => {
+    const on = () => setNarrow(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, [mq]);
+  return narrow;
+}
+
+const Icon = {
+  back: () => (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M15 5l-7 7 7 7" />
+    </svg>
+  ),
+  chat: () => (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+      <path d="M4 5h16v11H9l-5 4z" />
+    </svg>
+  ),
+  term: () => (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M7 9l3 3-3 3M12 15h5" />
+    </svg>
+  ),
+  globe: () => (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18" />
+    </svg>
+  ),
+  more: () => (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+      <circle cx="5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="19" cy="12" r="1.8" />
+    </svg>
+  ),
+  plus: () => (
+    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  ),
+  send: () => (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 19V5M6 11l6-6 6 6" />
+    </svg>
+  ),
+  keys: () => (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+      <rect x="2" y="6" width="20" height="12" rx="2" />
+      <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" stroke-linecap="round" />
+    </svg>
+  ),
+  user: () => (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" stroke-linecap="round" />
+    </svg>
+  ),
+};
+
 function useHashSession(): [number | null, (id: number | null) => void] {
   const read = () => {
     const m = /^#\/s\/(\d+)/.exec(location.hash);
@@ -237,6 +303,8 @@ function ChatView({ session }: { session: SessionInfo }) {
   const stick = useRef(true);
   const anchor = useRef<{ height: number; top: number } | null>(null);
   const id = session.id;
+  // bumped when the agent switches to another conversation (/clear): start over
+  const [generation, setGeneration] = useState(0);
 
   // initial page (tail of the log), then the live stream from where it ended
   useEffect(() => {
@@ -266,6 +334,7 @@ function ChatView({ session }: { session: SessionInfo }) {
               setPage((pg) => (pg && pg.pending ? { ...pg, pending: false } : pg));
             },
             state: setState,
+            reset: () => setGeneration((g) => g + 1),
           },
           setOnline,
         );
@@ -275,7 +344,7 @@ function ChatView({ session }: { session: SessionInfo }) {
       cancelled = true;
       stop?.();
     };
-  }, [id]);
+  }, [id, generation]);
 
   const loadOlder = useCallback(async () => {
     if (!page?.hasMore || loadingOlder) return;
@@ -367,6 +436,9 @@ function Composer({ sessionId, status }: { sessionId: number; status: Status }) 
   const [err, setErr] = useState('');
   const ta = useRef<HTMLTextAreaElement>(null);
   const coarse = coarsePointer;
+  // phones: the quick keys stay folded until needed (or the agent asks for a choice)
+  const [showKeys, setShowKeys] = useState(!coarse);
+  const keysOpen = showKeys || status === 'waiting';
 
   useEffect(() => setText(store.get(draftKey) || ''), [draftKey]);
   useLayoutEffect(() => {
@@ -406,15 +478,22 @@ function Composer({ sessionId, status }: { sessionId: number; status: Status }) 
 
   return (
     <div class="composer">
-      <div class="keys">
-        {QUICK_KEYS.map(([label, keys, title]) => (
-          <button key={label} title={title} class={status === 'waiting' && /^\d$/.test(label) ? 'hot' : ''} onClick={() => key(keys)}>
-            {label}
-          </button>
-        ))}
-      </div>
+      {keysOpen && (
+        <div class="keys">
+          {QUICK_KEYS.map(([label, keys, title]) => (
+            <button key={label} title={title} class={status === 'waiting' && /^\d$/.test(label) ? 'hot' : ''} onMouseDown={(e) => e.preventDefault()} onClick={() => key(keys)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       {err && <div class="error small">{err}</div>}
       <div class="input-row">
+        {coarse && (
+          <button class={`icon-btn ${keysOpen ? 'on' : ''}`} aria-label="快捷键" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowKeys((v) => !v)}>
+            <Icon.keys />
+          </button>
+        )}
         <textarea
           ref={ta}
           rows={1}
@@ -423,8 +502,8 @@ function Composer({ sessionId, status }: { sessionId: number; status: Status }) 
           onInput={(e) => update((e.target as HTMLTextAreaElement).value)}
           onKeyDown={onKeyDown}
         />
-        <button class="primary send" onClick={send} disabled={sending || !text.trim()}>
-          {sending ? '…' : '发送'}
+        <button class={`primary send ${coarse ? 'round' : ''}`} aria-label="发送" onMouseDown={(e) => e.preventDefault()} onClick={send} disabled={sending || !text.trim()}>
+          {sending ? '…' : coarse ? <Icon.send /> : '发送'}
         </button>
       </div>
     </div>
@@ -433,64 +512,115 @@ function Composer({ sessionId, status }: { sessionId: number; status: Status }) 
 
 // ---------------- terminal tab ----------------
 
-// keys a phone keyboard doesn't have
-const TERM_KEYS: [string, string][] = [
+// keys a phone keyboard doesn't have, grouped like a terminal app's accessory bar
+const TERM_KEYS: ([string, string] | '|')[] = [
   ['Esc', '\x1b'],
   ['Tab', '\t'],
+  '|',
+  ['←', '\x1b[D'],
   ['↑', '\x1b[A'],
   ['↓', '\x1b[B'],
-  ['←', '\x1b[D'],
   ['→', '\x1b[C'],
-  ['⏎', '\r'],
+  '|',
   ['^C', '\x03'],
+  ['⏎', '\r'],
   ['⇧Tab', '\x1b[Z'],
+  '|',
   ['/', '/'],
+  ['-', '-'],
   ['|', '|'],
   ['~', '~'],
+  [':', ':'],
+  ['*', '*'],
 ];
 
 function TerminalView({ sessionId, canWrite }: { sessionId: number; canWrite: boolean }) {
   const el = useRef<HTMLDivElement>(null);
   const handle = useRef<import('./terminal').TermHandle | null>(null);
   const [state, setState] = useState('加载终端…');
-  const [ctrl, setCtrl] = useState(false);
+  const [mods, setMods] = useState({ ctrl: false, alt: false });
+  const [kb, setKb] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    import('./terminal').then(({ mountTerminal }) => {
-      if (cancelled || !el.current) return;
-      handle.current = mountTerminal(el.current, sessionId, setState, () => setCtrl(false));
-      // on phones, focusing would pop the keyboard over the screen right away
-      if (!coarsePointer) handle.current.focus();
-    });
+    import('./terminal')
+      .then(({ mountTerminal }) => {
+        if (cancelled || !el.current) return;
+        handle.current = mountTerminal(el.current, sessionId, setState, () => setMods({ ctrl: false, alt: false }));
+        // on phones, focusing would pop the keyboard over the screen right away
+        if (!coarsePointer) handle.current.focus();
+      })
+      // the page is older than the server's current build and its chunk is gone
+      .catch(() => !cancelled && setState('stale'));
     return () => {
       cancelled = true;
       handle.current?.dispose();
       handle.current = null;
     };
   }, [sessionId]);
-  const toggleCtrl = () => {
-    const on = !ctrl;
-    setCtrl(on);
-    handle.current?.setCtrl(on);
+  const toggleMod = (k: 'ctrl' | 'alt') => {
+    const next = { ...mods, [k]: !mods[k] };
+    setMods(next);
+    handle.current?.setModifiers(next);
   };
-  // keep focus in the terminal: tapping a button must not close the phone keyboard
+  const paste = async () => {
+    let text: string | null = null;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      // clipboard API needs https; fall back to the system paste menu in a prompt
+      text = prompt('粘贴要发送到终端的内容');
+    }
+    if (text) handle.current?.send(text);
+  };
+  // keep focus where it is: tapping a key must not close (or open) the phone keyboard
   const noBlur = (e: Event) => e.preventDefault();
   return (
     <div class="term-col">
       <div class="term-wrap">
-        {state && <div class="term-state">{state}</div>}
+        {state === 'stale' ? (
+          <div class="term-state">
+            网页已更新，
+            <button class="link" onClick={() => location.reload()}>
+              点此刷新
+            </button>
+          </div>
+        ) : (
+          state && <div class="term-state">{state}</div>
+        )}
         <div class="term" ref={el} />
       </div>
       {coarsePointer && canWrite && (
-        <div class="keys term-keys">
-          <button class={ctrl ? 'on' : ''} onMouseDown={noBlur} onClick={toggleCtrl}>
-            Ctrl
+        <div class="acc-bar">
+          <button class={`acc kb ${kb ? 'on' : ''}`} aria-label="键盘" onMouseDown={noBlur} onClick={() => setKb(!!handle.current?.toggleKeyboard())}>
+            <Icon.keys />
           </button>
-          {TERM_KEYS.map(([label, seq]) => (
-            <button key={label} onMouseDown={noBlur} onClick={() => handle.current?.send(seq)}>
-              {label}
+          <div class="acc-scroll">
+            <button class={`acc ${mods.ctrl ? 'on' : ''}`} onMouseDown={noBlur} onClick={() => toggleMod('ctrl')}>
+              Ctrl
             </button>
-          ))}
+            <button class={`acc ${mods.alt ? 'on' : ''}`} onMouseDown={noBlur} onClick={() => toggleMod('alt')}>
+              Alt
+            </button>
+            {TERM_KEYS.map((k, i) =>
+              k === '|' ? (
+                <span key={i} class="acc-sep" />
+              ) : (
+                <button key={k[0]} class="acc" onMouseDown={noBlur} onClick={() => handle.current?.send(k[1])}>
+                  {k[0]}
+                </button>
+              ),
+            )}
+            <span class="acc-sep" />
+            <button class="acc" onMouseDown={noBlur} onClick={paste}>
+              粘贴
+            </button>
+            <button class="acc" onMouseDown={noBlur} onClick={() => handle.current?.zoom(-1)}>
+              A−
+            </button>
+            <button class="acc" onMouseDown={noBlur} onClick={() => handle.current?.zoom(1)}>
+              A+
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -563,7 +693,75 @@ function useHosts() {
   return [hosts, load] as const;
 }
 
+interface ExistingTmux {
+  socket: string;
+  name: string;
+  cwd: string;
+  command: string;
+  agent: 'claude' | 'codex' | 'bash';
+  claudeSession?: string;
+  attached: boolean;
+  adoptedAs?: number;
+}
+
+/** Existing tmux sessions on a host that can be shown in tmux-web as they are. */
+function AdoptList({ hostId, onAdopted }: { hostId: number; onAdopted: (id: number) => void }) {
+  const [list, setList] = useState<ExistingTmux[] | null>(null);
+  const [busy, setBusy] = useState('');
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    setList(null);
+    api<ExistingTmux[]>('GET', `/_tw/api/hosts/${hostId}/tmux`).then(setList, (e) => {
+      setList([]);
+      setErr(e.message);
+    });
+  }, [hostId]);
+  const adopt = async (t: ExistingTmux) => {
+    setBusy(t.name);
+    setErr('');
+    try {
+      const { id } = await api<{ id: number }>('POST', `/_tw/api/hosts/${hostId}/adopt`, { name: t.name, socket: t.socket });
+      onAdopted(id);
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy('');
+    }
+  };
+  return (
+    <div class="form">
+      <p class="dim small">直接接管主机上已有的 tmux 会话：里面的程序不会重启，你在自己终端里照常 attach，网页上同时可见。在网页里删除只会停止接管，不会关闭它。</p>
+      {list === null && <p class="dim small">读取中…</p>}
+      {list?.length === 0 && !err && <p class="dim small">这台主机上没有 tmux 会话</p>}
+      {err && <p class="error small">{err}</p>}
+      <div class="table">
+        {list?.map((t) => (
+          <div class="user-row" key={t.name}>
+            <div>
+              <b>{t.name}</b> <span class="tag">{t.claudeSession ? 'Claude' : t.command}</span>
+              {t.attached && <span class="tag">已在别处打开</span>}
+              <div class="dim small">{t.cwd}</div>
+            </div>
+            <div class="row-actions">
+              {t.adoptedAs ? (
+                <button type="button" onClick={() => onAdopted(t.adoptedAs!)}>
+                  已导入，打开
+                </button>
+              ) : (
+                <button type="button" class="primary" disabled={!!busy} onClick={() => adopt(t)}>
+                  {busy === t.name ? '导入中…' : '导入'}
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => void; onCreated: (id: number) => void }) {
+  const [mode, setMode] = useState<'new' | 'adopt'>('new');
   const [hosts] = useHosts();
   const [hostId, setHostId] = useState<number | null>(null);
   const [dirs, setDirs] = useState<string[]>([]);
@@ -600,15 +798,38 @@ function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => void; o
   };
   return (
     <Modal title="新建会话" onClose={onClose}>
-      <form onSubmit={submit} class="form">
-        <div class="seg">
-          {(['claude', 'codex', 'bash'] as const).map((a, i) => (
-            <label key={a}>
-              <input type="radio" name="agent" value={a} defaultChecked={i === 0} />
-              <span>{AGENT_LABEL[a]}</span>
-            </label>
-          ))}
-        </div>
+      <div class="tabs mode-tabs">
+        <button class={mode === 'new' ? 'on' : ''} onClick={() => setMode('new')}>
+          新建
+        </button>
+        <button class={mode === 'adopt' ? 'on' : ''} onClick={() => setMode('adopt')}>
+          导入已有 tmux
+        </button>
+      </div>
+      {mode === 'adopt' && hosts && hosts.length > 1 && (
+        <label class="form">
+          主机
+          <select value={String(hostId ?? '')} onChange={(e) => setHostId(Number((e.target as HTMLSelectElement).value))}>
+            {hosts.map((h) => (
+              <option key={h.id} value={h.id}>
+                {h.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {mode === 'adopt' && hostId !== null && <AdoptList hostId={hostId} onAdopted={onCreated} />}
+      <form onSubmit={submit} class="form" style={mode === 'adopt' ? 'display:none' : ''}>
+        <label>
+          类型
+          <select name="agent" defaultValue="claude">
+            {(Object.keys(AGENT_LABEL) as (keyof typeof AGENT_LABEL)[]).map((a) => (
+              <option key={a} value={a}>
+                {AGENT_LABEL[a]}
+              </option>
+            ))}
+          </select>
+        </label>
         {hosts && hosts.length > 1 && (
           <label>
             主机
@@ -665,7 +886,7 @@ function SessionSettings({ me, session, onClose }: { me: Me; session: SessionInf
     }
   };
   const restart = async () => {
-    if (!confirm('重启会话？正在运行的任务会被中断，对话会自动恢复。')) return;
+    if (!confirm(session.adopted ? `重启会关闭你原来的 tmux 会话「${session.tmux}」，然后在 tmux-web 里恢复对话。继续？` : '重启会话？正在运行的任务会被中断，对话会自动恢复。')) return;
     try {
       await api('POST', `/_tw/api/sessions/${session.id}/restart`);
       onClose();
@@ -674,7 +895,7 @@ function SessionSettings({ me, session, onClose }: { me: Me; session: SessionInf
     }
   };
   const remove = async () => {
-    if (!confirm(`删除会话「${session.name}」？tmux 里的进程会被结束（agent 的对话记录文件会保留）。`)) return;
+    if (!confirm(session.adopted ? `停止接管「${session.name}」？你原来的 tmux 会话不受影响。` : `删除会话「${session.name}」？tmux 里的进程会被结束（agent 的对话记录文件会保留）。`)) return;
     try {
       await api('DELETE', `/_tw/api/sessions/${session.id}`);
       location.hash = '';
@@ -689,6 +910,7 @@ function SessionSettings({ me, session, onClose }: { me: Me; session: SessionInf
         <p class="dim small">
           {AGENT_LABEL[session.agent]} · {session.host}:{session.cwd} · 创建者 {session.owner}
         </p>
+        {session.adopted && <p class="small">接管自你的 tmux 会话 <code>{session.tmux}</code>。删除只是停止接管；「重启」会关掉原会话，并在 tmux-web 里恢复对话。</p>}
         {owner && (
           <>
             <label>
@@ -708,7 +930,7 @@ function SessionSettings({ me, session, onClose }: { me: Me; session: SessionInf
           )}
           {owner && (
             <button type="button" class="danger" onClick={remove}>
-              删除
+              {session.adopted ? '停止接管' : '删除'}
             </button>
           )}
         </div>
@@ -1115,7 +1337,13 @@ function PreviewView({ session }: { session: SessionInfo }) {
 
 type Tab = 'chat' | 'term' | 'preview';
 
-function SessionPane({ me, session, onMenu }: { me: Me; session: SessionInfo; onMenu: () => void }) {
+const VIEWS: [Tab, string, () => any][] = [
+  ['chat', '对话', Icon.chat],
+  ['term', '终端', Icon.term],
+  ['preview', '预览', Icon.globe],
+];
+
+function SessionPane({ me, session, narrow, onBack }: { me: Me; session: SessionInfo; narrow: boolean; onBack: () => void }) {
   const tabKey = `tw:tab:${session.id}`;
   const initialTab = (): Tab => (store.get(tabKey) as Tab) || (session.agent === 'bash' ? 'term' : 'chat');
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -1127,29 +1355,38 @@ function SessionPane({ me, session, onMenu }: { me: Me; session: SessionInfo; on
   };
   return (
     <section class="pane">
-      <header class="pane-head">
-        <button class="ghost menu-btn" onClick={onMenu} aria-label="会话列表">
-          ☰
-        </button>
+      <header class={`pane-head ${tab === 'term' && narrow ? 'dark' : ''}`}>
+        {narrow && (
+          <button class="icon-btn back" onClick={onBack} aria-label="返回">
+            <Icon.back />
+          </button>
+        )}
         <div class="title">
           <span class="t-name">{session.name}</span>
           <span class="t-sub">
-            <span class={`dot ${session.status}`} /> {STATUS_LABEL[session.status]} · {session.host}:{session.cwd}
+            <span class={`dot ${session.status}`} /> {STATUS_LABEL[session.status]}
+            {narrow ? '' : ` · ${session.host}:${session.cwd}`}
           </span>
         </div>
-        <div class="tabs">
-          <button class={tab === 'chat' ? 'on' : ''} onClick={() => pick('chat')}>
-            对话
-          </button>
-          <button class={tab === 'term' ? 'on' : ''} onClick={() => pick('term')}>
-            终端
-          </button>
-          <button class={tab === 'preview' ? 'on' : ''} onClick={() => pick('preview')}>
-            预览
-          </button>
-        </div>
-        <button class="ghost" onClick={() => setSettings(true)} aria-label="设置">
-          ⋯
+        {narrow ? (
+          <div class="view-switch">
+            {VIEWS.map(([t, label, I]) => (
+              <button key={t} class={`icon-btn ${tab === t ? 'on' : ''}`} aria-label={label} onClick={() => pick(t)}>
+                <I />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div class="tabs">
+            {VIEWS.map(([t, label]) => (
+              <button key={t} class={tab === t ? 'on' : ''} onClick={() => pick(t)}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        <button class="icon-btn" onClick={() => setSettings(true)} aria-label="设置">
+          <Icon.more />
         </button>
       </header>
       {tab === 'chat' && <ChatView key={session.id} session={session} />}
@@ -1160,11 +1397,79 @@ function SessionPane({ me, session, onMenu }: { me: Me; session: SessionInfo; on
   );
 }
 
+/** Shorten a path for small screens: the last two segments. */
+const shortPath = (p: string) => {
+  const parts = p.split('/').filter(Boolean);
+  return parts.length > 2 ? '…/' + parts.slice(-2).join('/') : p;
+};
+
+/** Phone home screen: session cards, a floating + button, account menu. */
+function MobileHome(props: { me: Me; sessions: SessionInfo[] | null; hostBanner: boolean; onPick: (id: number) => void; onNew: () => void; onMenu: () => void; onAdmin: () => void }) {
+  const { sessions } = props;
+  const multiHost = new Set((sessions || []).map((s) => s.hostId)).size > 1;
+  // sessions waiting for a decision first, then the busy ones
+  const order: Record<string, number> = { waiting: 0, busy: 1 };
+  const sorted = [...(sessions || [])].sort((a, b) => (order[a.status] ?? 2) - (order[b.status] ?? 2));
+  return (
+    <section class="m-home">
+      <header class="m-head">
+        <h1>会话</h1>
+        <button class="icon-btn" onClick={props.onMenu} aria-label="我的">
+          <Icon.user />
+        </button>
+      </header>
+      {props.hostBanner && (
+        <button class="host-banner" onClick={props.onAdmin}>
+          有主机连不上，点此查看
+        </button>
+      )}
+      <div class="m-list">
+        {sessions === null && <p class="dim pad">加载中…</p>}
+        {sessions?.length === 0 && <p class="dim pad">还没有会话，点右下角 ＋ 新建，或导入已有的 tmux 会话。</p>}
+        {sorted.map((s) => (
+          <button key={s.id} class={`m-card ${s.status}`} onClick={() => props.onPick(s.id)}>
+            <span class={`m-badge ${s.agent}`}>{AGENT_LABEL[s.agent].slice(0, 1)}</span>
+            <span class="m-main">
+              <span class="m-name">{s.name}</span>
+              <span class="m-sub">
+                {multiHost ? `${s.host} · ` : ''}
+                {shortPath(s.cwd)}
+                {s.owner !== props.me.username ? ` · ${s.owner}` : ''}
+              </span>
+            </span>
+            <span class={`m-status ${s.status}`}>
+              <span class={`dot ${s.status}`} />
+              {STATUS_LABEL[s.status]}
+            </span>
+          </button>
+        ))}
+      </div>
+      <button class="fab" onClick={props.onNew} aria-label="新建会话">
+        <Icon.plus />
+      </button>
+    </section>
+  );
+}
+
+function MenuSheet({ me, onClose, onAdmin, onPassword, onLogout }: { me: Me; onClose: () => void; onAdmin: () => void; onPassword: () => void; onLogout: () => void }) {
+  return (
+    <Modal title={me.username} onClose={onClose}>
+      <div class="sheet-list">
+        {me.role === 'admin' && <button onClick={onAdmin}>主机、账号与分组</button>}
+        <button onClick={onPassword}>修改密码</button>
+        <button class="danger" onClick={onLogout}>
+          退出登录
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
+  const narrow = useNarrow();
   const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
   const [current, setCurrent] = useHashSession();
-  const [modal, setModal] = useState<'new' | 'admin' | 'password' | null>(null);
-  const [drawer, setDrawer] = useState(false);
+  const [modal, setModal] = useState<'new' | 'admin' | 'password' | 'menu' | null>(null);
   const [hostBanner, setHostBanner] = useState(false);
   useEffect(() => {
     if (me.role !== 'admin' || modal) return;
@@ -1186,10 +1491,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   );
 
   const session = sessions?.find((s) => s.id === current) ?? null;
-  const pick = (id: number) => {
-    setCurrent(id);
-    setDrawer(false);
-  };
+  const pick = (id: number) => setCurrent(id);
   const logout = async () => {
     await api('POST', '/_tw/api/logout').catch(() => {});
     onLogout();
@@ -1200,26 +1502,36 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   }, [session?.name, session?.status]);
 
   return (
-    <div class={`app ${drawer || !session ? 'drawer-open' : ''}`}>
-      <Sidebar
-        me={me}
-        hostBanner={hostBanner}
-        sessions={sessions || []}
-        current={current}
-        onPick={pick}
-        onNew={() => setModal('new')}
-        onAdmin={() => setModal('admin')}
-        onPassword={() => setModal('password')}
-        onLogout={logout}
-      />
-      <div class="scrim" onClick={() => setDrawer(false)} />
-      {session ? (
-        <SessionPane me={me} session={session} onMenu={() => setDrawer(true)} />
+    <div class="app">
+      {narrow ? (
+        session ? (
+          <SessionPane me={me} session={session} narrow onBack={() => setCurrent(null)} />
+        ) : (
+          <MobileHome me={me} sessions={sessions} hostBanner={hostBanner} onPick={pick} onNew={() => setModal('new')} onMenu={() => setModal('menu')} onAdmin={() => setModal('admin')} />
+        )
       ) : (
-        <section class="pane placeholder">
-          <p class="dim">{sessions === null ? '加载中…' : '从左侧选择一个会话，或新建一个。'}</p>
-        </section>
+        <>
+          <Sidebar
+            me={me}
+            hostBanner={hostBanner}
+            sessions={sessions || []}
+            current={current}
+            onPick={pick}
+            onNew={() => setModal('new')}
+            onAdmin={() => setModal('admin')}
+            onPassword={() => setModal('password')}
+            onLogout={logout}
+          />
+          {session ? (
+            <SessionPane me={me} session={session} narrow={false} onBack={() => setCurrent(null)} />
+          ) : (
+            <section class="pane placeholder">
+              <p class="dim">{sessions === null ? '加载中…' : '从左侧选择一个会话，或新建一个。'}</p>
+            </section>
+          )}
+        </>
       )}
+      {modal === 'menu' && <MenuSheet me={me} onClose={() => setModal(null)} onAdmin={() => setModal('admin')} onPassword={() => setModal('password')} onLogout={logout} />}
       {modal === 'new' && (
         <NewSession
           me={me}

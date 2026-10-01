@@ -1,0 +1,20 @@
+[Unit]
+Description=tmux-web (web UI for agent sessions in tmux)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tmux-web
+Environment=PORT=8080
+Environment=HOST=0.0.0.0
+Environment=DATA_DIR=%h/tmux-web/data
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node %h/tmux-web/dist/server.js
+Restart=always
+RestartSec=3
+# Only stop the web server itself: tmux servers it may have started (and the agents in them)
+# must survive restarts and upgrades.
+KillMode=process
+
+[Install]
+WantedBy=default.target
