@@ -1,0 +1,20 @@
+services:
+  tmux-web:
+    build: .
+    image: tmux-web:latest
+    container_name: tmux-web
+    restart: unless-stopped
+    # Host networking: the container reaches this machine's sshd at 127.0.0.1, no firewall rules
+    # needed. The web UI listens on PORT directly on the host.
+    network_mode: host
+    environment:
+      PORT: 8080
+      ADMIN_USER: admin
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      # The account on this machine that sessions run as (via SSH to 127.0.0.1).
+      HOST_USER: ${HOST_USER:?set HOST_USER in .env}
+      # SSH_PORT: 22
+      # Set to "true" when served over HTTPS behind a proxy that doesn't send X-Forwarded-Proto
+      COOKIE_SECURE: auto
+    volumes:
+      - ./data:/data   # accounts, sessions, hosts (SQLite) and the SSH key

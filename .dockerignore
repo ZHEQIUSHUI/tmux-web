@@ -1,0 +1,7 @@
+node_modules
+dist
+.dev
+data
+workspace
+.env
+*.log
