@@ -179,9 +179,9 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             unread={unread}
           />
           {session && (
-            <div class="m-push">
+            <SwipeBack onBack={back}>
               <SessionPane me={me} session={session} folders={folders} narrow onBack={back} />
-            </div>
+            </SwipeBack>
           )}
         </>
       ) : (
@@ -235,6 +235,87 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
       {modal === 'admin' && <AdminModal me={me} onClose={() => setModal(null)} />}
       {modal === 'password' && <PasswordModal onClose={() => setModal(null)} />}
       {modal === 'tokens' && <TokensModal onClose={() => setModal(null)} />}
+    </div>
+  );
+}
+
+/** Something under the finger that scrolls sideways itself (wide table, long code line). */
+function scrollsSideways(el: Element | null, stop: Element): boolean {
+  for (; el && el !== stop; el = el.parentElement) {
+    if (el.scrollWidth > el.clientWidth + 2 && /(auto|scroll)/.test(getComputedStyle(el).overflowX)) return true;
+  }
+  return false;
+}
+
+/**
+ * The pushed session view, which can be swiped right to go back (like iOS): it follows the
+ * finger with the list showing underneath; released far or fast enough, it slides away.
+ * In the terminal (which uses touch itself) only a swipe from the left edge counts.
+ */
+function SwipeBack({ onBack, children }: { onBack: () => void; children: any }) {
+  const el = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const node = el.current!;
+    let start: { x: number; y: number; t: number } | null = null;
+    let dragging = false;
+    let dx = 0;
+    const EDGE = 28;
+    const set = (x: number, animate: boolean) => {
+      node.style.transition = animate ? 'transform 0.2s ease-out' : 'none';
+      node.style.transform = x ? `translateX(${x}px)` : '';
+    };
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return (start = null);
+      const t = e.touches[0];
+      const target = e.target as Element;
+      const inTerminal = !!target.closest?.('.term-wrap');
+      if (inTerminal && t.clientX > EDGE) return (start = null);
+      if (!inTerminal && scrollsSideways(target, node)) return (start = null);
+      // inputs keep their own gestures (moving the caret, selecting)
+      if (target.closest?.('textarea, input, .acc-bar, .keys, .slash-list')) return (start = null);
+      start = { x: t.clientX, y: t.clientY, t: Date.now() };
+      dragging = false;
+      dx = 0;
+    };
+    const onMove = (e: TouchEvent) => {
+      if (!start) return;
+      const t = e.touches[0];
+      const mx = t.clientX - start.x;
+      const my = t.clientY - start.y;
+      if (!dragging) {
+        // decide once: clearly sideways to the right, otherwise leave it to scrolling
+        if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
+        if (mx > 0 && mx > Math.abs(my) * 1.5) dragging = true;
+        else return (start = null);
+      }
+      e.preventDefault();
+      dx = Math.max(0, mx);
+      set(dx, false);
+    };
+    const onEnd = () => {
+      if (!start || !dragging) return (start = null);
+      const speed = dx / Math.max(1, Date.now() - start.t);
+      start = null;
+      dragging = false;
+      if (dx > node.clientWidth * 0.3 || (speed > 0.5 && dx > 40)) {
+        set(node.clientWidth, true);
+        setTimeout(onBack, 180);
+      } else set(0, true);
+    };
+    node.addEventListener('touchstart', onStart, { passive: true });
+    node.addEventListener('touchmove', onMove, { passive: false });
+    node.addEventListener('touchend', onEnd);
+    node.addEventListener('touchcancel', onEnd);
+    return () => {
+      node.removeEventListener('touchstart', onStart);
+      node.removeEventListener('touchmove', onMove);
+      node.removeEventListener('touchend', onEnd);
+      node.removeEventListener('touchcancel', onEnd);
+    };
+  }, [onBack]);
+  return (
+    <div class="m-push" ref={el}>
+      {children}
     </div>
   );
 }

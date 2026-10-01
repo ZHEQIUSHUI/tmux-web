@@ -1681,6 +1681,9 @@ a.btn {
   display: flex;
   background: var(--panel);
   animation: push-in 0.22s ease-out;
+  /* the list underneath shows while it is swiped away */
+  box-shadow: -8px 0 24px rgb(0 0 0 / 0.18);
+  will-change: transform;
 }
 @keyframes push-in {
   from {
