@@ -96,6 +96,26 @@ agent 在主机上启动的网页（比如 `npm run dev` 监听在 5173），可
 
 `/data` 里保存 SQLite 数据库（账号、分组、主机、会话）和 SSH 私钥。SSH 私钥能登录你的主机，请保护好这个目录。如果想限制这把钥匙只能从本机使用，可以在 `authorized_keys` 里对应那一行前面加上 `from="127.0.0.1"`。
 
+## 代码结构
+
+```
+src/server/          Node 服务（esbuild 打包成 dist/server.js）
+  index.ts           HTTP 路由、SSE、WebSocket、启动流程
+  sessions.ts        会话生命周期、导入 tmux、重启 Claude、活动时间、历史会话
+  backend/tmux.ts    tmux 后端（control mode）；backend/types.ts 是可替换的接口
+  host.ts            本机 / SSH 执行、文件读取、端口转发
+  transcript.ts      解析 Claude Code / Codex 的 JSONL 对话记录（分页、跟随、状态）
+  screen.ts          服务端终端镜像：运行状态、实时画面、权限模式、更新提示
+  notify.ts          通知事件；proxy.ts 预览反向代理；auth.ts 登录与 API 令牌
+src/web/             Preact 前端
+  lib.ts             工具、主题、数据流（liveStream）    ui.tsx      图标、弹窗
+  chat.tsx           对话视图、输入框、Claude 状态栏      lists.tsx   侧边栏、手机首页、文件夹、提醒
+  dialogs.tsx        新建会话、设置、账号、令牌等对话框    shell.tsx   整体布局与导航
+  terminal-view.tsx  终端标签（xterm.js 按需加载）        preview.tsx 预览标签
+test/                解析器、分页、屏幕识别等测试（npm test）
+docs/API.md          给 App / 脚本用的接口说明
+```
+
 ## 本地开发
 
 ```bash
