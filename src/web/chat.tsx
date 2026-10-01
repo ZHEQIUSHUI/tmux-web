@@ -300,14 +300,62 @@ export interface ChatCache {
   /** null = was pinned to the bottom */
   scrollTop: number | null;
   claude: ClaudeState | null;
+  /** the session's activity time when this was taken: unchanged activity = still current */
+  activityAt: number;
 }
 export const chatCache = new Map<number, ChatCache>();
 export const CACHE_FRESH_MS = 30 * 60 * 1000;
 
+/** A cached view can be shown as is: recent, or nothing happened in the session since. */
+export function cacheUsable(c: ChatCache | undefined, activityAt: number): c is ChatCache {
+  return !!c && (Date.now() - c.at < CACHE_FRESH_MS || c.activityAt >= activityAt);
+}
+
+const prefetching = new Map<number, Promise<void>>();
+/**
+ * Load a session's latest messages ahead of opening it (the list does this in the background
+ * for every session, and again on touch-down), so the chat shows at once instead of "加载中…".
+ * Sessions that did nothing since their cached page are skipped.
+ */
+export function prefetchChat(s: SessionInfo): Promise<void> {
+  if (s.agent === 'bash') return Promise.resolve();
+  const c = chatCache.get(s.id);
+  if (c && c.activityAt >= s.activityAt) return Promise.resolve();
+  let p = prefetching.get(s.id);
+  if (!p) {
+    p = api<Page>('GET', `/_tw/api/sessions/${s.id}/messages?limit=20`)
+      .then((pg) => {
+        const now = chatCache.get(s.id);
+        if (now && now.activityAt >= s.activityAt) return; // the chat view itself got there first
+        chatCache.set(s.id, { items: pg.items, page: { start: pg.start, hasMore: pg.hasMore, pending: !!pg.pending }, end: pg.end, at: Date.now(), scrollTop: null, claude: now?.claude ?? null, activityAt: s.activityAt });
+      })
+      .catch(() => {})
+      .finally(() => prefetching.delete(s.id));
+    prefetching.set(s.id, p);
+  }
+  return p;
+}
+
+/** Prefetch a list of sessions one after another, in the background. Returns a cancel. */
+export function prefetchAll(list: SessionInfo[]): () => void {
+  let cancelled = false;
+  let i = 0;
+  const next = (): void => {
+    if (cancelled) return;
+    const s = list[i++];
+    if (s) void prefetchChat(s).then(() => setTimeout(next, 150));
+  };
+  const t = setTimeout(next, 500);
+  return () => {
+    cancelled = true;
+    clearTimeout(t);
+  };
+}
+
 export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; onOpenTerminal: () => void }) {
   const cached = useMemo(() => {
     const c = chatCache.get(session.id);
-    return c && Date.now() - c.at < CACHE_FRESH_MS ? c : undefined;
+    return cacheUsable(c, session.activityAt) ? c : undefined;
   }, [session.id]);
   const [items, setItems] = useState<ChatItem[]>(cached?.items ?? []);
   const [claude, setClaude] = useState<ClaudeState | null>(cached?.claude ?? null);
@@ -394,7 +442,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
   // remember the view for next time
   useEffect(() => {
     if (!page) return;
-    chatCache.set(id, { items, page, end: endRef.current, at: Date.now(), scrollTop: chatCache.get(id)?.scrollTop ?? null, claude });
+    chatCache.set(id, { items, page, end: endRef.current, at: Date.now(), scrollTop: chatCache.get(id)?.scrollTop ?? null, claude, activityAt: Math.max(session.activityAt, Date.now()) });
     if (chatCache.size > 20) chatCache.delete(chatCache.keys().next().value!);
   }, [items, page, claude]);
   useEffect(

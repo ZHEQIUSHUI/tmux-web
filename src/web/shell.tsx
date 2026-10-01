@@ -146,10 +146,18 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
     setCurrent(id);
   };
   const back = () => {
-    if (fromList.current) {
-      fromList.current = false;
-      history.back();
-    } else setCurrent(null);
+    const go = () => {
+      if (fromList.current) {
+        fromList.current = false;
+        history.back();
+      } else setCurrent(null);
+    };
+    // phones: slide the session view out first, like the swipe does
+    const pushed = document.querySelector<HTMLElement>('.m-push');
+    if (!pushed || matchMedia('(prefers-reduced-motion: reduce)').matches) return go();
+    pushed.style.transition = 'transform 0.18s ease-in';
+    pushed.style.transform = `translateX(${pushed.clientWidth}px)`;
+    setTimeout(go, 170);
   };
   const logout = async () => {
     await api('POST', '/_tw/api/logout').catch(() => {});

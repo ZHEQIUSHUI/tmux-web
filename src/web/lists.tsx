@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api, type Folder, type Notice, type Me, type SessionInfo, type Status } from './api';
 import { AGENT_LABEL, STATUS_LABEL, ago, coarsePointer, shortPath, store } from './lib';
+import { prefetchAll, prefetchChat } from './chat';
 import { Chevron, Icon, Modal, ThemeCycle, ThemeSwitch } from './ui';
 
 // ---------------- shell ----------------
@@ -189,6 +190,8 @@ export function Sidebar(props: {
     <button
       key={s.id}
       class={`session-item ${s.id === current ? 'active' : ''}`}
+      onPointerDown={() => prefetchChat(s)}
+      onMouseEnter={() => prefetchChat(s)}
       onClick={() => props.onPick(s.id)}
       draggable={!coarsePointer && props.folders.length > 0}
       onDragStart={(e) => e.dataTransfer?.setData('text/tw-session', String(s.id))}
@@ -296,8 +299,16 @@ export function MobileHome(props: {
   const summary = sessions
     ? [`${sessions.length} 个会话`, count('busy') && `${count('busy')} 个运行中`, count('waiting') && `${count('waiting')} 个等待确认`].filter(Boolean).join(' · ')
     : '';
+  // warm up every session's latest messages (unread first), so opening one is instant;
+  // reruns when activity changes, and only sessions that did something get fetched again
+  const activityKey = (sessions || []).map((x) => x.activityAt).join();
+  useEffect(() => {
+    if (!sessions) return;
+    const sorted = sortSessions(sessions);
+    return prefetchAll([...sorted.filter((x) => props.unread.has(x.id)), ...sorted.filter((x) => !props.unread.has(x.id))]);
+  }, [activityKey]);
   const row = (s: SessionInfo) => (
-    <button key={s.id} class={`m-row ${s.status}`} onClick={() => props.onPick(s.id)}>
+    <button key={s.id} class={`m-row ${s.status}`} onPointerDown={() => prefetchChat(s)} onClick={() => props.onPick(s.id)}>
       <span class={`m-badge ${s.agent}`}>
         {AGENT_LABEL[s.agent].slice(0, 1)}
         <span class={`m-dot dot ${s.status}`} />
