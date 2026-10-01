@@ -268,6 +268,12 @@ export function ClaudePanel(props: { st: ClaudeState | null; canControl: boolean
   );
 }
 
+/** A numbered menu on the agent's screen (see server/screen.ts findChoices). */
+export interface Choices {
+  question: string;
+  options: { n: number; label: string; selected: boolean }[];
+}
+
 /** Restart only the claude process; asks first if it is in the middle of something. */
 export async function restartAgent(session: SessionInfo, status: Status): Promise<boolean> {
   const busy = status === 'busy' || status === 'waiting';
@@ -366,7 +372,12 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
   const [pending, setPending] = useState<Pending[]>([]);
   const [page, setPage] = useState<{ start: number; hasMore: boolean; pending: boolean } | null>(cached?.page ?? null);
   const endRef = useRef(cached?.end ?? 0);
-  const [state, setState] = useState<{ status: Status; preview: string; error?: string }>({ status: session.status, preview: '' });
+  const [state, setState] = useState<{ status: Status; preview: string; error?: string; choices?: Choices | null }>({ status: session.status, preview: '' });
+  // the live screen grows at the bottom: keep its end in view
+  const livePre = useRef<HTMLPreElement>(null);
+  useLayoutEffect(() => {
+    if (livePre.current) livePre.current.scrollTop = livePre.current.scrollHeight;
+  }, [state.preview]);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState('');
   const [online, setOnline] = useState(true);
@@ -404,7 +415,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
               }
               setPage((pg) => (pg && pg.pending ? { ...pg, pending: false } : pg));
             },
-            state: (st: { status: Status; preview: string; error?: string; mode?: string; update?: boolean }) => {
+            state: (st: { status: Status; preview: string; error?: string; mode?: string; update?: boolean; choices?: Choices | null }) => {
               setState(st);
               setUpdate(!!st.update);
               if (st.mode !== undefined) setClaude((c) => (c ? { ...c, mode: st.mode } : c));
@@ -556,14 +567,37 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
               </div>
             </div>
           ))}
-          {live && (
-            <div class={`live ${state.status}`}>
+          {live && state.status === 'waiting' && state.choices ? (
+            // a menu on screen: show it as buttons; pressing the number picks it, like in the TUI
+            <div class="live waiting">
               <div class="live-head">
-                <span class={`dot ${state.status}`} />
-                {state.status === 'waiting' ? '等待你确认（可用下方快捷键，或切到终端）' : '实时画面'}
+                <span class="dot waiting" />
+                等待你选择
               </div>
-              <pre>{state.preview}</pre>
+              {state.choices.question && <div class="choice-q">{state.choices.question}</div>}
+              <div class="choices">
+                {state.choices.options.map((o) => (
+                  <button key={o.n} class={o.selected ? 'sel' : ''} disabled={session.access !== 'control'} onClick={() => sendKeys([String(o.n)])}>
+                    <b>{o.n}</b>
+                    <span>{o.label}</span>
+                  </button>
+                ))}
+              </div>
+              <details class="raw">
+                <summary>查看原始画面</summary>
+                <pre>{state.preview}</pre>
+              </details>
             </div>
+          ) : (
+            live && (
+              <div class={`live ${state.status}`}>
+                <div class="live-head">
+                  <span class={`dot ${state.status}`} />
+                  {state.status === 'waiting' ? '等待你确认（可用下方快捷键，或切到终端）' : '实时画面'}
+                </div>
+                <pre ref={livePre}>{state.preview}</pre>
+              </div>
+            )
           )}
         </div>
       </div>
@@ -698,7 +732,8 @@ export function Composer(props: {
 
   const key = (keys: string[]) => api('POST', `/_tw/api/sessions/${sessionId}/keys`, { keys }).catch((e) => setErr(e.message));
   // interrupt what the agent is doing: Esc for Claude Code / Codex, Ctrl+C in a shell
-  const running = status === 'busy' || status === 'waiting';
+  // only while working: while it waits for a choice, Esc would cancel the question instead
+  const running = status === 'busy';
   const stop = () => key(props.agent === 'bash' ? ['C-c'] : ['Escape']);
 
   const onKeyDown = (e: KeyboardEvent) => {

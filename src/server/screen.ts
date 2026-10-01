@@ -20,6 +20,43 @@ const MODES: [RegExp, string][] = [
   [/auto mode on/i, 'auto'],
 ];
 const BACKGROUND = /\d+\s+(?:shells?|monitors?|bash(?:es)?|background tasks?)(?:,\s*\d+\s+(?:shells?|monitors?|bash(?:es)?|background tasks?))*/i;
+/** A numbered menu the agent shows (permission prompt, AskUserQuestion, submit/cancel...). */
+export interface Choices {
+  question: string;
+  options: { n: number; label: string; selected: boolean }[];
+}
+
+const OPTION = /^\s*([❯›>]\s*)?(\d{1,2})[.)]\s+(.*\S)\s*$/;
+
+/**
+ * Read the menu at the bottom of the screen: the numbered options (the highlighted one carries
+ * ❯) and the question line above them. Description lines under an option are indented; footer
+ * hints below the menu are skipped. Only a run 1..k that contains the highlighted option counts,
+ * so numbered lists in the agent's text above are never mistaken for a menu.
+ */
+export function findChoices(lines: string[]): Choices | null {
+  const options: Choices['options'] = [];
+  let question = '';
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 40); i--) {
+    const l = lines[i].replace(/^\s*│\s?/, '').replace(/\s?│\s*$/, '');
+    const m = OPTION.exec(l);
+    if (m) {
+      options.unshift({ n: Number(m[2]), label: m[3].trim(), selected: !!m[1] });
+      continue;
+    }
+    if (!options.length) continue; // hints below the menu
+    if (!l.trim() || SEPARATOR.test(l) || /^\s{3,}\S/.test(l)) continue; // option descriptions, rules
+    question = l.trim();
+    break;
+  }
+  // the last run starting at 1
+  const start = options.map((o) => o.n).lastIndexOf(1);
+  const run = start === -1 ? [] : options.slice(start);
+  const consecutive = run.every((o, i) => o.n === i + 1);
+  if (!run.length || !consecutive || !run.some((o) => o.selected)) return null;
+  return { question, options: run };
+}
+
 const SEPARATOR = /^\s*[─━═╌┄\-]{10,}\s*$/;
 const BOX_EDGE = /^\s*[╭╰┌└][─━]+[╮╯┐┘]\s*$/;
 const PROMPT_LINE = /^\s*[│|]?\s*[❯›>](\s|$)/;
@@ -104,7 +141,7 @@ export class Screen {
   }
 
   /** Classify the agent's state and pull out the text it is producing right now. */
-  analyze(): { status: AgentStatus; preview: string; mode: string; update: boolean; background: string } {
+  analyze(): { status: AgentStatus; preview: string; mode: string; update: boolean; background: string; choices: Choices | null } {
     const lines = this.lines().filter((l) => !NOISE.some((re) => re.test(l)));
     while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
     const text = lines.join('\n');
@@ -151,7 +188,7 @@ export class Screen {
     while (tail.length && !tail[0].trim()) tail.shift();
     // background work Claude Code is keeping alive ("1 shell, 1 monitor"); "← 1 agent" is just a hint
     const background = BACKGROUND.exec(footer)?.[0] ?? '';
-    return { status, preview: tail.join('\n'), mode, update, background };
+    return { status, preview: tail.join('\n'), mode, update, background, choices: waiting ? findChoices(lines) : null };
   }
 
   dispose() {

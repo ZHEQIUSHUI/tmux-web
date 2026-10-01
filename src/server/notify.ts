@@ -64,7 +64,11 @@ hub.on('status', (id: number, status: AgentStatus) => {
   // the first status after (re)start is not news
   if (prev === undefined || prev === 'starting') return;
   if (status === 'waiting' && prev !== 'waiting') {
-    push({ sessionId: id, kind: 'waiting', title: '需要你确认', text: getLive(id)?.preview.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 160) ?? '' });
+    // the question itself when there is a menu, else the last lines on screen
+    const live = getLive(id);
+    const c = live?.choices;
+    const text = c ? `${c.question}${c.question ? '：' : ''}${c.options.map((o) => `${o.n}. ${o.label}`).join('  ')}` : (live?.preview.split('\n').filter(Boolean).slice(-3).join(' ') ?? '');
+    push({ sessionId: id, kind: 'waiting', title: '需要你确认', text: text.slice(0, 160) });
   } else if (status === 'idle' && (prev === 'busy' || prev === 'waiting')) {
     doneTimers.set(
       id,

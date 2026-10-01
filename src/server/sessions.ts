@@ -5,7 +5,7 @@ import { db, groupIdsOf, q, type Agent, type HostRow, type SessionRow, type Shar
 import { TmuxBackend } from './backend/tmux.js';
 import type { PaneStream, PaneTarget, SessionBackend } from './backend/types.js';
 import { getHost, shq, type Host } from './host.js';
-import { Screen, type AgentStatus } from './screen.js';
+import { Screen, type AgentStatus, type Choices } from './screen.js';
 import { claudeTranscript, findCodexRollout } from './transcript.js';
 
 export const backend: SessionBackend = new TmuxBackend();
@@ -62,6 +62,8 @@ export class LiveSession extends EventEmitter {
   update = false;
   /** background work shown in Claude Code's footer, e.g. "1 shell, 1 monitor" ('' = none) */
   background = '';
+  /** the numbered menu on screen while waiting for a decision */
+  choices: Choices | null = null;
   /** when something last happened: the agent's log changed (or, for a shell, the screen did) */
   activityAt = 0;
   error = '';
@@ -218,11 +220,13 @@ export class LiveSession extends EventEmitter {
       if (!this.screen) return;
       await this.screen.flush();
       if (!this.screen) return;
-      const { status, preview, mode, update, background } = this.screen.analyze();
-      if (mode !== this.mode || update !== this.update || background !== this.background) {
+      const { status, preview, mode, update, background, choices } = this.screen.analyze();
+      const choicesKey = JSON.stringify(choices);
+      if (mode !== this.mode || update !== this.update || background !== this.background || choicesKey !== JSON.stringify(this.choices)) {
         this.mode = mode;
         this.update = update;
         this.background = background;
+        this.choices = choices;
         this.emit('state', this.stateView());
       }
       this.setStatus(status, preview);
@@ -250,7 +254,7 @@ export class LiveSession extends EventEmitter {
   }
 
   stateView() {
-    return { status: this.status, preview: this.preview, error: this.error, mode: this.mode, update: this.update, background: this.background };
+    return { status: this.status, preview: this.preview, error: this.error, mode: this.mode, update: this.update, background: this.background, choices: this.choices };
   }
 
   /**

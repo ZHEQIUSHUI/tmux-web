@@ -54,3 +54,28 @@ test('busy in a narrow window: footer has no "esc to interrupt", the spinner lin
   const done = await screen(['● all done', '✻ Crunched for 4s · done 3:23 PM', SEP, '❯ ', SEP, '  ⏵⏵ bypass permissions on']);
   assert.equal(done.analyze().status, 'idle');
 });
+
+test('choices: AskUserQuestion with descriptions and an option after a rule', async () => {
+  const s = await screen(['←  ☐ 颜色  ☐ 水果  ✔ Submit  →', '喜欢什么颜色？', '❯ 1. 红', '     红色', '  2. 蓝', '     蓝色', '  3. Type something.', SEP, '  4. Chat about this', 'Enter to select · Tab/Arrow keys to navigate · Esc to cancel']);
+  const a = s.analyze();
+  assert.equal(a.status, 'waiting');
+  assert.deepEqual(a.choices, {
+    question: '喜欢什么颜色？',
+    options: [
+      { n: 1, label: '红', selected: true },
+      { n: 2, label: '蓝', selected: false },
+      { n: 3, label: 'Type something.', selected: false },
+      { n: 4, label: 'Chat about this', selected: false },
+    ],
+  });
+});
+
+test('choices: permission prompt; numbered text above is not a menu', async () => {
+  const s = await screen(['Steps:', '1. build', '2. test', '', 'Do you want to proceed?', '❯ 1. Yes', '  2. Yes, and don\'t ask again', '  3. No', '', 'Esc to cancel']);
+  const c = s.analyze().choices!;
+  assert.equal(c.question, 'Do you want to proceed?');
+  assert.deepEqual(c.options.map((o) => o.label), ['Yes', "Yes, and don't ask again", 'No']);
+  // not waiting: no menu
+  const idle = await screen(['1. build', '2. test', SEP, '❯ ', SEP, '  ⏵⏵ auto mode on']);
+  assert.equal(idle.analyze().choices, null);
+});
