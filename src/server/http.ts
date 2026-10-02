@@ -16,8 +16,12 @@ export class HttpError extends Error {
 const acceptsGzip = (req: IncomingMessage) => /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
 
 export function sendJson(req: IncomingMessage, res: ServerResponse, status: number, body: unknown) {
-  const raw = Buffer.from(JSON.stringify(body));
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  sendBody(req, res, status, Buffer.from(JSON.stringify(body)), { 'Content-Type': 'application/json; charset=utf-8' });
+}
+
+/** Send a body, gzip-compressed when it is worth it and the client takes it. */
+export function sendBody(req: IncomingMessage, res: ServerResponse, status: number, raw: Buffer, headers: Record<string, string>) {
+  for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
   res.setHeader('Cache-Control', 'no-store');
   if (raw.length > 1024 && acceptsGzip(req)) {
     res.setHeader('Content-Encoding', 'gzip');

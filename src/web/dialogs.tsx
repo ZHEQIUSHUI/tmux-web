@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'preact/hooks';
 import { api, type Folder, type Group, type HostInfo, type Me, type SessionInfo } from './api';
-import { AGENT_LABEL, coarsePointer, relTime, shortPath, store } from './lib';
+import { AGENT_LABEL, coarsePointer, copyText, relTime, shortPath, store } from './lib';
 import { Modal } from './ui';
 import { restartAgent } from './chat';
 
@@ -449,7 +449,7 @@ export function TokensModal({ onClose }: { onClose: () => void }) {
         <div class="keybox">
           <div class="small">「{fresh.name}」的令牌，请现在复制保存：</div>
           <pre>{fresh.token}</pre>
-          <button type="button" onClick={() => navigator.clipboard?.writeText(fresh.token).catch(() => {})}>
+          <button type="button" onClick={() => copyText(fresh.token)}>
             复制
           </button>
         </div>
@@ -557,7 +557,7 @@ export function AdminModal({ me, onClose }: { me: Me; onClose: () => void }) {
       form.reset();
     });
   };
-  const copyKey = () => navigator.clipboard?.writeText(`echo '${key}' >> ~/.ssh/authorized_keys`).catch(() => {});
+  const copyKey = () => copyText(`echo '${key}' >> ~/.ssh/authorized_keys`);
   const toggleGroup = (u: Me, gid: number) =>
     run(() => api('PATCH', `/_tw/api/users/${u.id}`, { groups: u.groups.includes(gid) ? u.groups.filter((g) => g !== gid) : [...u.groups, gid] }));
   const resetPassword = (u: Me) => {

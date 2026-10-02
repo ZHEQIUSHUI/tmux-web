@@ -4,7 +4,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { config } from './config.js';
 import { db, groupIdsOf, q, type Agent, type FolderRow, type HostRow, type Role, type Share, type UserRow } from './db.js';
 import { createApiToken, clientIp, currentUser, endSession, isSecureRequest, hashPassword, loginLockedFor, recordLogin, sameOrigin, startSession, verifyLogin, verifyPassword } from './auth.js';
-import { HttpError, readJson, sendJson, serveStatic, Sse } from './http.js';
+import { HttpError, readJson, sendBody, sendJson, serveStatic, Sse } from './http.js';
 import { ensureSshKey, forgetHost, getHost, publicKey } from './host.js';
 import {
   accessOf,
@@ -27,6 +27,7 @@ import {
   type Access,
 } from './sessions.js';
 import { claudeState, followLog, readFull, readImage, readPage } from './transcript.js';
+import { changes, diff, fileSize, insideCwd, listDir, readPart, search, streamFile } from './files.js';
 import { notices, noticesFor, visible, type Notice } from './notify.js';
 import { parsePreviewPath, previewCookie, proxyHttp, proxyUpgrade, readPreviewCookie, type ProxyTarget } from './proxy.js';
 
@@ -267,6 +268,70 @@ route('GET', '/_tw/api/sessions/:id/message', async (req, res, [id], url) => {
   const file = await live.transcriptPath();
   if (!file || !live.host) throw new HttpError(404, 'no transcript');
   sendJson(req, res, 200, await readFull(row.agent, live.host, file, Number(url.searchParams.get('off'))));
+});
+
+// ---------- files tab (read-only; inside the working directory for viewers, anywhere for control) ----------
+
+function filesFor(req: IncomingMessage, id: string, p: string) {
+  const { row, live } = sessionFor(requireUser(req), id, insideCwd(p) ? 'view' : 'control');
+  if (!live.host) throw new HttpError(502, '主机不可用');
+  return { row, host: live.host };
+}
+const fileError = (e: any): never => {
+  throw new HttpError(e.code === 3 ? 404 : e.code === 5 ? 404 : 502, e.code === 3 ? '文件或目录不存在' : e.code === 5 ? '工作目录不存在' : `读取失败：${e.message}`);
+};
+
+route('GET', '/_tw/api/sessions/:id/files', async (req, res, [id], url) => {
+  const p = url.searchParams.get('path') || '';
+  const { row, host } = filesFor(req, id, p);
+  sendJson(req, res, 200, await listDir(host, row.cwd, p).catch(fileError));
+});
+
+/** Part of a file (text view loads it in pieces): raw bytes, with the file size in X-File-Size. */
+route('GET', '/_tw/api/sessions/:id/files/read', async (req, res, [id], url) => {
+  const p = url.searchParams.get('path') || '';
+  const { row, host } = filesFor(req, id, p);
+  const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
+  const length = Math.min(1 << 20, Math.max(1, Number(url.searchParams.get('length')) || 65536));
+  const { size, data } = await readPart(host, row.cwd, p, offset, length).catch(fileError);
+  sendBody(req, res, 200, data, { 'Content-Type': 'application/octet-stream', 'X-File-Size': String(size) });
+});
+
+route('GET', '/_tw/api/sessions/:id/files/download', async (req, res, [id], url) => {
+  const p = url.searchParams.get('path') || '';
+  const { row, host } = filesFor(req, id, p);
+  const size = await fileSize(host, row.cwd, p).catch(fileError);
+  const name = p.split('/').pop() || 'file';
+  res.writeHead(200, {
+    'Content-Type': 'application/octet-stream',
+    'Content-Length': size,
+    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+    'Cache-Control': 'no-store',
+  });
+  const child = streamFile(host, row.cwd, p);
+  child.stdout.pipe(res);
+  child.stderr.resume();
+  child.on('error', () => res.destroy());
+  res.on('close', () => child.kill());
+});
+
+route('GET', '/_tw/api/sessions/:id/files/search', async (req, res, [id], url) => {
+  const { row, host } = filesFor(req, id, '');
+  const q = (url.searchParams.get('q') || '').trim();
+  if (!q) return sendJson(req, res, 200, []);
+  sendJson(req, res, 200, await search(host, row.cwd, q).catch(fileError));
+});
+
+/** git status of the working directory's repository: what the agent changed. */
+route('GET', '/_tw/api/sessions/:id/files/changes', async (req, res, [id]) => {
+  const { row, host } = filesFor(req, id, '');
+  sendJson(req, res, 200, await changes(host, row.cwd).catch(fileError));
+});
+
+route('GET', '/_tw/api/sessions/:id/files/diff', async (req, res, [id], url) => {
+  const { row, host } = filesFor(req, id, '');
+  const text = await diff(host, row.cwd, url.searchParams.get('path') || '').catch(fileError);
+  sendBody(req, res, 200, Buffer.from(text), { 'Content-Type': 'text/plain; charset=utf-8' });
 });
 
 // Images in the chat: served on their own (lazily, cacheable) so message pages stay small.

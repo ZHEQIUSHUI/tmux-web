@@ -7,12 +7,14 @@ import { TerminalView } from './terminal-view';
 import { AdminModal, FolderModal, NewSession, PasswordModal, SessionSettings, TokensModal } from './dialogs';
 import { MenuSheet, MobileHome, Sidebar, Toasts, alertsEnabled, useUnread } from './lists';
 import { PreviewView } from './preview';
+import { FilesView } from './files-view';
 
-export type Tab = 'chat' | 'term' | 'preview';
+export type Tab = 'chat' | 'term' | 'files' | 'preview';
 
 export const VIEWS: [Tab, string, () => any][] = [
   ['chat', '对话', Icon.chat],
   ['term', '终端', Icon.term],
+  ['files', '文件', Icon.folder],
   ['preview', '预览', Icon.globe],
 ];
 
@@ -25,6 +27,13 @@ export function SessionPane({ me, session, folders, narrow, onBack }: { me: Me; 
   const pick = (t: Tab) => {
     setTab(t);
     store.set(tabKey, t);
+  };
+  // a path from the files tab: added to the chat's draft, then over to the chat to finish the message
+  const insert = (text: string) => {
+    const key = `tw:draft:${session.id}`;
+    const draft = store.get(key) || '';
+    store.set(key, draft + (draft && !/\s$/.test(draft) ? ' ' : '') + text + ' ');
+    pick('chat');
   };
   return (
     <section class="pane">
@@ -64,6 +73,7 @@ export function SessionPane({ me, session, folders, narrow, onBack }: { me: Me; 
       </header>
       {tab === 'chat' && <ChatView key={session.id} session={session} onOpenTerminal={() => pick('term')} />}
       {tab === 'term' && <TerminalView key={session.id} sessionId={session.id} canWrite={session.access === 'control'} />}
+      {tab === 'files' && <FilesView key={session.id} session={session} onInsert={insert} />}
       {tab === 'preview' && <PreviewView key={session.id} session={session} />}
       {settings && <SessionSettings me={me} session={session} folders={folders} onClose={() => setSettings(false)} />}
     </section>

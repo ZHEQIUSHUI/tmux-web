@@ -8,6 +8,20 @@ const safeHref = (href: string) => (/^(https?:|mailto:|#|\/)/i.test(href.trim())
 export interface ImageCtx {
   sid: number;
   off: string;
+  /** directory that relative image paths start from (a Markdown file in the files tab) */
+  base?: string;
+}
+
+/** Join a relative path onto a directory, resolving "." and "..". */
+export function joinPath(base: string, rel: string): string {
+  if (!base || rel.startsWith('/') || rel.startsWith('~')) return rel;
+  const out = base.split('/').filter(Boolean);
+  for (const seg of rel.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..' && out.length && out[out.length - 1] !== '..') out.pop();
+    else out.push(seg);
+  }
+  return out.join('/');
 }
 let ctx: ImageCtx | null = null;
 
@@ -31,6 +45,7 @@ export function imageUrl(href: string, c: ImageCtx | null = ctx): string | null 
   } catch {
     /* keep as written */
   }
+  if (c.base) path = joinPath(c.base, path);
   return IMAGE_EXT.test(path) ? `/_tw/api/sessions/${c.sid}/file-image?path=${encodeURIComponent(path)}` : null;
 }
 

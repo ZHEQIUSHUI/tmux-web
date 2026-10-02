@@ -2013,3 +2013,212 @@ a.btn {
   font-size: 12px;
   color: var(--danger, #c33);
 }
+
+/* files tab */
+.files {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+}
+.fv-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.fv-mode button {
+  min-width: 64px;
+}
+.fv-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.fv-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 4px;
+}
+.fv-find {
+  flex: 1;
+  min-width: 0;
+}
+.fv-hidden {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.fv-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 12px;
+  font-size: 13px;
+  word-break: break-all;
+}
+.fv-crumbs .link {
+  font-size: 13px;
+}
+.fv-dir-more,
+.fv-crumbs > .ghost {
+  margin-left: auto;
+}
+.fv-row {
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--line);
+}
+.fv-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 6px 10px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+}
+.fv-open:hover {
+  background: var(--code);
+}
+.fv-icon {
+  display: flex;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+.fv-icon.dir {
+  color: var(--accent);
+}
+.fv-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fv-meta {
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.fv-meta .add,
+.fv-diff .add {
+  color: var(--idle);
+}
+.fv-meta .del,
+.fv-diff .del {
+  color: var(--danger);
+}
+.fv-more {
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+.fv-st {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  font: 600 12px/20px var(--mono);
+  text-align: center;
+  color: #fff;
+  background: var(--busy);
+}
+.fv-st.st-A,
+.fv-st.st-n {
+  background: var(--idle);
+}
+.fv-st.st-D {
+  background: var(--danger);
+}
+.fv-st.st-R {
+  background: var(--accent);
+}
+.fv-file-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.fv-file-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fv-text,
+.fv-diff {
+  margin: 0;
+  padding: 10px 12px;
+  font: 12.5px/1.55 var(--mono);
+  overflow-x: auto;
+  tab-size: 4;
+}
+.fv-text.wrap {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.fv-diff div {
+  padding: 0 4px;
+  min-width: max-content;
+}
+.fv-diff .add {
+  background: color-mix(in srgb, var(--idle) 12%, transparent);
+}
+.fv-diff .del {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.fv-diff .hunk {
+  color: var(--accent);
+  margin-top: 6px;
+}
+.fv-md {
+  padding: 8px 14px 16px;
+}
+.fv-image {
+  margin: 12px;
+}
+.fv-image img {
+  max-height: none;
+}
+.fv-more-bar {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  padding: 10px;
+}
+.fv-ell {
+  display: inline-block;
+  vertical-align: bottom;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fv-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--panel);
+  font-size: 13px;
+  pointer-events: none;
+}
