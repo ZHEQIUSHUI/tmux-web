@@ -2222,3 +2222,23 @@ a.btn {
   font-size: 13px;
   pointer-events: none;
 }
+.fv-crumb-end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.fv-crumb-end .ghost.small {
+  min-width: 28px;
+  font-family: var(--mono);
+}
+.fv-crumb-end .ghost.small.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.fv-host {
+  max-width: 40%;
+}
+.side-head .icon-btn.on {
+  color: var(--accent);
+}

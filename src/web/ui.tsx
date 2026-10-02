@@ -88,6 +88,14 @@ export const Icon = {
       <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
     </svg>
   ),
+  files: () => (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M3 6a2 2 0 012-2h4l2 2h8a2 2 0 012 2v3" />
+      <path d="M3 6v12a2 2 0 002 2h7" />
+      <circle cx="17" cy="16" r="3" />
+      <path d="M19.2 18.2L21 20" />
+    </svg>
+  ),
   file: () => (
     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
       <path d="M6 3h8l4 4v14H6z" />

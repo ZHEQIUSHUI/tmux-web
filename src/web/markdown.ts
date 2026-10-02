@@ -6,7 +6,8 @@ const safeHref = (href: string) => (/^(https?:|mailto:|#|\/)/i.test(href.trim())
 
 /** Where the images of one chat item come from: its session and log line. */
 export interface ImageCtx {
-  sid: number;
+  /** route prefix: /_tw/api/sessions/<id> (or /_tw/api/hosts/<id> for files) */
+  api: string;
   off: string;
   /** directory that relative image paths start from (a Markdown file in the files tab) */
   base?: string;
@@ -21,7 +22,7 @@ export function joinPath(base: string, rel: string): string {
     if (seg === '..' && out.length && out[out.length - 1] !== '..') out.pop();
     else out.push(seg);
   }
-  return out.join('/');
+  return (base.startsWith('/') ? '/' : '') + out.join('/');
 }
 let ctx: ImageCtx | null = null;
 
@@ -35,7 +36,7 @@ export function imageUrl(href: string, c: ImageCtx | null = ctx): string | null 
   href = href.trim();
   if (!c) return null;
   const m = /^tw-img:(\d+)$/.exec(href);
-  if (m) return `/_tw/api/sessions/${c.sid}/image?off=${c.off}&n=${m[1]}`;
+  if (m) return `${c.api}/image?off=${c.off}&n=${m[1]}`;
   if (/^data:image\/(png|jpe?g|gif|webp)[;,]/i.test(href)) return href;
   if (/^(\/_tw\/|\/p\/)/.test(href)) return href;
   if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('#')) return null;
@@ -46,7 +47,7 @@ export function imageUrl(href: string, c: ImageCtx | null = ctx): string | null 
     /* keep as written */
   }
   if (c.base) path = joinPath(c.base, path);
-  return IMAGE_EXT.test(path) ? `/_tw/api/sessions/${c.sid}/file-image?path=${encodeURIComponent(path)}` : null;
+  return IMAGE_EXT.test(path) ? `${c.api}/file-image?path=${encodeURIComponent(path)}` : null;
 }
 
 export const imageHtml = (url: string, alt: string) =>

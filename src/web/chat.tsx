@@ -21,7 +21,7 @@ function Images({ list }: { list: { url: string; alt: string }[] }) {
     </div>
   );
 }
-const imageCtx = (sid: number, it: ChatItem) => ({ sid, off: it.id.split(':')[0] });
+const imageCtx = (sid: number, it: ChatItem) => ({ api: `/_tw/api/sessions/${sid}`, off: it.id.split(':')[0] });
 
 export function ToolGroup({ sid, items, onExpand }: { sid: number; items: ChatItem[]; onExpand: (it: ChatItem) => void }) {
   const last = items[items.length - 1];
@@ -62,7 +62,7 @@ export function Markdown({ sid, id, text }: { sid: number; id: string; text: str
   const key = `${sid}:${id}:${text.length}`;
   let html = mdCache.get(key);
   if (html === undefined) {
-    html = renderMarkdown(text, { sid, off: id.split(':')[0] });
+    html = renderMarkdown(text, { api: `/_tw/api/sessions/${sid}`, off: id.split(':')[0] });
     if (mdCache.size > 500) mdCache.clear();
     mdCache.set(key, html);
   }

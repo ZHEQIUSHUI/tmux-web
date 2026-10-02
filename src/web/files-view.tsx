@@ -1,11 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { api, type SessionInfo } from './api';
+import { useEffect, useMemo, useState } from 'preact/hooks';
+import { api } from './api';
 import { ago, copyText, store } from './lib';
-import { joinPath, renderMarkdown } from './markdown';
+import { renderMarkdown } from './markdown';
 import { Icon, Modal } from './ui';
 
-// Files tab: browse the session's working directory, read files, see what changed in git, and
-// hand paths to the agent. Read-only on purpose: changes go through the agent.
+// File browser: a session's working directory (files tab) or a whole host (global browser). Read
+// files, see what changed in git, hand paths to the agent. Read-only on purpose: changes go
+// through the agent.
+
+/** What the browser looks at. */
+export interface FilesTarget {
+  /** route prefix: /_tw/api/sessions/<id> or /_tw/api/hosts/<id> */
+  api: string;
+  /** remembers where you were, per target */
+  key: string;
+  /** a whole host: starts in the home directory and may go to "/" */
+  global: boolean;
+  /** how a path is written into the agent's input box; absent = no "insert" */
+  mention?: (p: string) => string;
+  onInsert?: (text: string) => void;
+  /** start a new session in this (absolute) directory */
+  onNewHere?: (dir: string) => void;
+}
 
 interface Entry {
   name: string;
@@ -31,11 +47,14 @@ interface Changes {
   cwd: string;
   files: Change[];
 }
-/** An open file, or one changed file's diff. Paths are relative to the working directory. */
-type Doc = { kind: 'file'; path: string } | { kind: 'diff'; path: string; repoPath: string; status: string };
+/**
+ * An open file, or one changed file's diff. Paths are relative to the base (working directory or
+ * home) or absolute; a diff's repoPath is relative to the repository of `dir`.
+ */
+type Doc = { kind: 'file'; path: string } | { kind: 'diff'; path: string; repoPath: string; dir: string; status: string };
 
-/** Where you were in each session's files tab, kept while the page is open. */
-const places = new Map<number, { mode: 'files' | 'changes'; dir: string; doc: Doc | null }>();
+/** Where you were in each browser, kept while the page is open. */
+const places = new Map<string, { mode: 'files' | 'changes'; dir: string; doc: Doc | null }>();
 
 const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 const MARKDOWN = /\.(md|markdown|mdx)$/i;
@@ -47,41 +66,43 @@ export function size(n: number): string {
   if (n < 1024 ** 3) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
 }
-const parent = (p: string) => p.split('/').slice(0, -1).join('/');
+/** Parent directory; keeps "/" for absolute paths. */
+const parent = (p: string) => {
+  const up = p.split('/').slice(0, -1).join('/');
+  return !up && p.startsWith('/') ? '/' : up;
+};
+const below = (dir: string, name: string) => (!dir ? name : dir.endsWith('/') ? dir + name : `${dir}/${name}`);
 const baseName = (p: string) => p.split('/').pop() || p;
 const q = (p: string) => encodeURIComponent(p);
 
-export function FilesView({ session, onInsert }: { session: SessionInfo; onInsert: (text: string) => void }) {
-  const id = session.id;
-  const saved = places.get(id);
+export function FilesView({ target }: { target: FilesTarget }) {
+  const saved = places.get(target.key);
   const [mode, setMode] = useState<'files' | 'changes'>(saved?.mode ?? 'files');
   const [dir, setDir] = useState(saved?.dir ?? '');
   const [doc, setDoc] = useState<Doc | null>(saved?.doc ?? null);
-  const [root, setRoot] = useState(''); // absolute working directory, for full paths
+  const [root, setRoot] = useState(''); // absolute base directory, for full paths
   const [actions, setActions] = useState<{ path: string; dir: boolean } | null>(null);
   const [toast, setToast] = useState('');
-  useEffect(() => void places.set(id, { mode, dir, doc }), [id, mode, dir, doc]);
+  useEffect(() => void places.set(target.key, { mode, dir, doc }), [target.key, mode, dir, doc]);
   const top = () => document.querySelector('.fv-body')?.scrollTo(0, 0);
 
   const flash = (t: string) => {
     setToast(t);
     setTimeout(() => setToast((x) => (x === t ? '' : x)), 1600);
   };
-  const full = (p: string) => (p.startsWith('/') || p.startsWith('~') ? p : root ? `${root}/${p}`.replace(/\/$/, '') : p);
-  // Claude Code reads "@path" as a file reference
-  const mention = (p: string) => (session.agent === 'claude' ? `@${p || '.'}` : p || '.');
+  const full = (p: string) => (p.startsWith('/') ? p : !root ? p || '.' : p ? `${root}/${p}` : root);
   const act = {
-    insert: (p: string) => onInsert(mention(p)),
     copy: async (text: string) => flash((await copyText(text)) ? '已复制' : '复制失败，请长按手动复制'),
     download: (p: string) => {
       const a = document.createElement('a');
-      a.href = `/_tw/api/sessions/${id}/files/download?path=${q(p)}`;
+      a.href = `${target.api}/files/download?path=${q(p)}`;
       a.download = baseName(p);
       a.click();
     },
   };
   const openDir = (p: string) => (setDir(p), setDoc(null), top());
   const openDoc = (d: Doc) => (setDoc(d), top());
+  const a = actions;
 
   return (
     <div class="files">
@@ -102,28 +123,29 @@ export function FilesView({ session, onInsert }: { session: SessionInfo; onInser
       </div>
       <div class="fv-body">
         {doc?.kind === 'file' ? (
-          <FileViewer sid={id} path={doc.path} onActions={() => setActions({ path: doc.path, dir: false })} />
+          <FileViewer api={target.api} path={doc.path} onActions={() => setActions({ path: doc.path, dir: false })} />
         ) : doc?.kind === 'diff' ? (
-          <DiffViewer sid={id} view={doc} onActions={() => setActions({ path: doc.path, dir: false })} />
+          <DiffViewer api={target.api} view={doc} onActions={() => setActions({ path: doc.path, dir: false })} />
         ) : mode === 'changes' ? (
-          <ChangeList sid={id} onRoot={setRoot} onOpen={openDoc} />
+          <ChangeList target={target} dir={dir} onOpen={openDoc} />
         ) : (
-          <DirList sid={id} path={dir} onRoot={setRoot} onDir={openDir} onFile={(p) => openDoc({ kind: 'file', path: p })} onActions={(path, d) => setActions({ path, dir: d })} />
+          <DirList target={target} path={dir} onRoot={setRoot} onDir={openDir} onFile={(p) => openDoc({ kind: 'file', path: p })} onActions={(path, d) => setActions({ path, dir: d })} />
         )}
       </div>
-      {actions && (
-        <Modal title={actions.path || '工作目录'} onClose={() => setActions(null)}>
+      {a && (
+        <Modal title={full(a.path)} onClose={() => setActions(null)}>
           <div class="sheet-list">
-            {session.access === 'control' && session.agent !== 'bash' && (
-              <button onClick={() => (setActions(null), act.insert(actions.path))}>
-                插入到输入框<span class="check dim fv-ell">{mention(actions.path)}</span>
+            {target.mention && target.onInsert && (
+              <button onClick={() => (setActions(null), target.onInsert!(target.mention!(a.path)))}>
+                插入到输入框<span class="check dim fv-ell">{target.mention(a.path)}</span>
               </button>
             )}
-            <button onClick={() => (setActions(null), act.copy(actions.path || '.'))}>复制相对路径</button>
-            <button onClick={() => (setActions(null), act.copy(full(actions.path)))}>
-              复制完整路径<span class="check dim fv-ell">{full(actions.path)}</span>
+            {!target.global && !a.path.startsWith('/') && <button onClick={() => (setActions(null), act.copy(a.path || '.'))}>复制相对路径</button>}
+            <button onClick={() => (setActions(null), act.copy(full(a.path)))}>
+              复制完整路径<span class="check dim fv-ell">{full(a.path)}</span>
             </button>
-            {!actions.dir && <button onClick={() => (setActions(null), act.download(actions.path))}>下载</button>}
+            {a.dir && target.onNewHere && <button onClick={() => (setActions(null), target.onNewHere!(full(a.path)))}>在这里新建会话</button>}
+            {!a.dir && <button onClick={() => (setActions(null), act.download(a.path))}>下载</button>}
           </div>
         </Modal>
       )}
@@ -132,60 +154,61 @@ export function FilesView({ session, onInsert }: { session: SessionInfo; onInser
   );
 }
 
-function useLoad<T>(url: string | null, deps: unknown[]): { data: T | null; error: string; reload: () => void } {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState('');
+function useLoad<T>(url: string, deps: unknown[]): { data: T | null; loaded: boolean; error: string; reload: () => void } {
+  const [state, setState] = useState<{ data: T | null; loaded: boolean; error: string }>({ data: null, loaded: false, error: '' });
   const [n, setN] = useState(0);
   useEffect(() => {
-    if (!url) return;
     let off = false;
-    setError('');
+    setState({ data: null, loaded: false, error: '' });
     api<T>('GET', url).then(
-      (d) => !off && setData(d),
-      (e) => !off && setError(e.message),
+      (data) => !off && setState({ data, loaded: true, error: '' }),
+      (e) => !off && setState({ data: null, loaded: true, error: e.message }),
     );
     return () => void (off = true);
   }, [...deps, n]);
-  return { data, error, reload: () => setN((x) => x + 1) };
+  return { ...state, reload: () => setN((x) => x + 1) };
 }
 
-function DirList(props: { sid: number; path: string; onRoot: (r: string) => void; onDir: (p: string) => void; onFile: (p: string) => void; onActions: (path: string, dir: boolean) => void }) {
-  const { sid, path, onRoot, onActions } = props;
+function DirList(props: { target: FilesTarget; path: string; onRoot: (r: string) => void; onDir: (p: string) => void; onFile: (p: string) => void; onActions: (path: string, dir: boolean) => void }) {
+  const { target, path, onRoot, onActions } = props;
   const go = (p: string, dir: boolean) => (dir ? props.onDir(p) : props.onFile(p));
   const [hidden, setHidden] = useState(store.get('tw:files:hidden') === '1');
   const [find, setFind] = useState('');
   const [found, setFound] = useState<{ path: string; dir: boolean }[] | null>(null);
-  const { data, error, reload } = useLoad<Listing>(`/_tw/api/sessions/${sid}/files?path=${q(path)}`, [sid, path]);
+  const { data, error, reload } = useLoad<Listing>(`${target.api}/files?path=${q(path)}`, [target.api, path]);
   const [rootDir, setRootDir] = useState('');
   useEffect(() => {
-    if (data && !path) {
-      setRootDir(data.dir);
-      onRoot(data.dir);
-    } else if (data && !rootDir) {
-      // opened inside a subdirectory: the root is the listed dir minus the relative part
-      const r = data.dir.endsWith('/' + path) ? data.dir.slice(0, -path.length - 1) : '';
-      if (r) (setRootDir(r), onRoot(r));
-    }
+    if (!data || path.startsWith('/')) return;
+    // the base directory: the listing of '' itself, or the listed dir minus the relative part
+    const r = !path ? data.dir : data.dir.endsWith('/' + path) ? data.dir.slice(0, -path.length - 1) : '';
+    if (r && r !== rootDir) (setRootDir(r), onRoot(r));
   }, [data]);
+  // the base directory is needed for full paths even when the tab opens deeper or elsewhere
+  useEffect(() => {
+    if (rootDir || !path) return;
+    api<Listing>('GET', `${target.api}/files?path=`).then((d) => (setRootDir(d.dir), onRoot(d.dir)), () => {});
+  }, [target.api]);
 
-  // file name search, after a pause in typing
+  // file name search below the current directory, after a pause in typing
   useEffect(() => {
     if (!find.trim()) return setFound(null);
-    const t = setTimeout(() => api<{ path: string; dir: boolean }[]>('GET', `/_tw/api/sessions/${sid}/files/search?q=${q(find.trim())}`).then(setFound, () => setFound([])), 400);
+    const t = setTimeout(() => api<{ path: string; dir: boolean }[]>('GET', `${target.api}/files/search?dir=${q(path)}&q=${q(find.trim())}`).then(setFound, () => setFound([])), 400);
     return () => clearTimeout(t);
-  }, [find, sid]);
+  }, [find, target.api, path]);
 
   const entries = useMemo(() => {
     const list = (data?.entries ?? []).filter((e) => hidden || !e.name.startsWith('.'));
-    return list.sort((a, b) => (a.type === 'd') !== (b.type === 'd') ? (a.type === 'd' ? -1 : 1) : a.name.localeCompare(b.name, 'zh'));
+    return list.sort((a, b) => ((a.type === 'd') !== (b.type === 'd') ? (a.type === 'd' ? -1 : 1) : a.name.localeCompare(b.name, 'zh')));
   }, [data, hidden]);
-  const crumbs = path ? path.split('/') : [];
-  const rootName = baseName(rootDir) || '工作目录';
+  const absolute = path.startsWith('/');
+  const crumbs = (absolute ? path.slice(1) : path).split('/').filter(Boolean);
+  const crumbPath = (i: number) => (absolute ? '/' : '') + crumbs.slice(0, i + 1).join('/');
+  const rootName = absolute ? '/' : target.global ? '~' : baseName(rootDir) || '工作目录';
 
   return (
     <>
       <div class="fv-tools">
-        <input class="fv-find" type="search" placeholder="搜索文件名" value={find} onInput={(e) => setFind((e.target as HTMLInputElement).value)} />
+        <input class="fv-find" type="search" placeholder={path ? '在当前目录搜索文件名' : '搜索文件名'} value={find} onInput={(e) => setFind((e.target as HTMLInputElement).value)} />
         <label class="fv-hidden dim small">
           <input
             type="checkbox"
@@ -209,20 +232,32 @@ function DirList(props: { sid: number; path: string; onRoot: (r: string) => void
       ) : (
         <>
           <div class="fv-crumbs">
-            <button class="link" onClick={() => props.onDir('')}>
+            <button class="link" onClick={() => props.onDir(absolute ? '/' : '')}>
               {rootName}
             </button>
             {crumbs.map((c, i) => (
               <span key={i}>
-                <span class="dim"> / </span>
-                <button class="link" onClick={() => props.onDir(crumbs.slice(0, i + 1).join('/'))}>
+                <span class="dim">{i || !absolute ? ' / ' : ''}</span>
+                <button class="link" onClick={() => props.onDir(crumbPath(i))}>
                   {c}
                 </button>
               </span>
             ))}
-            <button class="icon-btn fv-dir-more" onClick={() => onActions(path, true)} aria-label="这个目录的操作">
-              <Icon.more />
-            </button>
+            <span class="fv-crumb-end">
+              {target.global && (
+                <>
+                  <button class={`ghost small ${!absolute ? 'on' : ''}`} onClick={() => props.onDir('')} title="主目录">
+                    ~
+                  </button>
+                  <button class={`ghost small ${absolute ? 'on' : ''}`} onClick={() => props.onDir('/')} title="根目录">
+                    /
+                  </button>
+                </>
+              )}
+              <button class="icon-btn" onClick={() => onActions(path, true)} aria-label="这个目录的操作">
+                <Icon.more />
+              </button>
+            </span>
           </div>
           {error && (
             <p class="error pad">
@@ -236,7 +271,7 @@ function DirList(props: { sid: number; path: string; onRoot: (r: string) => void
           <div class="fv-list">
             {data && !entries.length && <p class="dim small pad">空目录</p>}
             {entries.map((e) => {
-              const p = path ? `${path}/${e.name}` : e.name;
+              const p = below(path, e.name);
               return (
                 <Row
                   key={e.name}
@@ -271,7 +306,7 @@ function Row({ name, dir, meta, onOpen, onActions }: { name: string; dir: boolea
   );
 }
 
-function FileViewer({ sid, path, onActions }: { sid: number; path: string; onActions: () => void }) {
+function FileViewer({ api: base, path, onActions }: { api: string; path: string; onActions: () => void }) {
   const isImage = IMAGE.test(path);
   const isMd = MARKDOWN.test(path);
   const [bytes, setBytes] = useState<Uint8Array | null>(null);
@@ -286,7 +321,7 @@ function FileViewer({ sid, path, onActions }: { sid: number; path: string; onAct
     setLoading(true);
     setError('');
     try {
-      const r = await fetch(`/_tw/api/sessions/${sid}/files/read?path=${q(path)}&offset=${offset}&length=${CHUNK}`, { credentials: 'same-origin' });
+      const r = await fetch(`${base}/files/read?path=${q(path)}&offset=${offset}&length=${CHUNK}`, { credentials: 'same-origin' });
       if (!r.ok) throw new Error((await r.json().catch(() => null))?.error || `HTTP ${r.status}`);
       const chunk = new Uint8Array(await r.arrayBuffer());
       setTotal(Number(r.headers.get('X-File-Size')) || 0);
@@ -308,12 +343,13 @@ function FileViewer({ sid, path, onActions }: { sid: number; path: string; onAct
   useEffect(() => {
     setBytes(null);
     if (!isImage) void load(0, false);
-  }, [sid, path]);
+  }, [base, path]);
 
   const binary = useMemo(() => !!bytes && bytes.subarray(0, 8000).includes(0), [bytes]);
   const text = useMemo(() => (bytes && !binary ? new TextDecoder('utf-8').decode(bytes) : ''), [bytes, binary]);
   const end = from + (bytes?.length ?? 0);
-  const html = useMemo(() => (isMd && !source && text && from === 0 ? renderMarkdown(text, { sid, off: '0', base: parent(path) }) : ''), [text, isMd, source, from]);
+  const html = useMemo(() => (isMd && !source && text && from === 0 ? renderMarkdown(text, { api: base, off: '0', base: parent(path) }) : ''), [text, isMd, source, from]);
+  const img = `${base}/file-image?path=${q(path)}`;
 
   return (
     <div class="fv-file">
@@ -342,8 +378,8 @@ function FileViewer({ sid, path, onActions }: { sid: number; path: string; onAct
       </div>
       {error && <p class="error pad">{error}</p>}
       {isImage ? (
-        <a class="md-img fv-image" href={`/_tw/api/sessions/${sid}/file-image?path=${q(path)}`} target="_blank" rel="noopener noreferrer">
-          <img src={`/_tw/api/sessions/${sid}/file-image?path=${q(path)}`} alt={path} />
+        <a class="md-img fv-image" href={img} target="_blank" rel="noopener noreferrer">
+          <img src={img} alt={path} />
         </a>
       ) : !bytes ? (
         !error && <p class="dim small pad">加载中…</p>
@@ -381,43 +417,43 @@ function FileViewer({ sid, path, onActions }: { sid: number; path: string; onAct
 const STATUS_NAME: Record<string, string> = { M: '修改', A: '新增', D: '删除', R: '重命名', C: '复制', '?': '新文件', U: '冲突' };
 const statusOf = (s: string) => (s === '??' ? '?' : s.trim()[0] || 'M');
 
-function ChangeList({ sid, onRoot, onOpen }: { sid: number; onRoot: (r: string) => void; onOpen: (d: Doc) => void }) {
-  const { data, error, reload } = useLoad<Changes | null>(`/_tw/api/sessions/${sid}/files/changes`, [sid]);
-  const [loaded, setLoaded] = useState(false);
-  useEffect(() => {
-    if (data !== null || error) setLoaded(true);
-    if (data) onRoot(data.cwd);
-  }, [data, error]);
-  // paths in git are relative to the repository root; the rest of the tab uses the working directory
+function ChangeList({ target, dir, onOpen }: { target: FilesTarget; dir: string; onOpen: (d: Doc) => void }) {
+  // a session: the working directory's repository; the global browser: the current directory's
+  const at = target.global ? dir : '';
+  const { data, loaded, error, reload } = useLoad<Changes | null>(`${target.api}/files/changes?dir=${q(at)}`, [target.api, at]);
+  const none = loaded && !error && !data; // not a git repository
+  // git paths are relative to the repository root; sessions use paths below their working directory
   const rel = (p: string) => {
     if (!data) return p;
     const abs = `${data.root}/${p}`;
-    return abs.startsWith(data.cwd + '/') ? abs.slice(data.cwd.length + 1) : abs;
+    return !target.global && abs.startsWith(data.cwd + '/') ? abs.slice(data.cwd.length + 1) : abs;
   };
   return (
     <div class="fv-list">
       <div class="fv-crumbs">
-        <span class="dim small">{data ? `${data.files.length} 个文件有改动（相对上次提交）` : ''}</span>
-        <button class="ghost small" onClick={reload}>
-          刷新
-        </button>
+        <span class="dim small">{data ? `${data.root.split('/').pop()}：${data.files.length} 个文件有改动（相对上次提交）` : ''}</span>
+        <span class="fv-crumb-end">
+          <button class="ghost small" onClick={reload}>
+            刷新
+          </button>
+        </span>
       </div>
       {error && <p class="error pad">{error}</p>}
-      {!loaded && !error && <p class="dim small pad">加载中…</p>}
-      {loaded && !data && !error && <p class="dim pad">工作目录不在 git 仓库里，没有改动记录。</p>}
+      {!loaded && <p class="dim small pad">加载中…</p>}
+      {none && <p class="dim pad">{target.global ? '当前目录不在 git 仓库里。先在「文件」里进入一个仓库目录。' : '工作目录不在 git 仓库里，没有改动记录。'}</p>}
       {data && !data.files.length && <p class="dim pad">没有未提交的改动。</p>}
       {data?.files.map((f) => {
         const st = statusOf(f.status);
         const p = rel(f.path);
         return (
           <div class="fv-row" key={f.path}>
-            <button class="fv-open" onClick={() => onOpen({ kind: 'diff', path: p, repoPath: f.path, status: f.status })}>
+            <button class="fv-open" onClick={() => onOpen({ kind: 'diff', path: p, repoPath: f.path, dir: at, status: f.status })}>
               <span class={`fv-st st-${st === '?' ? 'n' : st}`} title={STATUS_NAME[st]}>
                 {st === '?' ? 'N' : st}
               </span>
               <span class="fv-name">
-                {p}
-                {f.from && <span class="dim small"> ← {rel(f.from)}</span>}
+                {target.global ? f.path : p}
+                {f.from && <span class="dim small"> ← {f.from}</span>}
               </span>
               <span class="fv-meta">
                 {f.added != null && <span class="add">+{f.added}</span>} {f.removed != null && <span class="del">−{f.removed}</span>}
@@ -430,22 +466,21 @@ function ChangeList({ sid, onRoot, onOpen }: { sid: number; onRoot: (r: string) 
   );
 }
 
-function DiffViewer({ sid, view, onActions }: { sid: number; view: Extract<Doc, { kind: 'diff' }>; onActions: () => void }) {
+function DiffViewer({ api: base, view, onActions }: { api: string; view: Extract<Doc, { kind: 'diff' }>; onActions: () => void }) {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const body = useRef<HTMLPreElement>(null);
   useEffect(() => {
     setText(null);
-    fetch(`/_tw/api/sessions/${sid}/files/diff?path=${q(view.repoPath)}`, { credentials: 'same-origin' })
+    fetch(`${base}/files/diff?dir=${q(view.dir)}&path=${q(view.repoPath)}`, { credentials: 'same-origin' })
       .then(async (r) => (r.ok ? setText(await r.text()) : setError((await r.json().catch(() => null))?.error || `HTTP ${r.status}`)))
       .catch((e) => setError(e.message));
-  }, [sid, view.repoPath]);
+  }, [base, view.repoPath, view.dir]);
   // skip git's header lines; color by the first character
   const lines = (text ?? '').split('\n').filter((l) => !/^(diff --git|index |--- |\+\+\+ |new file mode|deleted file mode|similarity index|rename (from|to) )/.test(l));
   return (
     <div class="fv-file">
       <div class="fv-file-head">
-        <span class="fv-file-name">{view.path}</span>
+        <span class="fv-file-name">{baseName(view.path)}</span>
         <span class="dim small">{STATUS_NAME[statusOf(view.status)]}</span>
         <button class="icon-btn" onClick={onActions} aria-label="操作">
           <Icon.more />
@@ -455,7 +490,7 @@ function DiffViewer({ sid, view, onActions }: { sid: number; view: Extract<Doc, 
       {text === null && !error && <p class="dim small pad">加载中…</p>}
       {text !== null && !text.trim() && <p class="dim pad">没有可显示的文本差异（可能是二进制文件或目录）。</p>}
       {text && (
-        <pre class="fv-diff" ref={body}>
+        <pre class="fv-diff">
           {lines.map((l, i) => (
             <div key={i} class={l.startsWith('@@') ? 'hunk' : l.startsWith('+') ? 'add' : l.startsWith('-') ? 'del' : ''}>
               {l || ' '}

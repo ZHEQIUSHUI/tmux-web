@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api, type Folder, type HostInfo, type Notice, type Me, type SessionInfo } from './api';
-import { STATUS_LABEL, liveStream, store, useHashSession, useNarrow } from './lib';
+import { STATUS_LABEL, liveStream, store, useHashFiles, useHashSession, useNarrow } from './lib';
 import { Icon } from './ui';
 import { ChatView } from './chat';
 import { TerminalView } from './terminal-view';
-import { AdminModal, FolderModal, NewSession, PasswordModal, SessionSettings, TokensModal } from './dialogs';
+import { AdminModal, FolderModal, NewSession, PasswordModal, SessionSettings, TokensModal, useHosts } from './dialogs';
 import { MenuSheet, MobileHome, Sidebar, Toasts, alertsEnabled, useUnread } from './lists';
 import { PreviewView } from './preview';
 import { FilesView } from './files-view';
@@ -18,7 +18,9 @@ export const VIEWS: [Tab, string, () => any][] = [
   ['preview', '预览', Icon.globe],
 ];
 
-export function SessionPane({ me, session, folders, narrow, onBack }: { me: Me; session: SessionInfo; folders: Folder[]; narrow: boolean; onBack: () => void }) {
+type NewAt = (hostId: number, cwd: string) => void;
+
+export function SessionPane({ me, session, folders, narrow, onBack, onNewAt }: { me: Me; session: SessionInfo; folders: Folder[]; narrow: boolean; onBack: () => void; onNewAt: NewAt }) {
   const tabKey = `tw:tab:${session.id}`;
   const initialTab = (): Tab => (store.get(tabKey) as Tab) || (session.agent === 'bash' ? 'term' : 'chat');
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -73,7 +75,20 @@ export function SessionPane({ me, session, folders, narrow, onBack }: { me: Me; 
       </header>
       {tab === 'chat' && <ChatView key={session.id} session={session} onOpenTerminal={() => pick('term')} />}
       {tab === 'term' && <TerminalView key={session.id} sessionId={session.id} canWrite={session.access === 'control'} />}
-      {tab === 'files' && <FilesView key={session.id} session={session} onInsert={insert} />}
+      {tab === 'files' && (
+        <FilesView
+          key={session.id}
+          target={{
+            api: `/_tw/api/sessions/${session.id}`,
+            key: `s${session.id}`,
+            global: false,
+            // Claude Code reads "@path" as a file reference
+            mention: session.access === 'control' && session.agent !== 'bash' ? (p) => (session.agent === 'claude' ? `@${p || '.'}` : p || '.') : undefined,
+            onInsert: insert,
+            onNewHere: (dir) => onNewAt(session.hostId, dir),
+          }}
+        />
+      )}
       {tab === 'preview' && <PreviewView key={session.id} session={session} />}
       {settings && <SessionSettings me={me} session={session} folders={folders} onClose={() => setSettings(false)} />}
     </section>
@@ -84,6 +99,13 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   const narrow = useNarrow();
   const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
   const [current, setCurrent] = useHashSession();
+  const [filesOpen, setFilesOpen] = useHashFiles();
+  // "new session" opened from a folder in a file browser: that host and directory filled in
+  const [newAt, setNewAt] = useState<{ hostId: number; cwd: string } | null>(null);
+  const newSessionAt: NewAt = (hostId, cwd) => {
+    setNewAt({ hostId, cwd });
+    setModal('new');
+  };
   const [modal, setModal] = useState<'new' | 'admin' | 'password' | 'menu' | 'tokens' | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
   // folder being edited; null = creating one; undefined = dialog closed
@@ -152,8 +174,12 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   // opened from the list: "back" is a real history step back (same as the system back gesture)
   const fromList = useRef(false);
   const pick = (id: number) => {
-    fromList.current = current === null;
+    fromList.current = current === null && !filesOpen;
     setCurrent(id);
+  };
+  const openFiles = () => {
+    fromList.current = current === null && !filesOpen;
+    setFilesOpen(true);
   };
   const back = () => {
     const go = () => {
@@ -191,6 +217,7 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             hostBanner={hostBanner}
             onPick={pick}
             onNew={() => setModal('new')}
+            onFiles={openFiles}
             onMenu={() => setModal('menu')}
             onAdmin={() => setModal('admin')}
             onEditFolder={setEditFolder}
@@ -198,7 +225,12 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
           />
           {session && (
             <SwipeBack onBack={back}>
-              <SessionPane me={me} session={session} folders={folders} narrow onBack={back} />
+              <SessionPane me={me} session={session} folders={folders} narrow onBack={back} onNewAt={newSessionAt} />
+            </SwipeBack>
+          )}
+          {!session && filesOpen && (
+            <SwipeBack onBack={back}>
+              <GlobalFiles narrow onBack={back} onNewAt={newSessionAt} />
             </SwipeBack>
           )}
         </>
@@ -216,13 +248,17 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             current={current}
             onPick={pick}
             onNew={() => setModal('new')}
+            onFiles={openFiles}
+            filesOpen={filesOpen}
             onAdmin={() => setModal('admin')}
             onPassword={() => setModal('password')}
             onTokens={() => setModal('tokens')}
             onLogout={logout}
           />
           {session ? (
-            <SessionPane me={me} session={session} folders={folders} narrow={false} onBack={() => setCurrent(null)} />
+            <SessionPane me={me} session={session} folders={folders} narrow={false} onBack={() => setCurrent(null)} onNewAt={newSessionAt} />
+          ) : filesOpen ? (
+            <GlobalFiles narrow={false} onBack={() => setFilesOpen(false)} onNewAt={newSessionAt} />
           ) : (
             <section class="pane placeholder">
               <p class="dim">{sessions === null ? '加载中…' : '从左侧选择一个会话，或新建一个。'}</p>
@@ -243,9 +279,14 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
       {modal === 'new' && (
         <NewSession
           me={me}
-          onClose={() => setModal(null)}
+          at={newAt}
+          onClose={() => {
+            setModal(null);
+            setNewAt(null);
+          }}
           onCreated={(id) => {
             setModal(null);
+            setNewAt(null);
             pick(id);
           }}
         />
@@ -270,6 +311,50 @@ function scrollsSideways(el: Element | null, stop: Element): boolean {
  * finger with the list showing underneath; released far or fast enough, it slides away.
  * In the terminal (which uses touch itself) only a swipe from the left edge counts.
  */
+/** The global file browser: any host you may use, from its home directory. */
+function GlobalFiles({ narrow, onBack, onNewAt }: { narrow: boolean; onBack: () => void; onNewAt: NewAt }) {
+  const [hosts] = useHosts();
+  const [hostId, setHostId] = useState<number | null>(() => Number(store.get('tw:files:host')) || null);
+  useEffect(() => {
+    if (hosts?.length && !hosts.some((h) => h.id === hostId)) setHostId((hosts.find((h) => h.ok) ?? hosts[0]).id);
+  }, [hosts]);
+  const host = hosts?.find((h) => h.id === hostId);
+  return (
+    <section class="pane">
+      <header class="pane-head">
+        {narrow && (
+          <button class="icon-btn back" onClick={onBack} aria-label="返回">
+            <Icon.back />
+          </button>
+        )}
+        <div class="title">
+          <span class="t-name">文件</span>
+          <span class="t-sub">{host ? `${host.name}（只读）` : '加载中…'}</span>
+        </div>
+        {hosts && hosts.length > 1 && (
+          <select
+            class="fv-host"
+            value={hostId ?? ''}
+            onChange={(e) => {
+              const id = Number((e.target as HTMLSelectElement).value);
+              setHostId(id);
+              store.set('tw:files:host', String(id));
+            }}
+          >
+            {hosts.map((h) => (
+              <option key={h.id} value={h.id}>
+                {h.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </header>
+      {hostId !== null && <FilesView key={hostId} target={{ api: `/_tw/api/hosts/${hostId}`, key: `h${hostId}`, global: true, onNewHere: (dir) => onNewAt(hostId, dir) }} />}
+      {hosts && !hosts.length && <p class="dim pad">没有可用的主机。</p>}
+    </section>
+  );
+}
+
 function SwipeBack({ onBack, children }: { onBack: () => void; children: any }) {
   const el = useRef<HTMLDivElement>(null);
   useEffect(() => {

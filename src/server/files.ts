@@ -1,13 +1,19 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { Host } from './host.js';
 
-// Read-only file access for the files tab: everything runs on the session's host, relative to its
-// working directory ($1 in every script; "~" works too).
+// Read-only file access for the files views: everything runs on the host, starting from a base
+// directory ($1 in every script: a session's working directory, or "~" for the global browser).
 
 const AT_CWD = `h() { case $1 in "~") printf '%s' "$HOME";; "~/"*) printf '%s/%s' "$HOME" "\${1#??}";; *) printf '%s' "$1";; esac; }; cd "$(h "$1")" 2>/dev/null || exit 5; `;
 
-/** A path a viewer may see: inside the working directory. Anything else needs control access. */
+/** Then into the directory $2 ('' = stay in the base). */
+const IN_DIR = `d=$(h "$2"); [ -n "$d" ] || d=.; cd "$d" 2>/dev/null || exit 3; `;
+
+/** A path a session's viewer may see: inside the working directory. Anything else needs control access. */
 export const insideCwd = (p: string) => !p.startsWith('/') && !p.startsWith('~') && !p.split('/').includes('..');
+
+/** A name below a directory as the routes take it ('' = the base). */
+export const below = (dir: string, name: string) => (!dir ? name : dir.endsWith('/') ? dir + name : `${dir}/${name}`);
 
 export interface Entry {
   name: string;
@@ -21,10 +27,7 @@ export interface Entry {
 const MAX_ENTRIES = 3000;
 
 export async function listDir(host: Host, cwd: string, path: string): Promise<{ dir: string; entries: Entry[]; truncated: boolean }> {
-  const out = await host.sh(
-    AT_CWD + `d=$(h "$2"); [ -n "$d" ] || d=.; cd "$d" 2>/dev/null || exit 3; pwd; find . -mindepth 1 -maxdepth 1 -printf '%y%Y\\t%s\\t%T@\\t%f\\0' 2>/dev/null | head -z -n ${MAX_ENTRIES + 1}`,
-    [cwd, path],
-  );
+  const out = await host.sh(AT_CWD + IN_DIR + `pwd; find . -mindepth 1 -maxdepth 1 -printf '%y%Y\\t%s\\t%T@\\t%f\\0' 2>/dev/null | head -z -n ${MAX_ENTRIES + 1}`, [cwd, path]);
   const nl = out.indexOf(0x0a);
   const dir = out.subarray(0, nl).toString();
   const entries: Entry[] = [];
@@ -60,20 +63,33 @@ export function streamFile(host: Host, cwd: string, path: string): ChildProcessW
   return host.spawn(['sh', '-c', AT_CWD + `f=$(h "$2"); exec cat -- "$f"`, 'sh', cwd, path]);
 }
 
-/** File names containing `q`, below the working directory (skipping .git, node_modules, venvs). */
-export async function search(host: Host, cwd: string, q: string): Promise<{ path: string; dir: boolean }[]> {
+/** An image: a line "mtime-size", then the bytes unless that matches `etag` (at most 20MB). */
+export function imageFile(host: Host, cwd: string, path: string, etag: string): Promise<Buffer> {
+  return host.sh(
+    AT_CWD +
+      `f=$(h "$2"); [ -f "$f" ] || exit 3; ` +
+      `m=$(stat -c '%Y-%s' -- "$f" 2>/dev/null || stat -f '%m-%z' -- "$f"); printf '%s\\n' "$m"; [ "\\"$m\\"" = "$3" ] && exit 0; ` +
+      `s=$(wc -c < "$f"); [ "$s" -le 20971520 ] || exit 4; cat -- "$f"`,
+    [cwd, path, etag],
+  );
+}
+
+/** File names containing `q` below `dir` (skipping .git, node_modules, venvs, caches); paths as `dir/...`. */
+export async function search(host: Host, cwd: string, dir: string, q: string): Promise<{ path: string; dir: boolean }[]> {
   const out = await host.sh(
     AT_CWD +
+      IN_DIR +
       `t=; command -v timeout >/dev/null && t='timeout 8'; ` +
-      `$t find . -maxdepth 8 \\( -name .git -o -name node_modules -o -name __pycache__ -o -name .venv -o -name venv -o -name .tmux-web \\) -prune -o -iname "*$2*" -printf '%y\\t%P\\0' 2>/dev/null | head -z -n 200; exit 0`,
-    [cwd, q],
+      `$t find . -maxdepth 8 \\( -name .git -o -name node_modules -o -name __pycache__ -o -name .venv -o -name venv -o -name .tmux-web -o -name .cache \\) -prune -o -iname "*$3*" -printf '%y\\t%P\\0' 2>/dev/null | head -z -n 200; exit 0`,
+    [cwd, dir, q],
   );
   return out
     .toString('utf8')
     .split('\0')
     .filter(Boolean)
     .map((r) => ({ dir: r[0] === 'd', path: r.slice(2) }))
-    .filter((r) => r.path);
+    .filter((r) => r.path)
+    .map((r) => ({ ...r, path: below(dir, r.path) }));
 }
 
 export interface Change {
@@ -86,16 +102,17 @@ export interface Change {
   removed?: number;
 }
 
-/** What changed in the working directory's git repository (git status + line counts). */
-export async function changes(host: Host, cwd: string): Promise<{ root: string; cwd: string; files: Change[] } | null> {
+/** What changed in the git repository that `dir` is in (git status + line counts). */
+export async function changes(host: Host, cwd: string, dir = ''): Promise<{ root: string; cwd: string; files: Change[] } | null> {
   let out: Buffer;
   try {
     out = await host.sh(
       AT_CWD +
+        IN_DIR +
         `top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 4; printf '%s\\n' "$top"; pwd; ` +
         `git -c core.quotepath=off status --porcelain=v1 -z --untracked-files=normal 2>/dev/null | head -z -n 1000; printf '\\001'; ` +
         `git -c core.quotepath=off diff HEAD --numstat -z 2>/dev/null | head -c 300000; exit 0`,
-      [cwd],
+      [cwd, dir],
     );
   } catch (e: any) {
     if (e.code === 4) return null; // not a git repository
@@ -120,7 +137,7 @@ export async function changes(host: Host, cwd: string): Promise<{ root: string; 
   for (let i = 0; i < num.length; i++) {
     const [a, d, p] = num[i].split('\t');
     if (a === undefined || d === undefined) continue;
-    const path = p || (i += 2, num[i]);
+    const path = p || ((i += 2), num[i]);
     const f = byPath.get(path);
     if (f) {
       f.added = a === '-' ? undefined : Number(a);
@@ -130,14 +147,15 @@ export async function changes(host: Host, cwd: string): Promise<{ root: string; 
   return { root, cwd: here, files };
 }
 
-/** One file's diff against HEAD (new files: all lines added). `path` is relative to the repo root. */
-export async function diff(host: Host, cwd: string, path: string): Promise<string> {
+/** One file's diff against HEAD (new files: all lines added). `path` is relative to the repo root of `dir`. */
+export async function diff(host: Host, cwd: string, dir: string, path: string): Promise<string> {
   const out = await host.sh(
     AT_CWD +
+      IN_DIR +
       `cd "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || exit 4; ` +
-      `if git ls-files --error-unmatch -- "$2" >/dev/null 2>&1; then git -c core.quotepath=off diff HEAD -- "$2"; ` +
-      `else git -c core.quotepath=off diff --no-index -- /dev/null "$2"; fi 2>/dev/null | head -c 524288; exit 0`,
-    [cwd, path],
+      `if git ls-files --error-unmatch -- "$3" >/dev/null 2>&1; then git -c core.quotepath=off diff HEAD -- "$3"; ` +
+      `else git -c core.quotepath=off diff --no-index -- /dev/null "$3"; fi 2>/dev/null | head -c 524288; exit 0`,
+    [cwd, dir, path],
   );
   return out.toString('utf8');
 }

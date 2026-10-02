@@ -235,6 +235,8 @@ export function Sidebar(props: {
   current: number | null;
   onPick: (id: number) => void;
   onNew: () => void;
+  onFiles: () => void;
+  filesOpen?: boolean;
   onAdmin: () => void;
   onPassword: () => void;
   onLogout: () => void;
@@ -303,6 +305,9 @@ export function Sidebar(props: {
     <aside class="sidebar">
       <div class="side-head">
         <span class="brand">tmux-web</span>
+        <button class={`icon-btn ${props.filesOpen ? 'on' : ''}`} onClick={props.onFiles} aria-label="文件浏览器" title="文件浏览器">
+          <Icon.files />
+        </button>
         <button class="icon-btn" onClick={() => props.onEditFolder(null)} aria-label="新建文件夹" title="新建文件夹">
           <Icon.folderPlus />
         </button>
@@ -380,6 +385,8 @@ export function MobileHome(props: {
   hostBanner: boolean;
   onPick: (id: number) => void;
   onNew: () => void;
+  onFiles: () => void;
+  filesOpen?: boolean;
   onMenu: () => void;
   onAdmin: () => void;
   onEditFolder: (f: Folder | null) => void;
@@ -463,6 +470,9 @@ export function MobileHome(props: {
           <h1>会话</h1>
           {summary && <span class="m-summary">{summary}</span>}
         </div>
+        <button class="icon-btn" onClick={props.onFiles} aria-label="文件浏览器">
+          <Icon.files />
+        </button>
         <button class="icon-btn" onClick={() => props.onEditFolder(null)} aria-label="新建文件夹">
           <Icon.folderPlus />
         </button>

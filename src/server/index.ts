@@ -5,7 +5,7 @@ import { config } from './config.js';
 import { db, groupIdsOf, q, type Agent, type FolderRow, type HostRow, type Role, type Share, type UserRow } from './db.js';
 import { createApiToken, clientIp, currentUser, endSession, isSecureRequest, hashPassword, loginLockedFor, recordLogin, sameOrigin, startSession, verifyLogin, verifyPassword } from './auth.js';
 import { HttpError, readJson, sendBody, sendJson, serveStatic, Sse } from './http.js';
-import { ensureSshKey, forgetHost, getHost, publicKey } from './host.js';
+import { ensureSshKey, forgetHost, getHost, publicKey, type Host } from './host.js';
 import {
   accessOf,
   adoptSession,
@@ -27,7 +27,7 @@ import {
   type Access,
 } from './sessions.js';
 import { claudeState, followLog, readFull, readImage, readPage } from './transcript.js';
-import { changes, diff, fileSize, insideCwd, listDir, readPart, search, streamFile } from './files.js';
+import { changes, diff, fileSize, imageFile, insideCwd, listDir, readPart, search, streamFile } from './files.js';
 import { notices, noticesFor, visible, type Notice } from './notify.js';
 import { parsePreviewPath, previewCookie, proxyHttp, proxyUpgrade, readPreviewCookie, type ProxyTarget } from './proxy.js';
 
@@ -270,71 +270,34 @@ route('GET', '/_tw/api/sessions/:id/message', async (req, res, [id], url) => {
   sendJson(req, res, 200, await readFull(row.agent, live.host, file, Number(url.searchParams.get('off'))));
 });
 
-// ---------- files tab (read-only; inside the working directory for viewers, anywhere for control) ----------
+// ---------- files (read-only) ----------
+// The same routes under a session (relative to its working directory; viewers stay inside it) and
+// under a host (the global file browser: from the home directory, for anyone who may use the host).
 
-function filesFor(req: IncomingMessage, id: string, p: string) {
-  const { row, live } = sessionFor(requireUser(req), id, insideCwd(p) ? 'view' : 'control');
-  if (!live.host) throw new HttpError(502, '主机不可用');
-  return { row, host: live.host };
-}
+type FileScope = (req: IncomingMessage, id: string, p: string) => { host: Host; cwd: string };
+const FILE_SCOPES: [string, FileScope][] = [
+  [
+    '/_tw/api/sessions/:id',
+    (req, id, p) => {
+      const { row, live } = sessionFor(requireUser(req), id, insideCwd(p) ? 'view' : 'control');
+      if (!live.host) throw new HttpError(502, '主机不可用');
+      return { host: live.host, cwd: row.cwd };
+    },
+  ],
+  [
+    '/_tw/api/hosts/:id',
+    (req, id) => {
+      const h = q.hostById.get(Number(id));
+      if (!h || !canUseHost(requireUser(req), h)) throw new HttpError(404, '主机不存在');
+      return { host: getHost(h.id)!, cwd: '~' };
+    },
+  ],
+];
 const fileError = (e: any): never => {
   throw new HttpError(e.code === 3 ? 404 : e.code === 5 ? 404 : 502, e.code === 3 ? '文件或目录不存在' : e.code === 5 ? '工作目录不存在' : `读取失败：${e.message}`);
 };
 
-route('GET', '/_tw/api/sessions/:id/files', async (req, res, [id], url) => {
-  const p = url.searchParams.get('path') || '';
-  const { row, host } = filesFor(req, id, p);
-  sendJson(req, res, 200, await listDir(host, row.cwd, p).catch(fileError));
-});
-
-/** Part of a file (text view loads it in pieces): raw bytes, with the file size in X-File-Size. */
-route('GET', '/_tw/api/sessions/:id/files/read', async (req, res, [id], url) => {
-  const p = url.searchParams.get('path') || '';
-  const { row, host } = filesFor(req, id, p);
-  const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
-  const length = Math.min(1 << 20, Math.max(1, Number(url.searchParams.get('length')) || 65536));
-  const { size, data } = await readPart(host, row.cwd, p, offset, length).catch(fileError);
-  sendBody(req, res, 200, data, { 'Content-Type': 'application/octet-stream', 'X-File-Size': String(size) });
-});
-
-route('GET', '/_tw/api/sessions/:id/files/download', async (req, res, [id], url) => {
-  const p = url.searchParams.get('path') || '';
-  const { row, host } = filesFor(req, id, p);
-  const size = await fileSize(host, row.cwd, p).catch(fileError);
-  const name = p.split('/').pop() || 'file';
-  res.writeHead(200, {
-    'Content-Type': 'application/octet-stream',
-    'Content-Length': size,
-    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
-    'Cache-Control': 'no-store',
-  });
-  const child = streamFile(host, row.cwd, p);
-  child.stdout.pipe(res);
-  child.stderr.resume();
-  child.on('error', () => res.destroy());
-  res.on('close', () => child.kill());
-});
-
-route('GET', '/_tw/api/sessions/:id/files/search', async (req, res, [id], url) => {
-  const { row, host } = filesFor(req, id, '');
-  const q = (url.searchParams.get('q') || '').trim();
-  if (!q) return sendJson(req, res, 200, []);
-  sendJson(req, res, 200, await search(host, row.cwd, q).catch(fileError));
-});
-
-/** git status of the working directory's repository: what the agent changed. */
-route('GET', '/_tw/api/sessions/:id/files/changes', async (req, res, [id]) => {
-  const { row, host } = filesFor(req, id, '');
-  sendJson(req, res, 200, await changes(host, row.cwd).catch(fileError));
-});
-
-route('GET', '/_tw/api/sessions/:id/files/diff', async (req, res, [id], url) => {
-  const { row, host } = filesFor(req, id, '');
-  const text = await diff(host, row.cwd, url.searchParams.get('path') || '').catch(fileError);
-  sendBody(req, res, 200, Buffer.from(text), { 'Content-Type': 'text/plain; charset=utf-8' });
-});
-
-// Images in the chat: served on their own (lazily, cacheable) so message pages stay small.
+// Images: served on their own (lazily, cacheable) so message pages stay small.
 const IMAGE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml', avif: 'image/avif' };
 function sendImage(res: ServerResponse, type: string, body: Buffer, cache: string, etag?: string) {
   res.writeHead(200, {
@@ -349,6 +312,86 @@ function sendImage(res: ServerResponse, type: string, body: Buffer, cache: strin
   res.end(body);
 }
 
+for (const [prefix, scope] of FILE_SCOPES) {
+  const at = (req: IncomingMessage, id: string, url: URL, key = 'path') => {
+    const p = url.searchParams.get(key) || '';
+    return { p, ...scope(req, id, p) };
+  };
+
+  route('GET', `${prefix}/files`, async (req, res, [id], url) => {
+    const { p, host, cwd } = at(req, id, url);
+    sendJson(req, res, 200, await listDir(host, cwd, p).catch(fileError));
+  });
+
+  /** Part of a file (text view loads it in pieces): raw bytes, with the file size in X-File-Size. */
+  route('GET', `${prefix}/files/read`, async (req, res, [id], url) => {
+    const { p, host, cwd } = at(req, id, url);
+    const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
+    const length = Math.min(1 << 20, Math.max(1, Number(url.searchParams.get('length')) || 65536));
+    const { size, data } = await readPart(host, cwd, p, offset, length).catch(fileError);
+    sendBody(req, res, 200, data, { 'Content-Type': 'application/octet-stream', 'X-File-Size': String(size) });
+  });
+
+  route('GET', `${prefix}/files/download`, async (req, res, [id], url) => {
+    const { p, host, cwd } = at(req, id, url);
+    const size = await fileSize(host, cwd, p).catch(fileError);
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': size,
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(p.split('/').pop() || 'file')}`,
+      'Cache-Control': 'no-store',
+    });
+    const child = streamFile(host, cwd, p);
+    child.stdout.pipe(res);
+    child.stderr.resume();
+    child.on('error', () => res.destroy());
+    res.on('close', () => child.kill());
+  });
+
+  /** File names containing q, below the directory `dir`. */
+  route('GET', `${prefix}/files/search`, async (req, res, [id], url) => {
+    const { p, host, cwd } = at(req, id, url, 'dir');
+    const text = (url.searchParams.get('q') || '').trim();
+    if (!text) return sendJson(req, res, 200, []);
+    sendJson(req, res, 200, await search(host, cwd, p, text).catch(fileError));
+  });
+
+  /** git status of the repository that `dir` is in: what the agent changed. */
+  route('GET', `${prefix}/files/changes`, async (req, res, [id], url) => {
+    const { p, host, cwd } = at(req, id, url, 'dir');
+    sendJson(req, res, 200, await changes(host, cwd, p).catch(fileError));
+  });
+
+  route('GET', `${prefix}/files/diff`, async (req, res, [id], url) => {
+    const { p, host, cwd } = at(req, id, url, 'dir');
+    const text = await diff(host, cwd, p, url.searchParams.get('path') || '').catch(fileError);
+    sendBody(req, res, 200, Buffer.from(text), { 'Content-Type': 'text/plain; charset=utf-8' });
+  });
+
+  /** An image file, e.g. `![](out/plot.png)` written by the agent. */
+  route('GET', `${prefix}/file-image`, async (req, res, [id], url) => {
+    const { p, host, cwd } = at(req, id, url);
+    const type = IMAGE_TYPES[p.split('.').pop()!.toLowerCase()];
+    if (!type) throw new HttpError(400, '不是图片文件');
+    // agents overwrite their output images: revalidate by mtime+size, which costs one tiny round
+    // trip (the file is only sent when it changed)
+    const known = String(req.headers['if-none-match'] || '');
+    let out: Buffer;
+    try {
+      out = await imageFile(host, cwd, p, known);
+    } catch {
+      throw new HttpError(404, '图片不存在或太大');
+    }
+    const nl = out.indexOf(0x0a);
+    const etag = `"${out.subarray(0, nl).toString()}"`;
+    if (etag === known && nl === out.length - 1) {
+      res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' });
+      return void res.end();
+    }
+    sendImage(res, type, out.subarray(nl + 1), 'private, no-cache', etag);
+  });
+}
+
 /** The `n`th image embedded in the log line at `off` (chat items reference it as `tw-img:<n>`). */
 route('GET', '/_tw/api/sessions/:id/image', async (req, res, [id], url) => {
   const { row, live } = sessionFor(requireUser(req), id, 'view');
@@ -358,39 +401,6 @@ route('GET', '/_tw/api/sessions/:id/image', async (req, res, [id], url) => {
   if (!img || !Object.values(IMAGE_TYPES).includes(img.mime)) throw new HttpError(404, '图片不存在');
   // log lines never change once written
   sendImage(res, img.mime, Buffer.from(img.data, 'base64'), 'private, max-age=604800, immutable');
-});
-
-/** An image file on the session's host, e.g. `![](out/plot.png)` written by the agent. */
-route('GET', '/_tw/api/sessions/:id/file-image', async (req, res, [id], url) => {
-  const p = String(url.searchParams.get('path') || '');
-  // inside the working directory is part of the conversation; anywhere else needs control access
-  const inside = !!p && !p.startsWith('/') && !p.startsWith('~') && !p.split('/').includes('..');
-  const { row, live } = sessionFor(requireUser(req), id, inside ? 'view' : 'control');
-  const type = IMAGE_TYPES[p.split('.').pop()!.toLowerCase()];
-  if (!type) throw new HttpError(400, '不是图片文件');
-  if (!live.host) throw new HttpError(502, '主机不可用');
-  // agents overwrite their output images: revalidate by mtime+size, which costs one tiny round trip
-  // (the file is only sent when it changed)
-  const known = String(req.headers['if-none-match'] || '');
-  let out: Buffer;
-  try {
-    out = await live.host.sh(
-      `h() { case $1 in "~") printf '%s' "$HOME";; "~/"*) printf '%s/%s' "$HOME" "\${1#??}";; *) printf '%s' "$1";; esac; }; ` +
-        `cd "$(h "$1")" 2>/dev/null; f=$(h "$2"); [ -f "$f" ] || exit 3; ` +
-        `m=$(stat -c '%Y-%s' -- "$f" 2>/dev/null || stat -f '%m-%z' -- "$f"); printf '%s\\n' "$m"; [ "\\"$m\\"" = "$3" ] && exit 0; ` +
-        `s=$(wc -c < "$f"); [ "$s" -le 20971520 ] || exit 4; cat -- "$f"`,
-      [row.cwd, p, known],
-    );
-  } catch {
-    throw new HttpError(404, '图片不存在或太大');
-  }
-  const nl = out.indexOf(0x0a);
-  const etag = `"${out.subarray(0, nl).toString()}"`;
-  if (etag === known && nl === out.length - 1) {
-    res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' });
-    return void res.end();
-  }
-  sendImage(res, type, out.subarray(nl + 1), 'private, no-cache', etag);
 });
 
 /** Claude Code's model and context usage, from the end of its log. */

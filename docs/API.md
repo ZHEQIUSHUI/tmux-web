@@ -47,14 +47,16 @@ Item `role`: `user` · `assistant` (Markdown) · `tool` (`tool` field is the too
 
 Paths are relative to the session's working directory (`path` empty = the working directory). Viewers can only access paths inside the working directory; absolute paths, `~`, and `..` require control permission.
 
+The same routes also work under a host (the global file browser): replace `sessions/:id` with `hosts/:id`. Paths there are relative to the home directory, absolute paths are allowed, and anyone who can use that host can access them.
+
 | Method | Path | Description |
 |---|---|---|
 | GET | `sessions/:id/files?path=` | List a directory: `{dir (absolute path), entries: [{name, type: "d"\|"f"\|"o", link, size, mtime}], truncated}` |
 | GET | `sessions/:id/files/read?path=&offset=0&length=65536` | Read part of a file (raw bytes, at most 1MB at a time); the file size is in the `X-File-Size` response header |
 | GET | `sessions/:id/files/download?path=` | Download the whole file |
-| GET | `sessions/:id/files/search?q=` | Search file names (up to 200 results; skips .git, node_modules, etc.) |
-| GET | `sessions/:id/files/changes` | Uncommitted changes in git: `{root, cwd, files: [{path, status, from?, added?, removed?}]}`; `null` when not a git repository |
-| GET | `sessions/:id/files/diff?path=` | Diff of one file against the last commit (`path` is relative to the repository root; new files show all lines as added) |
+| GET | `sessions/:id/files/search?dir=&q=` | Search file names below `dir` (up to 200 results; skips .git, node_modules, etc.) |
+| GET | `sessions/:id/files/changes?dir=` | Uncommitted changes in the git repository containing `dir`: `{root, cwd, files: [{path, status, from?, added?, removed?}]}`; `null` when not a git repository |
+| GET | `sessions/:id/files/diff?dir=&path=` | Diff of one file against the last commit (`path` is relative to the root of the repository containing `dir`; new files show all lines as added) |
 
 ## Notifications (for apps)
 

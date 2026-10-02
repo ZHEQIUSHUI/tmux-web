@@ -171,7 +171,7 @@ export function ClaudeHistoryPicker({ hostId, selected, onSelect }: { hostId: nu
   );
 }
 
-export function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => void; onCreated: (id: number) => void }) {
+export function NewSession({ me, at, onClose, onCreated }: { me: Me; at?: { hostId: number; cwd: string } | null; onClose: () => void; onCreated: (id: number) => void }) {
   const [mode, setMode] = useState<'new' | 'adopt'>('new');
   const [agent, setAgent] = useState<keyof typeof AGENT_LABEL>('claude');
   // extra launch options: remembered per agent type, presets toggle in and out
@@ -179,7 +179,7 @@ export function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => 
   useEffect(() => setArgs(store.get(`tw:args:${agent}`) ?? ''), [agent]);
   const [resume, setResume] = useState<ClaudeHistory | null>(null);
   const [hosts] = useHosts();
-  const [hostId, setHostId] = useState<number | null>(null);
+  const [hostId, setHostId] = useState<number | null>(at?.hostId ?? null);
   const [dirs, setDirs] = useState<string[]>([]);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -283,7 +283,7 @@ export function NewSession({ me, onClose, onCreated }: { me: Me; onClose: () => 
         )}
         <label style={agent === 'claude' && resume ? 'display:none' : ''}>
           工作目录
-          <input name="cwd" list="dirs" key={hostId ?? 0} defaultValue={dirs[0] || ''} placeholder="~/项目，不存在会自动创建" required={!(agent === 'claude' && resume)} />
+          <input name="cwd" list="dirs" key={hostId ?? 0} defaultValue={(at?.hostId === hostId && at?.cwd) || dirs[0] || ''} placeholder="~/项目，不存在会自动创建" required={!(agent === 'claude' && resume)} />
           <datalist id="dirs">
             {dirs.map((d) => (
               <option key={d} value={d} />

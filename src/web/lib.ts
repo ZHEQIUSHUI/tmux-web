@@ -133,6 +133,17 @@ export function useHashSession(): [number | null, (id: number | null) => void] {
   }, []);
   return [id, (n) => (location.hash = n === null ? '' : `#/s/${n}`)];
 }
+/** The global file browser's page: #/files. */
+export function useHashFiles(): [boolean, (open: boolean) => void] {
+  const read = () => location.hash.startsWith('#/files');
+  const [open, setOpen] = useState(read);
+  useEffect(() => {
+    const on = () => setOpen(read());
+    addEventListener('hashchange', on);
+    return () => removeEventListener('hashchange', on);
+  }, []);
+  return [open, (o) => (location.hash = o ? '#/files' : '')];
+}
 export const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 export function relTime(ms: number): string {

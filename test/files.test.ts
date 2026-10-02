@@ -37,7 +37,8 @@ test('files: list, read, search, changes', async () => {
     assert.equal(part.size, 14);
     assert.equal(part.data.toString(), 'TWO');
 
-    assert.deepEqual(await search(local, dir, '说明'), [{ dir: false, path: 'sub dir/说明.md' }]);
+    assert.deepEqual(await search(local, dir, '', '说明'), [{ dir: false, path: 'sub dir/说明.md' }]);
+    assert.deepEqual(await search(local, dir, 'sub dir', '说明'), [{ dir: false, path: 'sub dir/说明.md' }]);
 
     const ch = (await changes(local, dir))!;
     const byPath = Object.fromEntries(ch.files.map((f) => [f.path, f]));
