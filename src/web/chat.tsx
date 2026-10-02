@@ -325,6 +325,39 @@ export interface Pending {
   key: number;
   text: string;
   sent: boolean;
+  at: number;
+}
+
+// Messages you sent that the agent's log doesn't show yet (Claude queues them while it works),
+// kept per session outside the view so leaving and coming back keeps them.
+const PENDING_MS = 30 * 60 * 1000;
+const pendingStore = new Map<number, Pending[]>();
+const pendingSubs = new Map<number, Set<(ps: Pending[]) => void>>();
+const freshPending = (id: number) => (pendingStore.get(id) ?? []).filter((p) => Date.now() - p.at < PENDING_MS);
+
+function updatePending(id: number, f: (ps: Pending[]) => Pending[]) {
+  const next = f(freshPending(id));
+  if (next.length) pendingStore.set(id, next);
+  else pendingStore.delete(id);
+  pendingSubs.get(id)?.forEach((fn) => fn(next));
+}
+
+/** Drop the placeholders of messages that have now shown up in the log. */
+function arrived(id: number, items: ChatItem[]) {
+  const texts = items.filter((i) => i.role === 'user').map((i) => norm(i.text));
+  if (texts.length && pendingStore.has(id)) updatePending(id, (ps) => ps.filter((p) => !texts.some((a) => a === norm(p.text) || a.startsWith(norm(p.text).slice(0, 200)))));
+}
+
+function usePending(id: number): Pending[] {
+  const [ps, setPs] = useState(() => freshPending(id));
+  useEffect(() => {
+    setPs(freshPending(id));
+    let subs = pendingSubs.get(id);
+    if (!subs) pendingSubs.set(id, (subs = new Set()));
+    subs.add(setPs);
+    return () => void subs.delete(setPs);
+  }, [id]);
+  return ps;
 }
 
 /** What a chat view had, so coming back to a session shows it at once (and where you were). */
@@ -425,7 +458,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
   const [update, setUpdate] = useState(false);
   const isClaude = session.agent === 'claude';
   // shown right away when you press send; removed once the agent's log has the message
-  const [pending, setPending] = useState<Pending[]>([]);
+  const pending = usePending(session.id);
   const [page, setPage] = useState<{ start: number; hasMore: boolean; pending: boolean } | null>(cached?.page ?? null);
   const endRef = useRef(cached?.end ?? 0);
   const [state, setState] = useState<{ status: Status; preview: string; error?: string; choices?: Choices | null }>({ status: session.status, preview: '' });
@@ -444,6 +477,14 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
   const lastTop = useRef<number | null>(cached?.scrollTop ?? null);
   const anchor = useRef<{ height: number; top: number } | null>(null);
   const id = session.id;
+  // idle for a while and still not in the log: it won't come (e.g. the turn was interrupted and
+  // Claude put the queued text back into its input box)
+  const idleNow = state.status === 'idle' && pending.some((p) => p.sent);
+  useEffect(() => {
+    if (!idleNow) return;
+    const t = setTimeout(() => updatePending(id, (ps) => ps.filter((p) => !p.sent || Date.now() - p.at < 15000)), 15000);
+    return () => clearTimeout(t);
+  }, [idleNow, id]);
   // bumped when the agent switches to another conversation (/clear): start over
   const [generation, setGeneration] = useState(0);
 
@@ -466,8 +507,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
                   const seen = new Set(cur.map((i) => i.id));
                   return [...cur, ...fresh.filter((i) => !seen.has(i.id))];
                 });
-                const arrived = fresh.filter((i) => i.role === 'user').map((i) => norm(i.text));
-                if (arrived.length) setPending((ps) => ps.filter((p) => !arrived.some((a) => a === norm(p.text) || a.startsWith(norm(p.text).slice(0, 200)))));
+                arrived(id, fresh);
               }
               setPage((pg) => (pg && pg.pending ? { ...pg, pending: false } : pg));
             },
@@ -494,6 +534,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
         .then((p) => {
           if (cancelled) return;
           const j = joinTail(cached, p);
+          arrived(id, j.items.slice(cached.items.length));
           if (j.page !== cached.page) stick.current = true; // replaced, not joined: start at the bottom
           setItems(j.items);
           setPage(j.page);
@@ -694,16 +735,11 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
             if (session.agent === 'bash') return () => {};
             const key = Date.now() + Math.random();
             stick.current = true;
-            setPending((ps) => [...ps, { key, text, sent: false }]);
-            // drop it eventually even if it never shows up in the log (e.g. it was a /command)
-            const expire = setTimeout(() => setPending((ps) => ps.filter((p) => p.key !== key)), 120000);
-            return (ok: boolean) => {
-              if (ok) setPending((ps) => ps.map((p) => (p.key === key ? { ...p, sent: true } : p)));
-              else {
-                clearTimeout(expire);
-                setPending((ps) => ps.filter((p) => p.key !== key));
-              }
-            };
+            // kept until it shows up in the log: Claude may hold it in its queue for a long turn
+            // (and dropped after PENDING_MS in case it never does)
+            updatePending(id, (ps) => [...ps, { key, text, sent: false, at: Date.now() }]);
+            return (ok: boolean) =>
+              updatePending(id, (ps) => (ok ? ps.map((p) => (p.key === key ? { ...p, sent: true } : p)) : ps.filter((p) => p.key !== key)));
           }}
         />
       ) : (
@@ -783,7 +819,8 @@ export function Composer(props: {
     update('');
     setFiles([]);
     // slash commands don't show up as chat messages: no placeholder bubble for them
-    const isCommand = /^\s*\//.test(msg);
+    // /commands and !shell lines never show up as a message of yours in the log
+    const isCommand = /^\s*[/!]/.test(msg);
     const done = isCommand ? () => {} : onPending(msg);
     try {
       await api('POST', `/_tw/api/sessions/${sessionId}/input`, { text: msg });
