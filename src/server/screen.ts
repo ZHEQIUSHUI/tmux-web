@@ -10,7 +10,8 @@ export type AgentStatus = 'starting' | 'idle' | 'busy' | 'waiting' | 'offline' |
 // "esc to interrupt" in the footer, or — when the window is too narrow for the footer to say
 // it — Claude Code's spinner line "✻ Working… (12s · ↓ 1.2k tokens)" (finished: "✻ Crunched for 4s",
 // no ellipsis) and Codex's "Working (3s • esc to interrupt)"
-const BUSY = /esc to interrupt|^\s*\S?\s*[A-Z][\w-]*…\s*\(\s*\d+[hms]|^\s*\S?\s*Working\s*\(\d+[hms]/im;
+// queued messages ("Press up to edit queued messages") only exist while a turn is running
+const BUSY = /esc to interrupt|Press up to edit queued messages|^\s*\S?\s*[A-Z][\w-]*…\s*\(\s*\d+[hms]|^\s*\S?\s*Working\s*\(\d+[hms]/im;
 // permission prompts / pickers of Claude Code and Codex
 const WAITING = [/Do you want to /, /^\s*[❯›>]\s*\d+\.\s/m, /Enter to confirm/, /\(y\/n\)/i, /Press enter to continue/i, /Yes, (allow|proceed)/i];
 const MODES: [RegExp, string][] = [

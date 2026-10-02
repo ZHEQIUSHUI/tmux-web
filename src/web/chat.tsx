@@ -25,7 +25,9 @@ const imageCtx = (sid: number, it: ChatItem) => ({ sid, off: it.id.split(':')[0]
 export function ToolGroup({ sid, items, onExpand }: { sid: number; items: ChatItem[]; onExpand: (it: ChatItem) => void }) {
   const last = items[items.length - 1];
   const calls = items.filter((i) => i.tool !== 'result' && i.tool !== 'error').length;
-  const firstLine = (last.text.split('\n')[0] || '').slice(0, 90);
+  const line = last.text.split('\n')[0] || '';
+  // a dump of encoded data says nothing in one line
+  const firstLine = /[A-Za-z0-9+/=]{60}/.test(line) && !/\s/.test(line.trim()) ? '（编码数据）' : line.slice(0, 90);
   return (
     <details class="tools">
       <summary>

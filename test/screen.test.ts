@@ -79,3 +79,8 @@ test('choices: permission prompt; numbered text above is not a menu', async () =
   const idle = await screen(['1. build', '2. test', SEP, '❯ ', SEP, '  ⏵⏵ auto mode on']);
   assert.equal(idle.analyze().choices, null);
 });
+
+test('queued messages mean a turn is running even when a narrow footer drops the busy marker', async () => {
+  const s = await screen(['  AIxF/z9t/3x/8AXo/4RiL', '', '❯ 感觉pid效果更好', '  ctrl+x ctrl+s to send now', SEP, '❯ Press up to edit queued messages', SEP, '  ⏵⏵ bypass permissions on · 1 shell, 1 monitor · …']);
+  assert.equal(s.analyze().status, 'busy');
+});

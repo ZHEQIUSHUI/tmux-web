@@ -52,6 +52,9 @@ async function readyHost(id: number): Promise<Host> {
   return host;
 }
 
+/** How long a busy agent's screen may stay still before a missing busy marker counts as idle. */
+const STILL_BUSY_MS = 5000;
+
 /** Runtime state of one session: control-mode stream, mirrored screen, derived status. */
 export class LiveSession extends EventEmitter {
   status: AgentStatus = 'starting';
@@ -76,6 +79,9 @@ export class LiveSession extends EventEmitter {
   screen: Screen | null = null;
   private stream: PaneStream | null = null;
   private analyzeTimer: NodeJS.Timeout | null = null;
+  private recheckTimer: NodeJS.Timeout | null = null;
+  /** when the screen last changed */
+  private outputAt = 0;
   private retryTimer: NodeJS.Timeout | null = null;
   private retries = 0;
   private starting: Promise<void> | null = null;
@@ -163,6 +169,7 @@ export class LiveSession extends EventEmitter {
     stream.on('data', (buf: Buffer) => {
       if (!seeded) return void early.push(buf);
       screen.write(buf);
+      this.outputAt = Date.now();
       this.emit('data', buf);
       this.scheduleAnalyze();
       // a shell has no log: its screen is the activity (agents: see pollActivity)
@@ -235,8 +242,24 @@ export class LiveSession extends EventEmitter {
         this.choices = choices;
         this.emit('state', this.stateView());
       }
-      this.setStatus(status, preview);
+      this.setStatus(this.holdBusy(status), preview);
     }, 250);
+  }
+
+  /**
+   * A narrow window cuts "esc to interrupt" off Claude Code's footer, and a long reply can push the
+   * spinner off screen: while the screen keeps changing, a turn that was running still is.
+   */
+  private holdBusy(status: AgentStatus): AgentStatus {
+    if (status !== 'idle' || this.status !== 'busy') return status;
+    const quiet = Date.now() - this.outputAt;
+    if (quiet >= STILL_BUSY_MS) return status;
+    if (!this.recheckTimer)
+      this.recheckTimer = setTimeout(() => {
+        this.recheckTimer = null;
+        this.scheduleAnalyze();
+      }, STILL_BUSY_MS - quiet + 50).unref();
+    return 'busy';
   }
 
   private setStatus(status: AgentStatus, preview: string) {
