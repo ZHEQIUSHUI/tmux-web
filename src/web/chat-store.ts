@@ -19,6 +19,8 @@ interface Rec {
 let dbp: Promise<IDBDatabase | null> | null = null;
 function open(): Promise<IDBDatabase | null> {
   dbp ??= new Promise((resolve) => {
+    // some browsers (in-app webviews, private modes) never answer: go on without storage
+    setTimeout(() => resolve(null), 1500);
     try {
       const r = indexedDB.open(DB, 1);
       r.onupgradeneeded = () => r.result.createObjectStore(STORE);
@@ -38,6 +40,11 @@ let user = 0;
 /** Load this account's saved chats (newest last), dropping what is over the limit. */
 export async function loadChats(userId: number): Promise<[number, ChatCache][]> {
   user = userId;
+  // never hold up showing the page for long
+  return Promise.race([readChats(userId), new Promise<[number, ChatCache][]>((r) => setTimeout(() => r([]), 2500))]);
+}
+
+async function readChats(userId: number): Promise<[number, ChatCache][]> {
   const db = await open();
   if (!db) return [];
   try {

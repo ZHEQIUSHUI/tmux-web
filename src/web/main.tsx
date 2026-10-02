@@ -57,7 +57,8 @@ let lastUser = 0;
 async function signedIn(m: Me): Promise<Me> {
   if (lastUser && lastUser !== m.id) chatCache.clear(); // another account on this page
   lastUser = m.id;
-  for (const [sid, c] of await loadChats(m.id)) if (!chatCache.has(sid)) chatCache.set(sid, c);
+  const saved = await loadChats(m.id).catch(() => []);
+  for (const [sid, c] of saved) if (!chatCache.has(sid)) chatCache.set(sid, c);
   return m;
 }
 
