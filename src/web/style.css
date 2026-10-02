@@ -1954,3 +1954,62 @@ a.btn {
 .side-foot button.small {
   padding: 4px 6px;
 }
+
+/* images in the chat: lazy thumbnails, tap for the full size */
+.md-img {
+  display: inline-block;
+  max-width: 100%;
+  margin: 4px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--bg2, rgba(127, 127, 127, 0.08));
+  line-height: 0;
+}
+.md-img img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  min-width: 48px;
+  min-height: 48px;
+  object-fit: contain;
+}
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.msg-images .md-img img {
+  max-height: 200px;
+}
+
+/* mermaid: source until rendered (on demand) */
+.mermaid-block {
+  margin: 8px 0;
+}
+.mermaid-block.loading {
+  opacity: 0.6;
+}
+.mermaid-view {
+  overflow-x: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.mermaid-view svg {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+}
+.mermaid-block details summary {
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.7;
+  margin-top: 4px;
+}
+.mermaid-err {
+  font-size: 12px;
+  color: var(--danger, #c33);
+}

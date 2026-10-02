@@ -17,6 +17,31 @@ export interface ChatItem {
 
 const LIMITS = { user: 4000, assistant: 6000, tool: 240, meta: 300 } as const;
 
+/** An image embedded in a log line (base64), served separately so chat pages stay small. */
+export interface LineImage {
+  mime: string;
+  data: string;
+}
+const DATA_IMAGE = /data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)/gi;
+
+/** Replace embedded base64 images with `tw-img:<n>` references, collecting the data. */
+function pullImages(text: string, images: LineImage[]): string {
+  if (!text.includes('data:image/')) return text;
+  return text.replace(DATA_IMAGE, (_, mime: string, data: string) => {
+    images.push({ mime: mime.toLowerCase(), data: data.replace(/\s+/g, '') });
+    return `tw-img:${images.length - 1}`;
+  });
+}
+
+/** An image content block as Markdown (Claude: {source:{type:"base64"}}, Codex: image_url). */
+function imageMarkdown(b: any): string {
+  const src = b?.source;
+  if (src?.type === 'base64' && src.data) return `![图片](data:${src.media_type || 'image/png'};base64,${src.data})`;
+  const url = typeof b?.image_url === 'string' ? b.image_url : b?.image_url?.url;
+  if (typeof url === 'string' && url) return `![图片](${url})`;
+  return '[图片]';
+}
+
 function clip(item: Omit<ChatItem, 'id'>, full: boolean): Omit<ChatItem, 'id'> {
   const max = LIMITS[item.role];
   if (full || item.text.length <= max) return item;
@@ -39,7 +64,7 @@ function blockText(c: unknown): string {
   if (typeof c === 'string') return c;
   if (Array.isArray(c))
     return c
-      .map((b) => (b && typeof b === 'object' && (b as { type?: string }).type === 'text' ? (b as { text: string }).text : b && typeof b === 'object' && (b as { type?: string }).type === 'image' ? '[image]' : ''))
+      .map((b) => (b && typeof b === 'object' && (b as { type?: string }).type === 'text' ? (b as { text: string }).text : b && typeof b === 'object' && (b as { type?: string }).type === 'image' ? imageMarkdown(b) : ''))
       .filter(Boolean)
       .join('\n');
   return '';
@@ -103,7 +128,7 @@ function parseClaude(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
       } else if (b.type === 'text' && b.text?.trim()) {
         out.push({ role: 'user', text: b.text });
       } else if (b.type === 'image') {
-        out.push({ role: 'user', text: '[image]' });
+        out.push({ role: 'user', text: imageMarkdown(b) });
       }
     }
     return out;
@@ -122,7 +147,7 @@ function parseCodex(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
     case 'message': {
       if (p.role !== 'user' && p.role !== 'assistant') return [];
       const text = (p.content ?? [])
-        .map((c: any) => (c.type === 'input_text' || c.type === 'output_text' ? c.text : c.type === 'input_image' ? '[image]' : ''))
+        .map((c: any) => (c.type === 'input_text' || c.type === 'output_text' ? c.text : c.type === 'input_image' ? imageMarkdown(c) : ''))
         .join('\n')
         .trim();
       if (!text || (p.role === 'user' && CODEX_HIDDEN_USER.test(text))) return [];
@@ -155,7 +180,7 @@ function parseCodex(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
   }
 }
 
-export function parseLine(agent: Agent, line: string, offset: number, full = false): ChatItem[] {
+export function parseLine(agent: Agent, line: string, offset: number, full = false, images: LineImage[] = []): ChatItem[] {
   if (!line.trim()) return [];
   let o: Record<string, unknown>;
   try {
@@ -164,7 +189,7 @@ export function parseLine(agent: Agent, line: string, offset: number, full = fal
     return [];
   }
   const items = agent === 'claude' ? parseClaude(o) : agent === 'codex' ? parseCodex(o) : [];
-  return items.map((it, i) => ({ id: `${offset}:${i}`, ...clip(it, full) }));
+  return items.map((it, i) => ({ id: `${offset}:${i}`, ...clip({ ...it, text: pullImages(it.text, images) }, full) }));
 }
 
 // ---------- reading (through the host, so remote machines work the same as local) ----------
@@ -255,8 +280,7 @@ export async function readPage(agent: Agent, host: Host, file: string, before: n
   return { items: groups.reverse().flat(), start, end, hasMore: start > 0 };
 }
 
-/** Read the single line at `offset` and return its items untruncated. */
-export async function readFull(agent: Agent, host: Host, file: string, offset: number): Promise<ChatItem[]> {
+async function readLine(host: Host, file: string, offset: number): Promise<string> {
   const parts: Buffer[] = [];
   for (let pos = offset; ; pos += CHUNK) {
     const chunk = await host.read(file, pos, pos + CHUNK);
@@ -264,7 +288,19 @@ export async function readFull(agent: Agent, host: Host, file: string, offset: n
     parts.push(nl === -1 ? chunk : chunk.subarray(0, nl));
     if (nl !== -1 || chunk.length < CHUNK) break;
   }
-  return parseLine(agent, Buffer.concat(parts).toString('utf8'), offset, true);
+  return Buffer.concat(parts).toString('utf8');
+}
+
+/** Read the single line at `offset` and return its items untruncated. */
+export async function readFull(agent: Agent, host: Host, file: string, offset: number): Promise<ChatItem[]> {
+  return parseLine(agent, await readLine(host, file, offset), offset, true);
+}
+
+/** The `n`th image embedded in the line at `offset` (see `tw-img:` references). */
+export async function readImage(agent: Agent, host: Host, file: string, offset: number, n: number): Promise<LineImage | null> {
+  const images: LineImage[] = [];
+  parseLine(agent, await readLine(host, file, offset), offset, true, images);
+  return images[n] ?? null;
 }
 
 /**

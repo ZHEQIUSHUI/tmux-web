@@ -118,3 +118,23 @@ test('claudeState: model, context tokens, 1M detection', async () => {
   const big = writeLines('state2.jsonl', [usage(300_000)]);
   assert.equal((await claudeState(local, big)).contextWindow, 1_000_000);
 });
+
+test('images: embedded base64 is pulled out into tw-img references', () => {
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const images: import('../src/server/transcript.js').LineImage[] = [];
+  const line = JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: `看图：\n\n![结果](data:image/png;base64,${png})` }] },
+  });
+  const [it] = parseLine('claude', line, 0, false, images);
+  assert.equal(it.text, '看图：\n\n![结果](tw-img:0)');
+  assert.deepEqual(images, [{ mime: 'image/png', data: png }]);
+  // a Read of an image file comes back as an image block in the tool result
+  const result = JSON.stringify({
+    type: 'user',
+    message: { content: [{ type: 'tool_result', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: png } }] }] },
+  });
+  const imgs2: import('../src/server/transcript.js').LineImage[] = [];
+  assert.equal(parseLine('claude', result, 0, false, imgs2)[0].text, '![图片](tw-img:0)');
+  assert.equal(imgs2[0].mime, 'image/jpeg');
+});

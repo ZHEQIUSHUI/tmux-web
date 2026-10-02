@@ -28,6 +28,7 @@
     "@xterm/xterm": "^6.0.0",
     "esbuild": "^0.28.2",
     "marked": "^18.0.14",
+    "mermaid": "^11.17.2",
     "preact": "^11.0.0",
     "typescript": "^7.0.2"
   }

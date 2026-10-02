@@ -25,7 +25,7 @@ import {
   updateSession,
   type Access,
 } from './sessions.js';
-import { claudeState, followLog, readFull, readPage } from './transcript.js';
+import { claudeState, followLog, readFull, readImage, readPage } from './transcript.js';
 import { notices, noticesFor, visible, type Notice } from './notify.js';
 import { parsePreviewPath, previewCookie, proxyHttp, proxyUpgrade, readPreviewCookie, type ProxyTarget } from './proxy.js';
 
@@ -265,6 +265,53 @@ route('GET', '/_tw/api/sessions/:id/message', async (req, res, [id], url) => {
   const file = await live.transcriptPath();
   if (!file || !live.host) throw new HttpError(404, 'no transcript');
   sendJson(req, res, 200, await readFull(row.agent, live.host, file, Number(url.searchParams.get('off'))));
+});
+
+// Images in the chat: served on their own (lazily, cacheable) so message pages stay small.
+const IMAGE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml', avif: 'image/avif' };
+function sendImage(res: ServerResponse, type: string, body: Buffer, cache: string) {
+  res.writeHead(200, {
+    'Content-Type': type,
+    'Content-Length': body.length,
+    'Cache-Control': cache,
+    'X-Content-Type-Options': 'nosniff',
+    // an SVG opened directly must not run scripts on our origin
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+  });
+  res.end(body);
+}
+
+/** The `n`th image embedded in the log line at `off` (chat items reference it as `tw-img:<n>`). */
+route('GET', '/_tw/api/sessions/:id/image', async (req, res, [id], url) => {
+  const { row, live } = sessionFor(requireUser(req), id, 'view');
+  const file = await live.transcriptPath();
+  if (!file || !live.host) throw new HttpError(404, 'no transcript');
+  const img = await readImage(row.agent, live.host, file, Number(url.searchParams.get('off')), Number(url.searchParams.get('n')));
+  if (!img || !Object.values(IMAGE_TYPES).includes(img.mime)) throw new HttpError(404, '图片不存在');
+  // log lines never change once written
+  sendImage(res, img.mime, Buffer.from(img.data, 'base64'), 'private, max-age=604800, immutable');
+});
+
+/** An image file on the session's host, e.g. `![](out/plot.png)` written by the agent. */
+route('GET', '/_tw/api/sessions/:id/file-image', async (req, res, [id], url) => {
+  const p = String(url.searchParams.get('path') || '');
+  // inside the working directory is part of the conversation; anywhere else needs control access
+  const inside = !!p && !p.startsWith('/') && !p.startsWith('~') && !p.split('/').includes('..');
+  const { row, live } = sessionFor(requireUser(req), id, inside ? 'view' : 'control');
+  const type = IMAGE_TYPES[p.split('.').pop()!.toLowerCase()];
+  if (!type) throw new HttpError(400, '不是图片文件');
+  if (!live.host) throw new HttpError(502, '主机不可用');
+  let body: Buffer;
+  try {
+    body = await live.host.sh(
+      `h() { case $1 in "~") printf '%s' "$HOME";; "~/"*) printf '%s/%s' "$HOME" "\${1#??}";; *) printf '%s' "$1";; esac; }; ` +
+        `cd "$(h "$1")" 2>/dev/null; f=$(h "$2"); [ -f "$f" ] || exit 3; s=$(wc -c < "$f"); [ "$s" -le 20971520 ] || exit 4; cat -- "$f"`,
+      [row.cwd, p],
+    );
+  } catch {
+    throw new HttpError(404, '图片不存在或太大');
+  }
+  sendImage(res, type, body, 'private, max-age=30');
 });
 
 /** Claude Code's model and context usage, from the end of its log. */

@@ -1,12 +1,28 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api, type ChatItem, type Page, type SessionInfo, type Status } from './api';
-import { renderMarkdown } from './markdown';
+import { renderMarkdown, splitImages } from './markdown';
+import { hydrateMermaid } from './mermaid-lazy';
 import { coarsePointer, liveStream, norm, store } from './lib';
 import { Icon, Modal } from './ui';
 
 // ---------------- chat ----------------
 
-export function ToolGroup({ items, onExpand }: { items: ChatItem[]; onExpand: (it: ChatItem) => void }) {
+/** Thumbnails for images referenced from a plain-text item; tap opens the full image. */
+function Images({ list }: { list: { url: string; alt: string }[] }) {
+  if (!list.length) return null;
+  return (
+    <div class="msg-images">
+      {list.map((im) => (
+        <a key={im.url} class="md-img" href={im.url} target="_blank" rel="noopener noreferrer">
+          <img src={im.url} alt={im.alt} loading="lazy" decoding="async" />
+        </a>
+      ))}
+    </div>
+  );
+}
+const imageCtx = (sid: number, it: ChatItem) => ({ sid, off: it.id.split(':')[0] });
+
+export function ToolGroup({ sid, items, onExpand }: { sid: number; items: ChatItem[]; onExpand: (it: ChatItem) => void }) {
   const last = items[items.length - 1];
   const calls = items.filter((i) => i.tool !== 'result' && i.tool !== 'error').length;
   const firstLine = (last.text.split('\n')[0] || '').slice(0, 90);
@@ -19,46 +35,57 @@ export function ToolGroup({ items, onExpand }: { items: ChatItem[]; onExpand: (i
           {firstLine}
         </span>
       </summary>
-      {items.map((it) => (
-        <div key={it.id} class={`tool-line ${it.tool === 'error' ? 'err' : ''}`}>
-          {it.tool && it.tool !== 'result' && it.tool !== 'error' ? <b>{it.tool}</b> : <span class="dim">↳</span>}
-          <pre>{it.text}</pre>
-          {it.truncated && (
-            <button class="link" onClick={() => onExpand(it)}>
-              展开全部
-            </button>
-          )}
-        </div>
-      ))}
+      {items.map((it) => {
+        const { text, images } = splitImages(it.text, imageCtx(sid, it));
+        return (
+          <div key={it.id} class={`tool-line ${it.tool === 'error' ? 'err' : ''}`}>
+            {it.tool && it.tool !== 'result' && it.tool !== 'error' ? <b>{it.tool}</b> : <span class="dim">↳</span>}
+            {text && <pre>{text}</pre>}
+            <Images list={images} />
+            {it.truncated && (
+              <button class="link" onClick={() => onExpand(it)}>
+                展开全部
+              </button>
+            )}
+          </div>
+        );
+      })}
     </details>
   );
 }
 
 export const mdCache = new Map<string, string>();
-export function Markdown({ id, text }: { id: string; text: string }) {
-  const key = id + ':' + text.length;
+export function Markdown({ sid, id, text }: { sid: number; id: string; text: string }) {
+  const key = `${sid}:${id}:${text.length}`;
   let html = mdCache.get(key);
   if (html === undefined) {
-    html = renderMarkdown(text);
+    html = renderMarkdown(text, { sid, off: id.split(':')[0] });
     if (mdCache.size > 500) mdCache.clear();
     mdCache.set(key, html);
   }
-  return <div class="md" dangerouslySetInnerHTML={{ __html: html }} />;
+  const ref = useRef<HTMLDivElement>(null);
+  const diagrams = html.includes('class="mermaid-block"');
+  useEffect(() => {
+    if (diagrams && ref.current) hydrateMermaid(ref.current);
+  }, [html]);
+  return <div ref={ref} class="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-export function Message({ it, onExpand, onRewind }: { it: ChatItem; onExpand: (it: ChatItem) => void; onRewind?: () => void }) {
+export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: ChatItem; onExpand: (it: ChatItem) => void; onRewind?: () => void }) {
   const [actions, setActions] = useState(false);
   const more = it.truncated && (
     <button class="link" onClick={() => onExpand(it)}>
       展开全文
     </button>
   );
-  if (it.role === 'user')
+  if (it.role === 'user') {
+    const { text, images } = splitImages(it.text, imageCtx(sid, it));
     return (
       // tap (phones) or hover (desktop) shows what can be done with your own message
       <div class={`msg user ${actions ? 'show-actions' : ''}`} onClick={() => onRewind && setActions((v) => !v)}>
         <div class="bubble">
-          {it.text}
+          {text}
+          <Images list={images} />
           {more}
         </div>
         {onRewind && (
@@ -77,10 +104,11 @@ export function Message({ it, onExpand, onRewind }: { it: ChatItem; onExpand: (i
         )}
       </div>
     );
+  }
   if (it.role === 'meta') return <div class="msg meta">{it.text}</div>;
   return (
     <div class="msg assistant">
-      <Markdown id={it.id} text={it.text} />
+      <Markdown sid={sid} id={it.id} text={it.text} />
       {more}
     </div>
   );
@@ -558,7 +586,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
             <div class="empty">{session.agent === 'bash' ? 'Shell 会话没有对话记录，请切换到「终端」。' : page.pending ? '还没有对话。在下方输入开始。' : '没有消息'}</div>
           )}
           {!page && !error && <div class="empty">加载中…</div>}
-          {blocks.map((b) => (b.kind === 'tools' ? <ToolGroup key={b.items[0].id} items={b.items} onExpand={expand} /> : <Message key={b.it.id} it={b.it} onExpand={expand} onRewind={canRewind ? rewind : undefined} />))}
+          {blocks.map((b) => (b.kind === 'tools' ? <ToolGroup key={b.items[0].id} sid={id} items={b.items} onExpand={expand} /> : <Message key={b.it.id} sid={id} it={b.it} onExpand={expand} onRewind={canRewind ? rewind : undefined} />))}
           {pending.map((p) => (
             <div key={p.key} class="msg user pending">
               <div class="bubble">
