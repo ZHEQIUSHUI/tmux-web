@@ -57,6 +57,8 @@ export interface Page {
   end: number;
   hasMore: boolean;
   pending?: boolean;
+  /** which conversation log (changes on /clear) */
+  log?: string;
 }
 
 export interface HostInfo {

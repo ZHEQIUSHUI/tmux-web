@@ -4,6 +4,7 @@
 
 - 左侧是会话列表（带运行中、等待确认、空闲、主机离线状态），右侧是**对话视图**（Markdown 渲染）和**终端视图**（xterm.js）
 - 对话只加载最后 30 条，往上滚动时再按需加载更早的；生成过程中显示实时画面
+- 对话记录保存在浏览器本地（IndexedDB，每个会话最近 400 条，最多 50 个会话），刷新或重开网页时立即显示，只补拉新增的部分；退出登录时清除
 - 网页服务跑在 Docker 里，**tmux 和 agent 跑在宿主机上**：通过 SSH 执行，用的是宿主机自己的 tmux、claude、codex 和全部命令
 - 可以通过 SSH 管理**多台主机**；支持账号和分组
 - 可以**导入主机上已有的 tmux 会话**：里面的程序不重启，你在本机照常 attach，网页上同时可见
@@ -110,6 +111,7 @@ src/server/          Node 服务（esbuild 打包成 dist/server.js）
 src/web/             Preact 前端
   lib.ts             工具、主题、数据流（liveStream）    ui.tsx      图标、弹窗
   chat.tsx           对话视图、输入框、Claude 状态栏      lists.tsx   侧边栏、手机首页、文件夹、提醒
+  chat-store.ts      对话记录的本地缓存（IndexedDB）      mermaid*.ts 流程图（按需加载）
   dialogs.tsx        新建会话、设置、账号、令牌等对话框    shell.tsx   整体布局与导航
   terminal-view.tsx  终端标签（xterm.js 按需加载）        preview.tsx 预览标签
 test/                解析器、分页、屏幕识别等测试（npm test）

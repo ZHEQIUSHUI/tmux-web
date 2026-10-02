@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { api, type ChatItem, type Page, type SessionInfo, type Status } from './api';
 import { renderMarkdown, splitImages } from './markdown';
 import { hydrateMermaid } from './mermaid-lazy';
+import { MAX_SESSIONS, saveChat } from './chat-store';
 import { coarsePointer, liveStream, norm, store } from './lib';
 import { Icon, Modal } from './ui';
 
@@ -338,8 +339,33 @@ export interface ChatCache {
   claude: ClaudeState | null;
   /** the session's activity time when this was taken: unchanged activity = still current */
   activityAt: number;
+  /** which conversation log the offsets belong to (a /clear starts a new one) */
+  log?: string;
 }
 export const chatCache = new Map<number, ChatCache>();
+
+/** Remember a chat view, in memory and in this browser's storage. */
+export function putCache(id: number, c: ChatCache) {
+  chatCache.delete(id); // most recently used last
+  chatCache.set(id, c);
+  if (chatCache.size > MAX_SESSIONS) chatCache.delete(chatCache.keys().next().value!);
+  saveChat(id, c);
+}
+export function dropCache(id: number) {
+  chatCache.delete(id);
+  saveChat(id, null);
+}
+
+const offsetOf = (it: ChatItem) => Number(it.id.split(':')[0]);
+/**
+ * A cached view brought up to date with a fresh tail page: the new items appended when the page
+ * reaches back to where the cache ended (same conversation), else just the page.
+ */
+function joinTail(c: ChatCache | undefined, pg: Page): Pick<ChatCache, 'items' | 'page'> {
+  if (c && c.log && pg.log === c.log && pg.start <= c.end && c.items.length)
+    return { items: [...c.items, ...pg.items.filter((i) => offsetOf(i) >= c.end)], page: c.page };
+  return { items: pg.items, page: { start: pg.start, hasMore: pg.hasMore, pending: !!pg.pending } };
+}
 export const CACHE_FRESH_MS = 30 * 60 * 1000;
 
 /** A cached view can be shown as is: recent, or nothing happened in the session since. */
@@ -363,7 +389,7 @@ export function prefetchChat(s: SessionInfo): Promise<void> {
       .then((pg) => {
         const now = chatCache.get(s.id);
         if (now && now.activityAt >= s.activityAt) return; // the chat view itself got there first
-        chatCache.set(s.id, { items: pg.items, page: { start: pg.start, hasMore: pg.hasMore, pending: !!pg.pending }, end: pg.end, at: Date.now(), scrollTop: null, claude: now?.claude ?? null, activityAt: s.activityAt });
+        putCache(s.id, { ...joinTail(now, pg), end: pg.end, at: Date.now(), scrollTop: null, claude: now?.claude ?? null, activityAt: s.activityAt, log: pg.log });
       })
       .catch(() => {})
       .finally(() => prefetching.delete(s.id));
@@ -389,10 +415,10 @@ export function prefetchAll(list: SessionInfo[]): () => void {
 }
 
 export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; onOpenTerminal: () => void }) {
-  const cached = useMemo(() => {
-    const c = chatCache.get(session.id);
-    return cacheUsable(c, session.activityAt) ? c : undefined;
-  }, [session.id]);
+  // a cache that is behind is still shown at once, then brought up to date
+  const cached = useMemo(() => chatCache.get(session.id), [session.id]);
+  const current = useMemo(() => cacheUsable(cached, session.activityAt), [session.id]);
+  const logRef = useRef(cached?.log);
   const [items, setItems] = useState<ChatItem[]>(cached?.items ?? []);
   const [claude, setClaude] = useState<ClaudeState | null>(cached?.claude ?? null);
   const [panel, setPanel] = useState(false);
@@ -431,7 +457,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
         let offset = end;
         endRef.current = end;
         stop = liveStream(
-          () => `/_tw/api/sessions/${id}/stream?from=${offset}`,
+          () => `/_tw/api/sessions/${id}/stream?from=${offset}${logRef.current ? `&log=${encodeURIComponent(logRef.current)}` : ''}`,
           {
             msg: (fresh: ChatItem[], ev) => {
               if (ev.lastEventId) offset = endRef.current = Number(ev.lastEventId);
@@ -451,16 +477,31 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
               if (st.mode !== undefined) setClaude((c) => (c ? { ...c, mode: st.mode } : c));
             },
             reset: () => {
-              chatCache.delete(id);
+              dropCache(id);
+              logRef.current = undefined;
               setGeneration((g) => g + 1);
             },
           },
           setOnline,
         );
     };
-    if (generation === 0 && cached) {
+    if (generation === 0 && cached && current) {
       // shown from the cache already: just continue the stream from where it was
       begin(cached.end);
+    } else if (generation === 0 && cached) {
+      // shown from an older cache: fetch the tail and append what's new since
+      api<Page>('GET', `/_tw/api/sessions/${id}/messages?limit=30`)
+        .then((p) => {
+          if (cancelled) return;
+          const j = joinTail(cached, p);
+          if (j.page !== cached.page) stick.current = true; // replaced, not joined: start at the bottom
+          setItems(j.items);
+          setPage(j.page);
+          logRef.current = p.log;
+          begin(p.end);
+        })
+        // offline: keep showing the cache; the stream catches up once the server is reachable
+        .catch(() => !cancelled && begin(cached.end));
     } else {
       setItems([]);
       setPage(null);
@@ -470,6 +511,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
           if (cancelled) return;
           setItems(p.items);
           setPage({ start: p.start, hasMore: p.hasMore, pending: !!p.pending });
+          logRef.current = p.log;
           begin(p.end);
         })
         .catch((e) => !cancelled && setError(e.message));
@@ -483,13 +525,15 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
   // remember the view for next time
   useEffect(() => {
     if (!page) return;
-    chatCache.set(id, { items, page, end: endRef.current, at: Date.now(), scrollTop: chatCache.get(id)?.scrollTop ?? null, claude, activityAt: Math.max(session.activityAt, Date.now()) });
-    if (chatCache.size > 20) chatCache.delete(chatCache.keys().next().value!);
+    putCache(id, { items, page, end: endRef.current, at: Date.now(), scrollTop: chatCache.get(id)?.scrollTop ?? null, claude, activityAt: Math.max(session.activityAt, Date.now()), log: logRef.current });
   }, [items, page, claude]);
   useEffect(
     () => () => {
       const c = chatCache.get(id);
-      if (c) c.scrollTop = stick.current ? null : lastTop.current;
+      if (c) {
+        c.scrollTop = stick.current ? null : lastTop.current;
+        saveChat(id, c);
+      }
     },
     [id],
   );

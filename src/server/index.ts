@@ -1,4 +1,5 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { config } from './config.js';
 import { db, groupIdsOf, q, type Agent, type FolderRow, type HostRow, type Role, type Share, type UserRow } from './db.js';
@@ -254,7 +255,8 @@ route('GET', '/_tw/api/sessions/:id/messages', async (req, res, [id], url) => {
   const before = url.searchParams.has('before') ? Number(url.searchParams.get('before')) : null;
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit') || 30)));
   try {
-    sendJson(req, res, 200, await readPage(row.agent, live.host, file, before, limit));
+    // log: which conversation this is (a /clear starts a new log), so a client cache can tell
+    sendJson(req, res, 200, { ...(await readPage(row.agent, live.host, file, before, limit)), log: path.posix.basename(file) });
   } catch (e: any) {
     throw new HttpError(502, `读取对话记录失败：${e.message}`);
   }
@@ -269,8 +271,9 @@ route('GET', '/_tw/api/sessions/:id/message', async (req, res, [id], url) => {
 
 // Images in the chat: served on their own (lazily, cacheable) so message pages stay small.
 const IMAGE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml', avif: 'image/avif' };
-function sendImage(res: ServerResponse, type: string, body: Buffer, cache: string) {
+function sendImage(res: ServerResponse, type: string, body: Buffer, cache: string, etag?: string) {
   res.writeHead(200, {
+    ...(etag ? { ETag: etag } : {}),
     'Content-Type': type,
     'Content-Length': body.length,
     'Cache-Control': cache,
@@ -301,17 +304,28 @@ route('GET', '/_tw/api/sessions/:id/file-image', async (req, res, [id], url) => 
   const type = IMAGE_TYPES[p.split('.').pop()!.toLowerCase()];
   if (!type) throw new HttpError(400, '不是图片文件');
   if (!live.host) throw new HttpError(502, '主机不可用');
-  let body: Buffer;
+  // agents overwrite their output images: revalidate by mtime+size, which costs one tiny round trip
+  // (the file is only sent when it changed)
+  const known = String(req.headers['if-none-match'] || '');
+  let out: Buffer;
   try {
-    body = await live.host.sh(
+    out = await live.host.sh(
       `h() { case $1 in "~") printf '%s' "$HOME";; "~/"*) printf '%s/%s' "$HOME" "\${1#??}";; *) printf '%s' "$1";; esac; }; ` +
-        `cd "$(h "$1")" 2>/dev/null; f=$(h "$2"); [ -f "$f" ] || exit 3; s=$(wc -c < "$f"); [ "$s" -le 20971520 ] || exit 4; cat -- "$f"`,
-      [row.cwd, p],
+        `cd "$(h "$1")" 2>/dev/null; f=$(h "$2"); [ -f "$f" ] || exit 3; ` +
+        `m=$(stat -c '%Y-%s' -- "$f" 2>/dev/null || stat -f '%m-%z' -- "$f"); printf '%s\\n' "$m"; [ "\\"$m\\"" = "$3" ] && exit 0; ` +
+        `s=$(wc -c < "$f"); [ "$s" -le 20971520 ] || exit 4; cat -- "$f"`,
+      [row.cwd, p, known],
     );
   } catch {
     throw new HttpError(404, '图片不存在或太大');
   }
-  sendImage(res, type, body, 'private, max-age=30');
+  const nl = out.indexOf(0x0a);
+  const etag = `"${out.subarray(0, nl).toString()}"`;
+  if (etag === known && nl === out.length - 1) {
+    res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' });
+    return void res.end();
+  }
+  sendImage(res, type, out.subarray(nl + 1), 'private, no-cache', etag);
 });
 
 /** Claude Code's model and context usage, from the end of its log. */
@@ -368,6 +382,9 @@ route('GET', '/_tw/api/sessions/:id/stream', (req, res, [id], url) => {
       timer = setTimeout(waitForLog, 2000);
       return;
     }
+    // a client resuming from its cache of another conversation (/clear since): start over
+    const log = url.searchParams.get('log');
+    if (log && log !== path.posix.basename(file)) return sse.send('reset', 0);
     following = file;
     stopFollow = followLog(row.agent, host, file, offset, (items, end) => sse.send('msg', items, end));
   };

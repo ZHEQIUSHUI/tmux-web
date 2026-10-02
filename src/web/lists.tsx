@@ -251,6 +251,12 @@ export function Sidebar(props: {
   const [recentMin, setRecentMin] = useRecentMinutes();
   const [recentDlg, setRecentDlg] = useState(false);
   const recent = recentSessions(sessions, recentMin);
+  // as on phones: keep every chat warm (and saved), fetching only sessions that did something
+  const activityKey = sessions.map((x) => x.activityAt).join();
+  useEffect(() => {
+    const sorted = sortSessions(sessions);
+    return prefetchAll([...sorted.filter((x) => props.unread.has(x.id)), ...sorted.filter((x) => !props.unread.has(x.id))]);
+  }, [activityKey]);
   // the recent section: name, conversation title and which folder it lives in
   const recentItem = (s: SessionInfo) => (
     <button key={`r${s.id}`} class={`session-item ${s.id === current ? 'active' : ''}`} onPointerDown={() => prefetchChat(s)} onMouseEnter={() => prefetchChat(s)} onClick={() => props.onPick(s.id)} title={s.title || undefined}>

@@ -3,6 +3,8 @@ import { useEffect, useState } from 'preact/hooks';
 import { api, type Me } from './api';
 import { coarsePointer } from './lib';
 import { Shell } from './shell';
+import { chatCache } from './chat';
+import { clearChats, loadChats } from './chat-store';
 import './style.css';
 
 // ---------------- login ----------------
@@ -50,17 +52,35 @@ function Login({ onLogin }: { onLogin: (m: Me) => void }) {
   );
 }
 
+/** Bring back this account's saved chats before the first view shows (a few ms from IndexedDB). */
+let lastUser = 0;
+async function signedIn(m: Me): Promise<Me> {
+  if (lastUser && lastUser !== m.id) chatCache.clear(); // another account on this page
+  lastUser = m.id;
+  for (const [sid, c] of await loadChats(m.id)) if (!chatCache.has(sid)) chatCache.set(sid, c);
+  return m;
+}
+
 function App() {
   const [me, setMe] = useState<Me | null | false>(null);
   useEffect(() => {
-    api<Me>('GET', '/_tw/api/me').then(setMe, () => setMe(false));
+    api<Me>('GET', '/_tw/api/me').then(signedIn).then(setMe, () => setMe(false));
     const out = () => setMe(false);
     addEventListener('tw:logout', out);
     return () => removeEventListener('tw:logout', out);
   }, []);
   if (me === null) return null;
-  if (me === false) return <Login onLogin={setMe} />;
-  return <Shell me={me} onLogout={() => setMe(false)} />;
+  if (me === false) return <Login onLogin={(m) => void signedIn(m).then(setMe)} />;
+  return (
+    <Shell
+      me={me}
+      onLogout={() => {
+        chatCache.clear();
+        void clearChats();
+        setMe(false);
+      }}
+    />
+  );
 }
 
 // iOS doesn't shrink the layout when the keyboard opens; size the app to the visible viewport
