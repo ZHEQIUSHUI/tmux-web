@@ -35,6 +35,8 @@ Session fields: `id, name, agent, cwd, hostId, host, owner, note, folderId, grou
 | GET | `sessions/:id/message?off=<offset>` | Full content of a truncated item (`id` is `"<offset>:<n>"`) |
 | GET | `sessions/:id/stream?from=<end>` | SSE: `msg` (new items; the event id is the log byte offset, and reconnecting with `Last-Event-ID` resumes from the break), `state` (`{status, preview, mode, update, background}`), `reset` (conversation switched, e.g. `/clear`; reload), `ping` heartbeat |
 | GET | `sessions/:id/claude-state` | Model, context usage, permission mode |
+| GET | `sessions/:id/image?off=<offset>&n=<n>` | An image embedded in the conversation. In messages, embedded base64 images are replaced with `tw-img:<n>`, and `off` is the first part of the item `id` |
+| GET | `sessions/:id/file-image?path=<path>` | An image file on the host (relative paths resolve from the session's working directory; paths outside it require control access; at most 20MB) |
 | POST | `sessions/:id/input` | Send text and press Enter: `{text, submit?: true}` |
 | POST | `sessions/:id/keys` | Send keys: `{keys: ["Escape"]}`. Allowed: Enter Escape Tab BTab Up Down Left Right Space BSpace C-c C-d C-l y n 1–9 |
 | WS | `sessions/:id/term` | Terminal: server→client binary frames are raw terminal output (the first frame is a screen snapshot), text frames are JSON (`hello`/`size`/`pong`). Client→server: binary is keystrokes, text is `{type:"resize",cols,rows}` / `{type:"ping"}` |
