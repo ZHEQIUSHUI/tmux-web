@@ -141,8 +141,41 @@ export class Screen {
     return false;
   }
 
+  /**
+   * Claude Code's suggested next message: drawn dim in the empty input box (it sends on Enter).
+   * Only when the whole box is dim (nothing typed); the generic 'Try "..."' placeholder isn't one.
+   */
+  promptSuggestion(): string {
+    const buf = this.term.buffer.active;
+    let last = this.term.rows - 1;
+    while (last > 0 && !buf.getLine(buf.viewportY + last)?.translateToString(true).trim()) last--;
+    for (let y = last; y >= Math.max(0, last - 15); y--) {
+      const line = buf.getLine(buf.viewportY + y);
+      if (!line || !/^[❯>]\s/.test(line.translateToString(true))) continue;
+      // the prompt line and any wrapped continuation, up to the box's bottom edge
+      const parts: string[] = [];
+      for (let yy = y; yy <= last; yy++) {
+        const l = buf.getLine(buf.viewportY + yy);
+        if (!l) break;
+        const s = l.translateToString(true);
+        if (yy > y && (/^\s*[─━]{3,}/.test(s) || !s.trim())) break;
+        let text = '';
+        for (let x = yy === y ? 1 : 0; x < l.length; x++) {
+          const cell = l.getCell(x);
+          const ch = cell?.getChars() ?? '';
+          if (ch.trim() && !cell!.isDim()) return ''; // something typed
+          text += ch || (cell?.getWidth() === 0 ? '' : ' ');
+        }
+        parts.push(text.trim());
+      }
+      const s = parts.join(' ').trim();
+      return /^Try "/.test(s) ? '' : s;
+    }
+    return '';
+  }
+
   /** Classify the agent's state and pull out the text it is producing right now. */
-  analyze(): { status: AgentStatus; preview: string; mode: string; update: boolean; background: string; choices: Choices | null } {
+  analyze(): { status: AgentStatus; preview: string; mode: string; update: boolean; background: string; choices: Choices | null; suggestion: string } {
     const lines = this.lines().filter((l) => !NOISE.some((re) => re.test(l)));
     while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
     const text = lines.join('\n');
@@ -189,7 +222,7 @@ export class Screen {
     while (tail.length && !tail[0].trim()) tail.shift();
     // background work Claude Code is keeping alive ("1 shell, 1 monitor"); "← 1 agent" is just a hint
     const background = BACKGROUND.exec(footer)?.[0] ?? '';
-    return { status, preview: tail.join('\n'), mode, update, background, choices: waiting ? findChoices(lines) : null };
+    return { status, preview: tail.join('\n'), mode, update, background, choices: waiting ? findChoices(lines) : null, suggestion: status === 'idle' ? this.promptSuggestion() : '' };
   }
 
   dispose() {

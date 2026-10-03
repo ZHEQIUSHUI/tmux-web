@@ -461,7 +461,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
   const pending = usePending(session.id);
   const [page, setPage] = useState<{ start: number; hasMore: boolean; pending: boolean } | null>(cached?.page ?? null);
   const endRef = useRef(cached?.end ?? 0);
-  const [state, setState] = useState<{ status: Status; preview: string; error?: string; choices?: Choices | null }>({ status: session.status, preview: '' });
+  const [state, setState] = useState<{ status: Status; preview: string; error?: string; choices?: Choices | null; suggestion?: string }>({ status: session.status, preview: '' });
   // the live screen grows at the bottom: keep its end in view
   const livePre = useRef<HTMLPreElement>(null);
   useLayoutEffect(() => {
@@ -511,7 +511,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
               }
               setPage((pg) => (pg && pg.pending ? { ...pg, pending: false } : pg));
             },
-            state: (st: { status: Status; preview: string; error?: string; mode?: string; update?: boolean; choices?: Choices | null }) => {
+            state: (st: { status: Status; preview: string; error?: string; mode?: string; update?: boolean; choices?: Choices | null; suggestion?: string }) => {
               setState(st);
               setUpdate(!!st.update);
               if (st.mode !== undefined) setClaude((c) => (c ? { ...c, mode: st.mode } : c));
@@ -727,6 +727,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
         <Composer
           sessionId={id}
           status={state.status}
+          suggestion={state.status === 'idle' ? state.suggestion : ''}
           slash={isClaude}
           agent={session.agent}
           onInteractive={onOpenTerminal}
@@ -757,6 +758,8 @@ export function Composer(props: {
   agent?: SessionInfo['agent'];
   onInteractive?: () => void;
   onPending: (text: string) => (ok: boolean) => void;
+  /** Claude Code's suggested next message: shown in the empty box, sent as is with 发送 / Enter */
+  suggestion?: string;
 }) {
   const { sessionId, status, onPending } = props;
   const draftKey = `tw:draft:${sessionId}`;
@@ -801,6 +804,7 @@ export function Composer(props: {
   };
   const uploading = files.some((f) => !f.path && !f.error);
   const ready = files.filter((f) => f.path);
+  const hint = !text.trim() && !ready.length ? props.suggestion || '' : '';
   // screenshots pasted into the box become attachments
   const onPaste = (e: ClipboardEvent) => {
     const pasted = Array.from(e.clipboardData?.files || []);
@@ -812,7 +816,7 @@ export function Composer(props: {
   // optimistic: clear the box and show the message at once, the request runs behind it
   const send = async () => {
     const paths = ready.map((f) => f.path!);
-    const msg = paths.length ? `${text.trim() || '请看这些文件：'}\n\n${paths.join('\n')}` : text;
+    const msg = paths.length ? `${text.trim() || '请看这些文件：'}\n\n${paths.join('\n')}` : text.trim() ? text : hint;
     if (!msg.trim() || sending || uploading) return;
     setSending(true);
     setErr('');
@@ -851,6 +855,12 @@ export function Composer(props: {
     if (e.key === 'Escape' && running && !e.isComposing) {
       e.preventDefault();
       stop();
+      return;
+    }
+    // Tab (or → at the start) takes the suggestion into the box to edit it
+    if (hint && (e.key === 'Tab' || e.key === 'ArrowRight') && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      update(hint);
       return;
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !coarse) {
@@ -935,7 +945,8 @@ export function Composer(props: {
           rows={1}
           onPaste={onPaste}
           value={text}
-          placeholder={coarse ? '输入消息' : '输入消息，Enter 发送，Shift+Enter 换行'}
+          class={hint ? 'has-hint' : ''}
+          placeholder={hint ? (coarse ? hint : `${hint}　（Enter 发送这条建议，Tab 填入修改）`) : coarse ? '输入消息' : '输入消息，Enter 发送，Shift+Enter 换行'}
           onInput={(e) => update((e.target as HTMLTextAreaElement).value)}
           onKeyDown={onKeyDown}
         />
@@ -945,7 +956,7 @@ export function Composer(props: {
             {!coarse && '停止'}
           </button>
         )}
-        <button class={`primary send ${coarse ? 'round' : ''}`} aria-label="发送" onMouseDown={(e) => e.preventDefault()} onClick={send} disabled={sending || uploading || (!text.trim() && !ready.length)}>
+        <button class={`primary send ${coarse ? 'round' : ''}`} aria-label="发送" onMouseDown={(e) => e.preventDefault()} onClick={send} disabled={sending || uploading || (!text.trim() && !ready.length && !hint)}>
           {sending ? '…' : coarse ? <Icon.send /> : '发送'}
         </button>
       </div>

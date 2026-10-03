@@ -84,3 +84,12 @@ test('queued messages mean a turn is running even when a narrow footer drops the
   const s = await screen(['  AIxF/z9t/3x/8AXo/4RiL', '', '❯ 感觉pid效果更好', '  ctrl+x ctrl+s to send now', SEP, '❯ Press up to edit queued messages', SEP, '  ⏵⏵ bypass permissions on · 1 shell, 1 monitor · …']);
   assert.equal(s.analyze().status, 'busy');
 });
+
+test("Claude's suggested next message: the dim text in an empty input box", async () => {
+  const dim = (t: string) => `\x1b[2m${t}\x1b[0m`;
+  const box = (prompt: string) => ['✻ Churned for 1m 11s', SEP, prompt, SEP, '  ⏵⏵ bypass permissions on (shift+tab to cycle)'];
+  assert.equal((await screen(box('❯ ' + dim('还有什么要改的吗')))).analyze().suggestion, '还有什么要改的吗');
+  // typed text is not a suggestion, and neither is the generic placeholder
+  assert.equal((await screen(box('❯ 我自己打的字'))).analyze().suggestion, '');
+  assert.equal((await screen(box('❯ ' + dim('Try "how does <filepath> work?"')))).analyze().suggestion, '');
+});

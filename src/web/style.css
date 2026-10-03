@@ -2242,3 +2242,8 @@ a.btn {
 .side-head .icon-btn.on {
   color: var(--accent);
 }
+/* Claude's suggested next message, waiting in the empty box */
+.composer textarea.has-hint::placeholder {
+  color: var(--dim);
+  opacity: 0.75;
+}

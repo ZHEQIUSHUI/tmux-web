@@ -67,6 +67,8 @@ export class LiveSession extends EventEmitter {
   background = '';
   /** the numbered menu on screen while waiting for a decision */
   choices: Choices | null = null;
+  /** Claude Code's suggested next message (dim in its input box), '' if none */
+  suggestion = '';
   /** when something last happened: the agent's log changed (or, for a shell, the screen did) */
   activityAt = 0;
   /** the conversation's title (Claude Code: /rename, agent name or the generated title) */
@@ -233,16 +235,20 @@ export class LiveSession extends EventEmitter {
       if (!this.screen) return;
       await this.screen.flush();
       if (!this.screen) return;
-      const { status, preview, mode, update, background, choices } = this.screen.analyze();
+      const { status, preview, mode, update, background, choices, suggestion: suggested } = this.screen.analyze();
+      // a turn that is still held busy (holdBusy) has no suggestion yet
+      const st = this.holdBusy(status);
+      const suggestion = st === 'idle' ? suggested : '';
       const choicesKey = JSON.stringify(choices);
-      if (mode !== this.mode || update !== this.update || background !== this.background || choicesKey !== JSON.stringify(this.choices)) {
+      if (mode !== this.mode || update !== this.update || background !== this.background || choicesKey !== JSON.stringify(this.choices) || suggestion !== this.suggestion) {
+        this.suggestion = suggestion;
         this.mode = mode;
         this.update = update;
         this.background = background;
         this.choices = choices;
         this.emit('state', this.stateView());
       }
-      this.setStatus(this.holdBusy(status), preview);
+      this.setStatus(st, preview);
     }, 250);
   }
 
@@ -283,7 +289,7 @@ export class LiveSession extends EventEmitter {
   }
 
   stateView() {
-    return { status: this.status, preview: this.preview, error: this.error, mode: this.mode, update: this.update, background: this.background, choices: this.choices };
+    return { status: this.status, preview: this.preview, error: this.error, mode: this.mode, update: this.update, background: this.background, choices: this.choices, suggestion: this.suggestion };
   }
 
   /**
