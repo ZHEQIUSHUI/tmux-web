@@ -138,3 +138,14 @@ test('images: embedded base64 is pulled out into tw-img references', () => {
   assert.equal(parseLine('claude', result, 0, false, imgs2)[0].text, '![图片](tw-img:0)');
   assert.equal(imgs2[0].mime, 'image/jpeg');
 });
+
+test('claude state: after /compact the context is the compacted size until the next reply', async () => {
+  const usage = (n: number) => ({ type: 'assistant', message: { model: 'claude-opus-5-5', role: 'assistant', content: [{ type: 'text', text: 'x' }], usage: { input_tokens: 1, cache_read_input_tokens: n, cache_creation_input_tokens: 0 } } });
+  const boundary = { type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', compactMetadata: { trigger: 'manual', preTokens: 862324, postTokens: 13117 } };
+  const f = writeLines('compact1.jsonl', [usage(862000), boundary, cc.user('summary', { isCompactSummary: true })]);
+  const st = await claudeState(local, f);
+  assert.equal(st.contextTokens, 13117);
+  assert.equal(st.contextWindow, 1_000_000);
+  const f2 = writeLines('compact2.jsonl', [usage(862000), boundary, usage(20000)]);
+  assert.equal((await claudeState(local, f2)).contextTokens, 20001);
+});

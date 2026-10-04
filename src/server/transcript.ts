@@ -396,6 +396,17 @@ export async function claudeState(host: Host, file: string): Promise<ClaudeState
       } catch {
         /* partial */
       }
+    } else if (line.includes('"compact_boundary"')) {
+      // /compact (or auto-compact): the context is now the summary; no reply has measured it yet
+      try {
+        const o = JSON.parse(line);
+        if (o.subtype !== 'compact_boundary' || o.isSidechain) continue;
+        const m = o.compactMetadata ?? {};
+        if (m.preTokens > 200_000) oneM = true;
+        st.contextTokens = Number(m.postTokens) || 0;
+      } catch {
+        /* partial */
+      }
     } else if (line.includes('"usage"') && line.includes('"assistant"')) {
       try {
         const o = JSON.parse(line);

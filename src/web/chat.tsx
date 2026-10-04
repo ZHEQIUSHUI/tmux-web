@@ -203,7 +203,7 @@ export function modelName(id?: string): string {
   return [...name, ver].filter(Boolean).join(' ');
 }
 
-export const fmtTokens = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+export const fmtTokens = (n: number) => (n >= 1e6 ? `${+(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 
 /** Thin bar above the chat: model · permission mode · context used. Tap for the control sheet. */
 export function ClaudeBar({ st, update, onOpen, onRestart }: { st: ClaudeState | null; update: boolean; onOpen: () => void; onRestart?: () => void }) {
@@ -224,11 +224,14 @@ export function ClaudeBar({ st, update, onOpen, onRestart }: { st: ClaudeState |
       {!st.model && <span class="cbar-loading">读取状态…</span>}
       {mode && <span class={`cbar-mode ${mode}`}>{MODE_LABEL[mode] ?? mode}</span>}
       {pct !== null && (
-        <span class="cbar-ctx">
+        <span class="cbar-ctx" title={`上下文已用 ${fmtTokens(st.contextTokens!)} / ${fmtTokens(st.contextWindow!)}`}>
           <span class="cbar-meter">
             <span class={`cbar-fill ${level}`} style={{ width: `${pct}%` }} />
           </span>
-          上下文 {fmtTokens(st.contextTokens!)} / {fmtTokens(st.contextWindow!)}
+          <span class={`cbar-num ${level}`}>
+            {fmtTokens(st.contextTokens!)}
+            <span class="cbar-win">/{fmtTokens(st.contextWindow!)}</span>
+          </span>
         </span>
       )}
       <span class="cbar-more">

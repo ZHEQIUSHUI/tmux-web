@@ -2247,3 +2247,57 @@ a.btn {
   color: var(--dim);
   opacity: 0.75;
 }
+/* narrow screens: the meter gives way first, the ⋯ never covers the numbers */
+.cbar-ctx {
+  overflow: hidden;
+}
+.cbar-meter {
+  flex-shrink: 1;
+  min-width: 28px;
+}
+.cbar-more {
+  flex-shrink: 0;
+  padding-right: 8px;
+}
+.cbar-num {
+  flex-shrink: 0;
+}
+@media (max-width: 420px) {
+  .cbar-main {
+    gap: 8px;
+  }
+  .cbar-meter {
+    width: 30px;
+    min-width: 16px;
+  }
+}
+/* phones: no room for the meter, the number carries the color */
+@media (max-width: 420px) {
+  .cbar-meter {
+    display: none;
+  }
+  .cbar-num.mid {
+    color: var(--busy);
+  }
+  .cbar-num.hi {
+    color: var(--danger);
+  }
+}
+@media (max-width: 340px) {
+  .cbar-win {
+    display: none;
+  }
+}
+/* the numbers stay whole; the model name and mode give way (ellipsis) when the bar is short */
+.cbar-main .cbar-ctx {
+  flex-shrink: 0;
+  overflow: visible;
+}
+.cbar-main .cbar-model,
+.cbar-main .cbar-mode {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
