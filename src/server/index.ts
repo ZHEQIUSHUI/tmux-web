@@ -511,7 +511,7 @@ route('POST', '/_tw/api/sessions/:id/upload', async (req, res, [id]) => {
         Buffer.concat(chunks),
       )
     ).toString();
-    sendJson(req, res, 200, { path, name: base, size });
+    sendJson(req, res, 200, { path, rel: `.tmux-web/uploads/${stamp}-${base}`, name: base, size });
   } catch (e: any) {
     throw new HttpError(502, `上传失败：${e.message}`);
   }

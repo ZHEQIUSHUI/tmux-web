@@ -197,3 +197,6 @@ export async function copyText(text: string): Promise<boolean> {
   ta.remove();
   return ok;
 }
+
+/** A path as typed into a message: quoted when it has spaces or shell-special characters. */
+export const quotePath = (p: string) => (/[\s"'$`\\]/.test(p) ? `"${p.replace(/(["\\$`])/g, '\\$1')}"` : p);

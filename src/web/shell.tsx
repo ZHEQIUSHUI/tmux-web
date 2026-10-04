@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api, type Folder, type HostInfo, type Notice, type Me, type SessionInfo } from './api';
-import { STATUS_LABEL, liveStream, store, useHashFiles, useHashSession, useNarrow } from './lib';
+import { STATUS_LABEL, liveStream, quotePath, store, useHashFiles, useHashSession, useNarrow } from './lib';
 import { Icon } from './ui';
 import { ChatView } from './chat';
 import { TerminalView } from './terminal-view';
@@ -82,8 +82,8 @@ export function SessionPane({ me, session, folders, narrow, onBack, onNewAt }: {
             api: `/_tw/api/sessions/${session.id}`,
             key: `s${session.id}`,
             global: false,
-            // Claude Code reads "@path" as a file reference
-            mention: session.access === 'control' && session.agent !== 'bash' ? (p) => (session.agent === 'claude' ? `@${p || '.'}` : p || '.') : undefined,
+            // a plain path: the agent reads it when it needs to ("@path" would pull it all in at once)
+            mention: session.access === 'control' && session.agent !== 'bash' ? (p) => quotePath(p || '.') : undefined,
             onInsert: insert,
             onNewHere: (dir) => onNewAt(session.hostId, dir),
           }}

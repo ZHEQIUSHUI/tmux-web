@@ -2519,3 +2519,25 @@ a.btn {
 .cbar-update:disabled {
   opacity: 1;
 }
+/* file picker (paperclip → 服务器上的文件) */
+.modal.picker {
+  display: flex;
+  flex-direction: column;
+  height: min(78vh, 720px);
+  padding-bottom: 8px;
+}
+.modal.picker .files {
+  flex: 1;
+  min-height: 0;
+  margin: 4px -18px 0;
+}
+.fv-bar[hidden] {
+  display: none;
+}
+.fv-pick {
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+.fv-pick-here {
+  white-space: nowrap;
+}

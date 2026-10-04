@@ -129,7 +129,7 @@ export const Icon = {
 
 // ---------------- modals ----------------
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: any }) {
+export function Modal({ title, onClose, children, class: cls }: { title: string; onClose: () => void; children: any; class?: string }) {
   useEffect(() => {
     const on = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     addEventListener('keydown', on);
@@ -137,7 +137,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   }, [onClose]);
   return (
     <div class="overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div class="modal card">
+      <div class={`modal card ${cls ?? ''}`}>
         <div class="modal-head">
           <h2>{title}</h2>
           <button class="ghost" onClick={onClose} aria-label="关闭">

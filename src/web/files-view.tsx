@@ -21,6 +21,8 @@ export interface FilesTarget {
   onInsert?: (text: string) => void;
   /** start a new session in this (absolute) directory */
   onNewHere?: (dir: string) => void;
+  /** a picker: tapping a file (or "选择" on a folder) hands its path over instead of opening it */
+  onPick?: (path: string, dir: boolean) => void;
 }
 
 interface Entry {
@@ -106,7 +108,7 @@ export function FilesView({ target }: { target: FilesTarget }) {
 
   return (
     <div class="files">
-      <div class="fv-bar">
+      <div class="fv-bar" hidden={!!target.onPick}>
         <div class="tabs fv-mode">
           <button class={mode === 'files' ? 'on' : ''} onClick={() => (setMode('files'), setDoc(null))}>
             文件
@@ -129,7 +131,14 @@ export function FilesView({ target }: { target: FilesTarget }) {
         ) : mode === 'changes' ? (
           <ChangeList target={target} dir={dir} onOpen={openDoc} />
         ) : (
-          <DirList target={target} path={dir} onRoot={setRoot} onDir={openDir} onFile={(p) => openDoc({ kind: 'file', path: p })} onActions={(path, d) => setActions({ path, dir: d })} />
+          <DirList
+            target={target}
+            path={dir}
+            onRoot={setRoot}
+            onDir={openDir}
+            onFile={(p) => (target.onPick ? target.onPick(p, false) : openDoc({ kind: 'file', path: p }))}
+            onActions={(path, d) => setActions({ path, dir: d })}
+          />
         )}
       </div>
       {a && (
@@ -172,6 +181,8 @@ function useLoad<T>(url: string, deps: unknown[]): { data: T | null; loaded: boo
 function DirList(props: { target: FilesTarget; path: string; onRoot: (r: string) => void; onDir: (p: string) => void; onFile: (p: string) => void; onActions: (path: string, dir: boolean) => void }) {
   const { target, path, onRoot, onActions } = props;
   const go = (p: string, dir: boolean) => (dir ? props.onDir(p) : props.onFile(p));
+  // picking: files are picked by a tap, folders by their 选择 button (a tap opens them)
+  const pickRow = (p: string, dir: boolean) => (target.onPick ? (dir ? () => target.onPick!(p, true) : null) : undefined);
   const [hidden, setHidden] = useState(store.get('tw:files:hidden') === '1');
   const [find, setFind] = useState('');
   const [found, setFound] = useState<{ path: string; dir: boolean }[] | null>(null);
@@ -226,7 +237,7 @@ function DirList(props: { target: FilesTarget; path: string; onRoot: (r: string)
         <div class="fv-list">
           {!found.length && <p class="dim small pad">没有找到</p>}
           {found.map((f) => (
-            <Row key={f.path} name={f.path} dir={f.dir} onOpen={() => (setFind(''), go(f.path, f.dir))} onActions={() => onActions(f.path, f.dir)} />
+            <Row key={f.path} name={f.path} dir={f.dir} onOpen={() => (setFind(''), go(f.path, f.dir))} onActions={() => onActions(f.path, f.dir)} onPick={pickRow(f.path, f.dir)} />
           ))}
         </div>
       ) : (
@@ -254,9 +265,15 @@ function DirList(props: { target: FilesTarget; path: string; onRoot: (r: string)
                   </button>
                 </>
               )}
-              <button class="icon-btn" onClick={() => onActions(path, true)} aria-label="这个目录的操作">
-                <Icon.more />
-              </button>
+              {target.onPick ? (
+                <button class="ghost small fv-pick-here" onClick={() => target.onPick!(path || '.', true)}>
+                  选这个文件夹
+                </button>
+              ) : (
+                <button class="icon-btn" onClick={() => onActions(path, true)} aria-label="这个目录的操作">
+                  <Icon.more />
+                </button>
+              )}
             </span>
           </div>
           {error && (
@@ -280,6 +297,7 @@ function DirList(props: { target: FilesTarget; path: string; onRoot: (r: string)
                   meta={e.type === 'd' ? ago(e.mtime) : `${size(e.size)} · ${ago(e.mtime)}`}
                   onOpen={() => go(p, e.type === 'd')}
                   onActions={() => onActions(p, e.type === 'd')}
+                  onPick={pickRow(p, e.type === 'd')}
                 />
               );
             })}
@@ -291,7 +309,8 @@ function DirList(props: { target: FilesTarget; path: string; onRoot: (r: string)
   );
 }
 
-function Row({ name, dir, meta, onOpen, onActions }: { name: string; dir: boolean; meta?: string; onOpen: () => void; onActions: () => void }) {
+/** onPick: a function = a 选择 button, null = nothing (the row itself picks), undefined = the ⋯ menu */
+function Row({ name, dir, meta, onOpen, onActions, onPick }: { name: string; dir: boolean; meta?: string; onOpen: () => void; onActions: () => void; onPick?: (() => void) | null }) {
   return (
     <div class="fv-row">
       <button class="fv-open" onClick={onOpen}>
@@ -299,9 +318,17 @@ function Row({ name, dir, meta, onOpen, onActions }: { name: string; dir: boolea
         <span class="fv-name">{name}</span>
         {meta && <span class="fv-meta dim">{meta}</span>}
       </button>
-      <button class="icon-btn fv-more" onClick={onActions} aria-label="操作">
-        <Icon.more />
-      </button>
+      {onPick ? (
+        <button class="ghost small fv-pick" onClick={onPick}>
+          选择
+        </button>
+      ) : (
+        onPick === undefined && (
+          <button class="icon-btn fv-more" onClick={onActions} aria-label="操作">
+            <Icon.more />
+          </button>
+        )
+      )}
     </div>
   );
 }

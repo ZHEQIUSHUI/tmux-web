@@ -3,7 +3,8 @@ import { api, type ChatItem, type Page, type SessionInfo, type Status } from './
 import { renderMarkdown, splitImages } from './markdown';
 import { hydrateMermaid } from './mermaid-lazy';
 import { MAX_SESSIONS, saveChat } from './chat-store';
-import { coarsePointer, liveStream, norm, store } from './lib';
+import { coarsePointer, liveStream, norm, quotePath, store } from './lib';
+import { FilesView } from './files-view';
 import { CopyBtn, Icon, Modal } from './ui';
 
 // ---------------- chat ----------------
@@ -840,9 +841,37 @@ export function Composer(props: {
     store.set(draftKey, v || null);
   };
 
-  // attachments: uploaded to the host first, their paths go into the message for the agent to read
-  const [files, setFiles] = useState<{ key: number; name: string; path?: string; error?: string }[]>([]);
+  // Files go into the message as paths, where the cursor was: picked on the host, or uploaded
+  // from this device first (the picker / file dialog takes the focus, so the cursor is kept).
+  const caret = useRef<{ start: number; end: number; text: string } | null>(null);
+  const keepCaret = () => {
+    const el = ta.current;
+    caret.current = el ? { start: el.selectionStart, end: el.selectionEnd, text: el.value } : null;
+  };
+  const insertPaths = (paths: string[]) => {
+    const el = ta.current;
+    const cur = el?.value ?? '';
+    const c = caret.current;
+    // the kept cursor if nothing changed since; else where the cursor is now, or the end
+    const [start, end] = c && c.text === cur ? [c.start, c.end] : el && document.activeElement === el ? [el.selectionStart, el.selectionEnd] : [cur.length, cur.length];
+    const before = cur.slice(0, start);
+    const after = cur.slice(end);
+    const piece = (before && !/\s$/.test(before) ? ' ' : '') + paths.map(quotePath).join(' ') + (!after || !/^\s/.test(after) ? ' ' : '');
+    const next = before + piece + after;
+    const pos = before.length + piece.length;
+    update(next);
+    caret.current = { start: pos, end: pos, text: next }; // the next one goes after this one
+    requestAnimationFrame(() => {
+      const t = ta.current;
+      if (!t) return;
+      t.focus();
+      t.setSelectionRange(pos, pos);
+    });
+  };
+  const [files, setFiles] = useState<{ key: number; name: string; error?: string }[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [attachMenu, setAttachMenu] = useState(false);
+  const [picker, setPicker] = useState(false);
   const upload = (list: FileList | File[]) => {
     for (const file of Array.from(list)) {
       const key = Date.now() + Math.random();
@@ -852,31 +881,30 @@ export function Composer(props: {
         .then(async (r) => {
           const d = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-          setFiles((fs) => fs.map((f) => (f.key === key ? { ...f, path: d.path } : f)));
+          setFiles((fs) => fs.filter((f) => f.key !== key));
+          insertPaths([d.rel || d.path]);
         })
         .catch((e) => setFiles((fs) => fs.map((f) => (f.key === key ? { ...f, error: e.message } : f))));
     }
   };
-  const uploading = files.some((f) => !f.path && !f.error);
-  const ready = files.filter((f) => f.path);
-  const hint = !text.trim() && !ready.length ? props.suggestion || '' : '';
-  // screenshots pasted into the box become attachments
+  const uploading = files.some((f) => !f.error);
+  const hint = !text.trim() && !uploading ? props.suggestion || '' : '';
+  // screenshots pasted into the box are uploaded too
   const onPaste = (e: ClipboardEvent) => {
     const pasted = Array.from(e.clipboardData?.files || []);
     if (!pasted.length) return;
     e.preventDefault();
+    keepCaret();
     upload(pasted);
   };
 
   // optimistic: clear the box and show the message at once, the request runs behind it
   const send = async () => {
-    const paths = ready.map((f) => f.path!);
-    const msg = paths.length ? `${text.trim() || '请看这些文件：'}\n\n${paths.join('\n')}` : text.trim() ? text : hint;
+    const msg = text.trim() ? text : hint;
     if (!msg.trim() || sending || uploading) return;
     setSending(true);
     setErr('');
     update('');
-    setFiles([]);
     // slash commands don't show up as chat messages: no placeholder bubble for them
     // /commands and !shell lines never show up as a message of yours in the log
     const isCommand = /^\s*[/!]/.test(msg);
@@ -961,8 +989,8 @@ export function Composer(props: {
       {files.length > 0 && (
         <div class="attachments">
           {files.map((f) => (
-            <span key={f.key} class={`att ${f.error ? 'err' : f.path ? 'ok' : 'busy'}`} title={f.error || f.path || '上传中…'}>
-              {f.path ? '📎' : f.error ? '⚠' : <span class="spinner small-spin" />}
+            <span key={f.key} class={`att ${f.error ? 'err' : 'busy'}`} title={f.error || '上传中，完成后路径会插入输入框'}>
+              {f.error ? '⚠' : <span class="spinner small-spin" />}
               <span class="att-name">{f.name}</span>
               <button aria-label="移除" onClick={() => setFiles((fs) => fs.filter((x) => x.key !== f.key))}>
                 ✕
@@ -979,9 +1007,46 @@ export function Composer(props: {
         )}
         {props.agent !== 'bash' && (
           <>
-            <button class="icon-btn attach" aria-label="添加图片或文件" title="添加图片或文件（也可以直接粘贴截图）" onMouseDown={(e) => e.preventDefault()} onClick={() => fileInput.current?.click()}>
+            <button
+              class="icon-btn attach"
+              aria-label="添加文件"
+              title="插入文件路径：服务器上的文件，或从本机上传（也可以直接粘贴截图）"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                keepCaret();
+                setAttachMenu(true);
+              }}
+            >
               <Icon.clip />
             </button>
+            {attachMenu && (
+              <Modal title="添加文件" onClose={() => setAttachMenu(false)}>
+                <p class="dim small">选中的文件会以路径插入输入框的光标处。</p>
+                <div class="sheet-list">
+                  <button onClick={() => (setAttachMenu(false), setPicker(true))}>
+                    服务器上的文件<span class="check dim">选文件或文件夹</span>
+                  </button>
+                  <button onClick={() => (setAttachMenu(false), fileInput.current?.click())}>
+                    从本机上传<span class="check dim">图片、文档等</span>
+                  </button>
+                </div>
+              </Modal>
+            )}
+            {picker && (
+              <Modal title="选择文件" class="picker" onClose={() => setPicker(false)}>
+                <FilesView
+                  target={{
+                    api: `/_tw/api/sessions/${sessionId}`,
+                    key: `pick${sessionId}`,
+                    global: false,
+                    onPick: (p) => {
+                      setPicker(false);
+                      insertPaths([p]);
+                    },
+                  }}
+                />
+              </Modal>
+            )}
             <input
               ref={fileInput}
               type="file"
@@ -1011,7 +1076,7 @@ export function Composer(props: {
             {!coarse && '停止'}
           </button>
         )}
-        <button class={`primary send ${coarse ? 'round' : ''}`} aria-label="发送" onMouseDown={(e) => e.preventDefault()} onClick={send} disabled={sending || uploading || (!text.trim() && !ready.length && !hint)}>
+        <button class={`primary send ${coarse ? 'round' : ''}`} aria-label="发送" onMouseDown={(e) => e.preventDefault()} onClick={send} disabled={sending || uploading || (!text.trim() && !hint)}>
           {sending ? '…' : coarse ? <Icon.send /> : '发送'}
         </button>
       </div>
