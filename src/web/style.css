@@ -2301,3 +2301,33 @@ a.btn {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* the recent section's reach: slider with uneven steps (10 min … 1 h … 24 h) */
+.reach {
+  padding: 8px 4px 4px;
+}
+.reach.off {
+  opacity: 0.45;
+}
+.reach-value {
+  font-size: 22px;
+  font-weight: 600;
+  text-align: center;
+  margin-bottom: 10px;
+}
+.reach input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+  height: 28px;
+}
+.reach-ticks {
+  position: relative;
+  height: 22px;
+  margin: 0 8px;
+}
+.reach-ticks .link {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+}

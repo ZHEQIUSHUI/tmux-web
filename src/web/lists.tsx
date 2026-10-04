@@ -8,62 +8,86 @@ import { Chevron, Icon, Modal, ThemeCycle, ThemeSwitch } from './ui';
 
 // ---------------- activity: order, unread ----------------
 
-/** Waiting for you first, then running, then most recently active. */
-/** How far back the recent section reaches, in minutes (0 = no recent section); per browser. */
-const RECENT_CHOICES: [number, string][] = [
-  [60, '1 小时'],
-  [180, '3 小时'],
-  [360, '6 小时'],
-  [720, '12 小时'],
-  [1440, '24 小时'],
-  [0, '不显示这个分组'],
-];
-const readRecentMinutes = () => {
+/**
+ * How far back the recent section reaches, per browser: a slider over 10-minute steps up to an
+ * hour, then hours up to a day. Hidden is a separate switch, so the reach is kept for turning it back on.
+ */
+const RECENT_STEPS = [10, 20, 30, 40, 50, ...Array.from({ length: 24 }, (_, i) => (i + 1) * 60)];
+const snap = (m: number) => RECENT_STEPS.reduce((a, b) => (Math.abs(b - m) < Math.abs(a - m) ? b : a));
+const readReach = () => {
   const v = Number(store.get('tw:recent-min') ?? 60);
-  // a choice that no longer exists (15 / 30 minutes) falls back to the default
-  return RECENT_CHOICES.some(([m]) => m === v) ? v : 60;
+  return v > 0 && Number.isFinite(v) ? snap(v) : 60;
 };
-/** The setting, shared by every list on the page. */
+// "0" was how hiding used to be stored
+const readHidden = () => store.get('tw:recent-off') === '1' || store.get('tw:recent-min') === '0';
+const recentLabel = (m: number) => (!m ? '不显示' : m < 60 ? `${m} 分钟` : `${m / 60} 小时`);
+
+/** The setting, shared by every list on the page: minutes, 0 = section hidden. */
 export function useRecentMinutes(): [number, (m: number) => void] {
-  const [min, setMin] = useState(readRecentMinutes);
+  const read = () => (readHidden() ? 0 : readReach());
+  const [min, setMin] = useState(read);
   useEffect(() => {
-    const on = () => setMin(readRecentMinutes());
+    const on = () => setMin(read());
     addEventListener('tw:recent', on);
     return () => removeEventListener('tw:recent', on);
   }, []);
   return [
     min,
     (m) => {
-      store.set('tw:recent-min', String(m));
+      if (m) store.set('tw:recent-min', String(snap(m)));
+      store.set('tw:recent-off', m ? null : '1');
       dispatchEvent(new Event('tw:recent'));
     },
   ];
 }
 
 function RecentModal({ minutes, onPick, onClose }: { minutes: number; onPick: (m: number) => void; onClose: () => void }) {
+  const [reach, setReach] = useState(minutes || readReach());
+  const hidden = !minutes;
+  const idx = RECENT_STEPS.indexOf(reach);
+  // tick labels under the slider, at their steps
+  const ticks: [number, string][] = [
+    [10, '10分'],
+    [60, '1时'],
+    [360, '6时'],
+    [720, '12时'],
+    [1440, '24时'],
+  ];
+  const at = (m: number) => `${(RECENT_STEPS.indexOf(m) / (RECENT_STEPS.length - 1)) * 100}%`;
   return (
     <Modal title="「最近」分组" onClose={onClose}>
       <p class="dim small">显示多久以内有过活动的会话。正在运行、等待确认的会话总会显示。只对这个浏览器生效。</p>
-      <div class="sheet-list">
-        {RECENT_CHOICES.map(([m, label]) => (
-          <button
-            key={m}
-            class={m === minutes ? 'picked' : ''}
-            onClick={() => {
-              onPick(m);
-              onClose();
-            }}
-          >
-            {label}
-            {m === minutes && <span class="check">✓</span>}
-          </button>
-        ))}
+      <div class={`reach ${hidden ? 'off' : ''}`}>
+        <div class="reach-value">{recentLabel(reach)}以内</div>
+        <input
+          type="range"
+          min={0}
+          max={RECENT_STEPS.length - 1}
+          step={1}
+          value={idx}
+          disabled={hidden}
+          aria-label="时间范围"
+          onInput={(e) => {
+            const m = RECENT_STEPS[Number((e.target as HTMLInputElement).value)];
+            setReach(m);
+            onPick(m); // the list follows as you slide
+          }}
+        />
+        <div class="reach-ticks">
+          {ticks.map(([m, label]) => (
+            <button key={m} class="link" style={{ left: at(m) }} disabled={hidden} onClick={() => (setReach(m), onPick(m))}>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
+      <label class="sheet-toggle">
+        <span>不显示这个分组</span>
+        <input type="checkbox" checked={hidden} onChange={(e) => onPick((e.target as HTMLInputElement).checked ? 0 : reach)} />
+      </label>
     </Modal>
   );
 }
-
-const recentLabel = (m: number) => (RECENT_CHOICES.find(([v]) => v === m)?.[1] ?? `${m} 分钟`).replace('不显示这个分组', '不显示');
 
 /** Sessions in use lately: active within `minutes`, or working / waiting right now. */
 export function recentSessions(list: SessionInfo[], minutes: number): SessionInfo[] {
@@ -72,6 +96,7 @@ export function recentSessions(list: SessionInfo[], minutes: number): SessionInf
 }
 const folderName = (s: SessionInfo, folders: Folder[]) => folders.find((f) => f.id === s.folderId)?.name ?? '未分组';
 
+/** Waiting for you first, then running, then most recently active. */
 export function sortSessions(list: SessionInfo[]): SessionInfo[] {
   const rank = (s: SessionInfo) => (s.status === 'waiting' ? 0 : s.status === 'busy' ? 1 : 2);
   return [...list].sort((a, b) => rank(a) - rank(b) || b.activityAt - a.activityAt);
