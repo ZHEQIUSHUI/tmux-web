@@ -2337,51 +2337,93 @@ a.btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border: 1px solid var(--line);
-  background: var(--panel);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--dim);
   border-radius: 6px;
-  padding: 2px 8px;
+  padding: 3px 5px;
   font-size: 12px;
   line-height: 18px;
   cursor: pointer;
+}
+.copy-btn:not(.ghost):not(.link) {
+  opacity: 0.6;
+}
+.copy-btn:not(.ghost):not(.link):hover {
+  opacity: 1;
+  border-color: var(--line);
+  background: var(--panel);
 }
 .copy-btn:hover {
   color: var(--text);
 }
 .copy-btn.ok {
   color: var(--idle);
-  border-color: var(--idle);
+  opacity: 1 !important;
 }
 .code-wrap,
 .quote-wrap {
   position: relative;
 }
-.code-copy,
-.quote-copy {
+/* GitHub-style copy for code blocks and quotes: a quiet icon in the corner */
+.md-copy {
   position: absolute;
   top: 6px;
   right: 6px;
   z-index: 1;
-  opacity: 0.85;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  opacity: 0.55;
+  cursor: pointer;
+  transition:
+    opacity 0.15s,
+    background 0.15s,
+    border-color 0.15s;
+}
+.md-copy:hover,
+.md-copy:focus-visible {
+  opacity: 1;
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--text);
+}
+.md-copy.ok {
+  opacity: 1;
+  color: var(--idle);
+}
+.md-copy.fail {
+  opacity: 1;
+  color: var(--danger);
+}
+.quote-wrap .md-copy {
+  top: 0;
+  right: 0;
 }
 .quote-wrap blockquote {
-  padding-right: 52px;
+  padding-right: 32px;
 }
 .code-wrap pre {
-  padding-right: 56px;
+  padding-right: 38px;
 }
-/* desktop: shown on hover, so long reading isn't cluttered; phones: always there */
+/* desktop: only on hover, like GitHub */
 @media (hover: hover) {
-  .code-copy,
-  .quote-copy {
+  .md-copy {
     opacity: 0;
-    transition: opacity 0.15s;
   }
-  .code-wrap:hover .code-copy,
-  .quote-wrap:hover .quote-copy,
-  .code-copy.ok,
-  .quote-copy.ok {
+  .code-wrap:hover .md-copy,
+  .quote-wrap:hover .md-copy {
+    opacity: 0.7;
+  }
+  .md-copy.ok,
+  .md-copy.fail,
+  .md-copy:hover {
     opacity: 1;
   }
 }
