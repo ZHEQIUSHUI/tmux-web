@@ -11,16 +11,17 @@ import { Chevron, Icon, Modal, ThemeCycle, ThemeSwitch } from './ui';
 /** Waiting for you first, then running, then most recently active. */
 /** How far back the recent section reaches, in minutes (0 = no recent section); per browser. */
 const RECENT_CHOICES: [number, string][] = [
-  [15, '15 分钟'],
-  [30, '30 分钟'],
   [60, '1 小时'],
   [180, '3 小时'],
+  [360, '6 小时'],
+  [720, '12 小时'],
   [1440, '24 小时'],
   [0, '不显示这个分组'],
 ];
 const readRecentMinutes = () => {
-  const v = Number(store.get('tw:recent-min') ?? 30);
-  return Number.isFinite(v) && v >= 0 ? v : 30;
+  const v = Number(store.get('tw:recent-min') ?? 60);
+  // a choice that no longer exists (15 / 30 minutes) falls back to the default
+  return RECENT_CHOICES.some(([m]) => m === v) ? v : 60;
 };
 /** The setting, shared by every list on the page. */
 export function useRecentMinutes(): [number, (m: number) => void] {
