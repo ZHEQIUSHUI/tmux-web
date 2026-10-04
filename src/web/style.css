@@ -2361,20 +2361,15 @@ a.btn {
   color: var(--idle);
   opacity: 1 !important;
 }
-.code-wrap,
-.quote-wrap {
-  position: relative;
-}
-/* GitHub-style copy for code blocks and quotes: a quiet icon in the corner */
+/* GitHub-style copy for code blocks and quotes: a quiet icon floating in the corner, so only the
+   line or two beside it make room */
 .md-copy {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 1;
+  float: right;
   display: grid;
   place-items: center;
   width: 28px;
   height: 28px;
+  margin: -4px -6px 0 8px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -2403,14 +2398,7 @@ a.btn {
   color: var(--danger);
 }
 .quote-wrap .md-copy {
-  top: 0;
-  right: 0;
-}
-.quote-wrap blockquote {
-  padding-right: 32px;
-}
-.code-wrap pre {
-  padding-right: 38px;
+  margin: 0 0 0 8px;
 }
 /* desktop: only on hover, like GitHub */
 @media (hover: hover) {
@@ -2418,7 +2406,8 @@ a.btn {
     opacity: 0;
   }
   .code-wrap:hover .md-copy,
-  .quote-wrap:hover .md-copy {
+  .quote-wrap:hover .md-copy,
+  .md-copy:focus-visible {
     opacity: 0.7;
   }
   .md-copy.ok,

@@ -86,7 +86,8 @@ const md = new Marked({
     code({ text, lang }: Tokens.Code) {
       const kind = lang?.trim().split(/\s/)[0].toLowerCase() ?? '';
       if (kind !== 'mermaid')
-        return `<div class="code-wrap"><button type="button" class="md-copy" data-copy-code title="复制" aria-label="复制">${COPY_ICON}</button><pre><code${kind ? ` class="language-${esc(kind)}"` : ''}>${esc(text.replace(/\n$/, ''))}</code></pre></div>`;
+        // the button floats in the corner: only the lines beside it make room
+        return `<pre class="code-wrap"><button type="button" class="md-copy" data-copy-code title="复制" aria-label="复制">${COPY_ICON}</button><code${kind ? ` class="language-${esc(kind)}"` : ''}>${esc(text.replace(/\n$/, ''))}</code></pre>`;
       return `<div class="mermaid-block" data-src="${esc(text)}"><pre><code>${esc(text)}</code></pre><button class="link" type="button">显示图表</button></div>`;
     },
     // a quote is often something to pass on ("可以直接转给…"): copy it as Markdown, without the "> "
@@ -96,7 +97,7 @@ const md = new Marked({
         .split('\n')
         .map((l) => l.replace(/^ {0,3}> ?/, ''))
         .join('\n');
-      return `<div class="quote-wrap"><button type="button" class="md-copy" data-copy-text="${esc(source)}" title="复制这段" aria-label="复制这段">${COPY_ICON}</button><blockquote>${this.parser.parse(tokens)}</blockquote></div>`;
+      return `<blockquote class="quote-wrap"><button type="button" class="md-copy" data-copy-text="${esc(source)}" title="复制这段" aria-label="复制这段">${COPY_ICON}</button>${this.parser.parse(tokens)}</blockquote>`;
     },
     image({ href, text }: Tokens.Image) {
       const url = imageUrl(href);
@@ -121,7 +122,7 @@ document.addEventListener('click', (e) => {
   const btn = (e.target as Element | null)?.closest?.<HTMLButtonElement>('[data-copy-code],[data-copy-text]');
   if (!btn) return;
   e.stopPropagation();
-  const text = btn.dataset.copyText ?? btn.parentElement?.querySelector('pre')?.textContent ?? '';
+  const text = btn.dataset.copyText ?? btn.closest('pre')?.querySelector('code')?.textContent ?? '';
   void copyText(text).then((ok) => {
     btn.innerHTML = ok ? CHECK_ICON : COPY_ICON;
     btn.classList.add(ok ? 'ok' : 'fail');
