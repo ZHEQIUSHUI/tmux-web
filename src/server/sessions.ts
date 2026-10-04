@@ -345,6 +345,15 @@ export class LiveSession extends EventEmitter {
     this.write(cmd + '\r');
     this.update = false;
     this.emit('state', this.stateView());
+    // answer once Claude is back (its input box, or a question it asks on start), so the page's
+    // "重启中…" ends when it is really ready; a slow start just ends the wait
+    const until = Date.now() + 25_000;
+    await new Promise((r) => setTimeout(r, 800));
+    while (Date.now() < until) {
+      await this.screen?.flush();
+      if (!this.screen || this.screen.claudeReady(cmd.slice(0, 40)) || this.status === 'waiting') break;
+      await new Promise((r) => setTimeout(r, 300));
+    }
   }
 
   get alive() {

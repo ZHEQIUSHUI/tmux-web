@@ -2460,3 +2460,62 @@ a.btn {
     opacity: 1;
   }
 }
+/* restart feedback on the bar's chip */
+.cbar-update {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition:
+    transform 0.1s,
+    background 0.2s;
+}
+.cbar-update:active {
+  transform: scale(0.94);
+}
+.cbar-update.run {
+  animation: cbar-pulse 1.2s ease-in-out infinite;
+  cursor: progress;
+}
+.cbar-update.done {
+  background: var(--idle);
+  animation: cbar-pop 0.25s ease-out;
+}
+.cbar-update.fail {
+  background: var(--danger);
+  animation: cbar-shake 0.3s;
+}
+.cbar-spin {
+  width: 11px;
+  height: 11px;
+  border-width: 2px;
+  border-color: rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+}
+@keyframes cbar-pulse {
+  50% {
+    opacity: 0.7;
+  }
+}
+@keyframes cbar-pop {
+  from {
+    transform: scale(0.85);
+  }
+}
+@keyframes cbar-shake {
+  25% {
+    transform: translateX(-3px);
+  }
+  75% {
+    transform: translateX(3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cbar-update.run,
+  .cbar-update.done,
+  .cbar-update.fail {
+    animation: none;
+  }
+}
+.cbar-update:disabled {
+  opacity: 1;
+}

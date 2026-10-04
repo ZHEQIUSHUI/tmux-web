@@ -217,7 +217,10 @@ export function modelName(id?: string): string {
 export const fmtTokens = (n: number) => (n >= 1e6 ? `${+(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 
 /** Thin bar above the chat: model · permission mode · context used. Tap for the control sheet. */
-export function ClaudeBar({ st, update, onOpen, onRestart }: { st: ClaudeState | null; update: boolean; onOpen: () => void; onRestart?: () => void }) {
+/** Where a restart of Claude stands, for the bar's feedback. */
+export type Restart = '' | 'run' | 'done' | 'fail';
+
+export function ClaudeBar({ st, update, restart = '', onOpen, onRestart }: { st: ClaudeState | null; update: boolean; restart?: Restart; onOpen: () => void; onRestart?: () => void }) {
   // always rendered (fixed height) so the chat below doesn't jump when the data arrives
   st ||= {};
   const mode = st.mode || st.permissionMode || '';
@@ -225,9 +228,24 @@ export function ClaudeBar({ st, update, onOpen, onRestart }: { st: ClaudeState |
   const level = pct === null ? '' : pct >= 80 ? 'hi' : pct >= 50 ? 'mid' : 'lo';
   return (
     <div class="cbar">
-      {update && onRestart && (
-        <button class="cbar-update" onClick={onRestart} title="Claude Code 已更新，重启后生效（对话会接着继续）">
-          有新版本 · 重启
+      {(update || restart) && onRestart && (
+        <button
+          class={`cbar-update ${restart}`}
+          onClick={onRestart}
+          disabled={restart === 'run'}
+          title={restart === 'run' ? '正在重启 Claude，对话会接着继续' : 'Claude Code 已更新，重启后生效（对话会接着继续）'}
+        >
+          {restart === 'run' ? (
+            <>
+              <span class="spinner cbar-spin" /> 重启中…
+            </>
+          ) : restart === 'done' ? (
+            '✓ 已重启'
+          ) : restart === 'fail' ? (
+            '重启失败'
+          ) : (
+            '有新版本 · 重启'
+          )}
         </button>
       )}
       <button class="cbar-main" onClick={onOpen} title="Claude 状态与设置">
@@ -614,7 +632,26 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
       .then(() => isInteractive(cmd) && onOpenTerminal())
       .catch((e) => setError(e.message));
   const sendKeys = (keys: string[]) => api('POST', `/_tw/api/sessions/${id}/keys`, { keys }).catch((e) => setError(e.message));
-  const restartClaude = () => restartAgent(session, state.status).catch((e) => setError(e.message));
+  // restart feedback: "重启中…" at once, "✓ 已重启" when Claude is back (or after a while), "重启失败"
+  const [restart, setRestart] = useState<Restart>('');
+  // the server answers once Claude is back up (its input box is on screen), usually a few seconds
+  const restartClaude = async () => {
+    if (restart === 'run') return;
+    setRestart('run');
+    const started = Date.now();
+    try {
+      if (!(await restartAgent(session, state.status))) return setRestart('');
+      // a spinner that flashes for a split second reads as a glitch
+      await new Promise((r) => setTimeout(r, Math.max(0, 700 - (Date.now() - started))));
+      setRestart('done');
+      setTimeout(() => setRestart((r) => (r === 'done' ? '' : r)), 2500);
+    } catch (e: any) {
+      setError(e.message);
+      setRestart('fail');
+      setTimeout(() => setRestart((r) => (r === 'fail' ? '' : r)), 3000);
+    }
+  };
+
   // Claude Code's own rewind menu: pick the message to go back before, optionally undoing code too
   const canRewind = isClaude && session.access === 'control';
   const rewind = () => {
@@ -674,7 +711,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
 
   return (
     <div class="chat">
-      {isClaude && <ClaudeBar st={claude} update={update} onOpen={() => setPanel(true)} onRestart={session.access === 'control' ? restartClaude : undefined} />}
+      {isClaude && <ClaudeBar st={claude} update={update} restart={restart} onOpen={() => setPanel(true)} onRestart={session.access === 'control' ? restartClaude : undefined} />}
       {panel && <ClaudePanel st={claude} canControl={session.access === 'control'} onClose={() => setPanel(false)} run={runCommand} sendKeys={sendKeys} onRestart={restartClaude} />}
       <div class="scroller" ref={scroller} onScroll={onScroll}>
         <div class="messages">

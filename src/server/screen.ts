@@ -142,6 +142,22 @@ export class Screen {
   }
 
   /**
+   * Claude Code's UI is up: its input box (❯ under a box line) is on screen, below the line where
+   * `launch` was typed if that is still visible (the old UI can linger above it).
+   */
+  claudeReady(launch = ''): boolean {
+    const lines = this.lines();
+    let from = 0;
+    for (let i = lines.length - 1; launch && i >= 0; i--) {
+      if (lines[i].includes(launch)) {
+        from = i + 1;
+        break;
+      }
+    }
+    return lines.some((l, i) => i >= from && i > 0 && /^❯/.test(l) && SEPARATOR.test(lines[i - 1]));
+  }
+
+  /**
    * Claude Code's suggested next message: drawn dim in the empty input box (it sends on Enter).
    * Only when the whole box is dim (nothing typed); the generic 'Try "..."' placeholder isn't one.
    */

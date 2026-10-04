@@ -93,3 +93,10 @@ test("Claude's suggested next message: the dim text in an empty input box", asyn
   assert.equal((await screen(box('❯ 我自己打的字'))).analyze().suggestion, '');
   assert.equal((await screen(box('❯ ' + dim('Try "how does <filepath> work?"')))).analyze().suggestion, '');
 });
+
+test('Claude is back after a restart only when its box shows up below the launch line', async () => {
+  const old = ['✻ Churned for 3s', SEP, '❯ ', SEP, '  ⏵⏵ bypass permissions on'];
+  // the old UI lingers above the shell prompt where the command was typed: not ready yet
+  assert.equal((await screen([...old, '$ claude --resume abc'])).claudeReady('claude --resume abc'), false);
+  assert.equal((await screen([...old, '$ claude --resume abc', ' ▐▛███▜▌   Claude Code', SEP, '❯ ', SEP])).claudeReady('claude --resume abc'), true);
+});
