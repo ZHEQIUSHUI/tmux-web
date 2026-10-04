@@ -1,5 +1,5 @@
-import { useEffect } from 'preact/hooks';
-import { THEME_LABEL, ThemePref, useTheme } from './lib';
+import { useEffect, useState } from 'preact/hooks';
+import { THEME_LABEL, ThemePref, copyText, useTheme } from './lib';
 
 /** Compact cycling button for the desktop sidebar. */
 export function ThemeCycle() {
@@ -88,6 +88,12 @@ export const Icon = {
       <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
     </svg>
   ),
+  copy: () => (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V6a2 2 0 012-2h9" />
+    </svg>
+  ),
   files: () => (
     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
       <path d="M3 6a2 2 0 012-2h4l2 2h8a2 2 0 012 2v3" />
@@ -144,3 +150,30 @@ export const Chevron = ({ open }: { open: boolean }) => (
     <path d="M9 6l6 6-6 6" />
   </svg>
 );
+
+/** A small copy button; `text` may be fetched on click (e.g. the full text of a cut-off message). */
+export function CopyBtn({ text, label, class: cls, title }: { text: string | (() => Promise<string>); label?: string; class?: string; title?: string }) {
+  const [done, setDone] = useState<'' | 'ok' | 'fail'>('');
+  return (
+    <button
+      type="button"
+      class={`copy-btn ${done} ${cls ?? ''}`}
+      title={title ?? '复制'}
+      aria-label={title ?? '复制'}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={async (e) => {
+        e.stopPropagation();
+        let ok = false;
+        try {
+          ok = await copyText(typeof text === 'string' ? text : await text());
+        } catch {
+          /* fetching the text failed */
+        }
+        setDone(ok ? 'ok' : 'fail');
+        setTimeout(() => setDone(''), 1500);
+      }}
+    >
+      {done === 'ok' ? '已复制' : done === 'fail' ? '复制失败' : label ?? <Icon.copy />}
+    </button>
+  );
+}

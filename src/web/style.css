@@ -2331,3 +2331,101 @@ a.btn {
   color: var(--dim);
   white-space: nowrap;
 }
+
+/* copy buttons */
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--dim);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.copy-btn:hover {
+  color: var(--text);
+}
+.copy-btn.ok {
+  color: var(--idle);
+  border-color: var(--idle);
+}
+.code-wrap,
+.quote-wrap {
+  position: relative;
+}
+.code-copy,
+.quote-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  opacity: 0.85;
+}
+.quote-wrap blockquote {
+  padding-right: 52px;
+}
+.code-wrap pre {
+  padding-right: 56px;
+}
+/* desktop: shown on hover, so long reading isn't cluttered; phones: always there */
+@media (hover: hover) {
+  .code-copy,
+  .quote-copy {
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .code-wrap:hover .code-copy,
+  .quote-wrap:hover .quote-copy,
+  .code-copy.ok,
+  .quote-copy.ok {
+    opacity: 1;
+  }
+}
+.msg-tools {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+.msg-tools .copy-btn {
+  border-color: transparent;
+  background: transparent;
+  padding: 2px 4px;
+}
+@media (hover: hover) {
+  .msg-tools {
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .msg.assistant:hover .msg-tools,
+  .msg-tools:has(.ok) {
+    opacity: 1;
+  }
+}
+.msg-actions .copy-btn.link {
+  border: 0;
+  background: none;
+  padding: 0 10px 0 0;
+  color: var(--accent);
+}
+.tool-line {
+  position: relative;
+}
+.tool-copy {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  padding: 1px 5px;
+}
+@media (hover: hover) {
+  .tool-copy {
+    opacity: 0;
+  }
+  .tool-line:hover .tool-copy,
+  .tool-copy.ok {
+    opacity: 1;
+  }
+}

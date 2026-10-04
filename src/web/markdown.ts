@@ -1,4 +1,5 @@
 import { Marked, type Tokens } from 'marked';
+import { copyText } from './lib';
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
@@ -79,8 +80,19 @@ const md = new Marked({
       return `<a href="${esc(safeHref(href))}"${title ? ` title="${esc(title)}"` : ''} target="_blank" rel="noopener noreferrer">${inner}</a>`;
     },
     code({ text, lang }: Tokens.Code) {
-      if (lang?.trim().toLowerCase() !== 'mermaid') return false;
+      const kind = lang?.trim().split(/\s/)[0].toLowerCase() ?? '';
+      if (kind !== 'mermaid')
+        return `<div class="code-wrap"><button type="button" class="copy-btn code-copy" data-copy-code>复制</button><pre><code${kind ? ` class="language-${esc(kind)}"` : ''}>${esc(text.replace(/\n$/, ''))}</code></pre></div>`;
       return `<div class="mermaid-block" data-src="${esc(text)}"><pre><code>${esc(text)}</code></pre><button class="link" type="button">显示图表</button></div>`;
+    },
+    // a quote is often something to pass on ("可以直接转给…"): copy it as Markdown, without the "> "
+    blockquote({ tokens, raw }: Tokens.Blockquote) {
+      const source = raw
+        .replace(/\n+$/, '')
+        .split('\n')
+        .map((l) => l.replace(/^ {0,3}> ?/, ''))
+        .join('\n');
+      return `<div class="quote-wrap"><button type="button" class="copy-btn quote-copy" data-copy-text="${esc(source)}">复制</button><blockquote>${this.parser.parse(tokens)}</blockquote></div>`;
     },
     image({ href, text }: Tokens.Image) {
       const url = imageUrl(href);
@@ -99,3 +111,19 @@ export function renderMarkdown(src: string, images?: ImageCtx): string {
     ctx = null;
   }
 }
+
+// code blocks and quotes are plain HTML (the chat caches rendered Markdown): one listener serves every 复制
+document.addEventListener('click', (e) => {
+  const btn = (e.target as Element | null)?.closest?.<HTMLButtonElement>('[data-copy-code],[data-copy-text]');
+  if (!btn) return;
+  e.stopPropagation();
+  const text = btn.dataset.copyText ?? btn.parentElement?.querySelector('pre')?.textContent ?? '';
+  void copyText(text).then((ok) => {
+    btn.textContent = ok ? '已复制' : '复制失败';
+    btn.classList.toggle('ok', ok);
+    setTimeout(() => {
+      btn.textContent = '复制';
+      btn.classList.remove('ok');
+    }, 1500);
+  });
+});

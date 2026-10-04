@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'preact/hooks';
 import { api } from './api';
 import { ago, copyText, store } from './lib';
 import { renderMarkdown } from './markdown';
-import { Icon, Modal } from './ui';
+import { CopyBtn, Icon, Modal } from './ui';
 
 // File browser: a session's working directory (files tab) or a whole host (global browser). Read
 // files, see what changed in git, hand paths to the agent. Read-only on purpose: changes go
@@ -361,6 +361,7 @@ function FileViewer({ api: base, path, onActions }: { api: string; path: string;
             {source ? '预览' : '源码'}
           </button>
         )}
+        {text && <CopyBtn class="ghost small" label="复制内容" text={text} title={end < total ? '复制已加载的部分' : '复制全部内容'} />}
         {!isImage && !isMd && (
           <button
             class="ghost small"
@@ -482,6 +483,7 @@ function DiffViewer({ api: base, view, onActions }: { api: string; view: Extract
       <div class="fv-file-head">
         <span class="fv-file-name">{baseName(view.path)}</span>
         <span class="dim small">{STATUS_NAME[statusOf(view.status)]}</span>
+        {text && <CopyBtn class="ghost small" label="复制" text={text} title="复制这份 diff" />}
         <button class="icon-btn" onClick={onActions} aria-label="操作">
           <Icon.more />
         </button>

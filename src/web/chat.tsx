@@ -4,7 +4,7 @@ import { renderMarkdown, splitImages } from './markdown';
 import { hydrateMermaid } from './mermaid-lazy';
 import { MAX_SESSIONS, saveChat } from './chat-store';
 import { coarsePointer, liveStream, norm, store } from './lib';
-import { Icon, Modal } from './ui';
+import { CopyBtn, Icon, Modal } from './ui';
 
 // ---------------- chat ----------------
 
@@ -44,6 +44,7 @@ export function ToolGroup({ sid, items, onExpand }: { sid: number; items: ChatIt
           <div key={it.id} class={`tool-line ${it.tool === 'error' ? 'err' : ''}`}>
             {it.tool && it.tool !== 'result' && it.tool !== 'error' ? <b>{it.tool}</b> : <span class="dim">↳</span>}
             {text && <pre>{text}</pre>}
+            {text && <CopyBtn class="tool-copy" text={it.truncated ? () => fullText(sid, it) : text} />}
             <Images list={images} />
             {it.truncated && (
               <button class="link" onClick={() => onExpand(it)}>
@@ -55,6 +56,12 @@ export function ToolGroup({ sid, items, onExpand }: { sid: number; items: ChatIt
       })}
     </details>
   );
+}
+
+/** The whole text of an item that came cut off. */
+async function fullText(sid: number, it: ChatItem): Promise<string> {
+  const full = await api<ChatItem[]>('GET', `/_tw/api/sessions/${sid}/message?off=${it.id.split(':')[0]}`);
+  return full.find((f) => f.id === it.id)?.text ?? it.text;
 }
 
 export const mdCache = new Map<string, string>();
@@ -85,14 +92,15 @@ export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: Chat
     const { text, images } = splitImages(it.text, imageCtx(sid, it));
     return (
       // tap (phones) or hover (desktop) shows what can be done with your own message
-      <div class={`msg user ${actions ? 'show-actions' : ''}`} onClick={() => onRewind && setActions((v) => !v)}>
+      <div class={`msg user ${actions ? 'show-actions' : ''}`} onClick={() => setActions((v) => !v)}>
         <div class="bubble">
           {text}
           <Images list={images} />
           {more}
         </div>
-        {onRewind && (
-          <div class="msg-actions">
+        <div class="msg-actions">
+          <CopyBtn class="link" label="复制" text={it.truncated ? () => fullText(sid, it) : it.text} />
+          {onRewind && (
             <button
               class="link"
               onClick={(e) => {
@@ -103,8 +111,8 @@ export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: Chat
             >
               撤回到这之前…
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     );
   }
@@ -113,6 +121,9 @@ export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: Chat
     <div class="msg assistant">
       <Markdown sid={sid} id={it.id} text={it.text} />
       {more}
+      <div class="msg-tools">
+        <CopyBtn text={it.truncated ? () => fullText(sid, it) : it.text} title="复制这条回复（Markdown 原文）" />
+      </div>
     </div>
   );
 }
@@ -776,12 +787,16 @@ export function Composer(props: {
   const keysOpen = showKeys || status === 'waiting';
 
   useEffect(() => setText(store.get(draftKey) || ''), [draftKey]);
+  // a suggestion in the empty box is sized like text, so it isn't cut off
+  const hintText = !text ? props.suggestion || '' : '';
   useLayoutEffect(() => {
     const el = ta.current;
     if (!el) return;
+    if (hintText) el.value = hintText;
     el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 220) + 'px';
-  }, [text]);
+    el.style.height = Math.min(el.scrollHeight, hintText ? 120 : 220) + 'px';
+    if (hintText) el.value = '';
+  }, [text, hintText]);
 
   const update = (v: string) => {
     setText(v);
