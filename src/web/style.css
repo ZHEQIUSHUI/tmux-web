@@ -2541,3 +2541,50 @@ a.btn {
 .fv-pick-here {
   white-space: nowrap;
 }
+
+/* group kinds: 最近 and 未分组 look different from your own folders */
+.folder-kind {
+  display: flex;
+  flex: none;
+  opacity: 0.75;
+}
+.folder-kind svg {
+  width: 14px;
+  height: 14px;
+}
+.folder-head.big .folder-kind svg {
+  width: 16px;
+  height: 16px;
+}
+/* 最近: accent color, a tinted panel */
+.folder-head.kind-recent .folder-toggle,
+.folder-head.kind-recent .folder-kind {
+  color: var(--accent);
+  opacity: 1;
+}
+.folder-head.kind-recent .folder-count {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.folder.kind-recent {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: 10px;
+  padding: 2px 4px 4px;
+  margin-bottom: 10px;
+}
+.m-section.kind-recent .m-group {
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+}
+/* 未分组: quieter, a dashed outline */
+.folder-head.kind-ungrouped .folder-name {
+  font-style: italic;
+}
+.folder.kind-ungrouped {
+  border-top: 1px dashed var(--line);
+  padding-top: 4px;
+}
+.m-section.kind-ungrouped .m-group {
+  border-style: dashed;
+  background: transparent;
+}

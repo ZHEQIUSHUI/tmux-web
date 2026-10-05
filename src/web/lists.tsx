@@ -220,9 +220,11 @@ export function FolderHeader(props: { group: SessionGroup; open: boolean; onTogg
   const { folder, sessions } = props.group;
   const [over, setOver] = useState(false);
   const waiting = sessions.filter((s) => s.status === 'waiting').length;
+  // the two built-in groups look different from your own folders
+  const kind = props.label === '最近' ? 'recent' : folder ? 'folder' : 'ungrouped';
   return (
     <div
-      class={`folder-head ${props.big ? 'big' : ''} ${over ? 'drop' : ''}`}
+      class={`folder-head ${props.big ? 'big' : ''} ${over ? 'drop' : ''} kind-${kind}`}
       onDragOver={(e) => {
         if (!props.onDropSession) return;
         e.preventDefault();
@@ -237,6 +239,7 @@ export function FolderHeader(props: { group: SessionGroup; open: boolean; onTogg
     >
       <button class="folder-toggle" onClick={props.onToggle} aria-expanded={props.open}>
         <Chevron open={props.open} />
+        <span class="folder-kind">{kind === 'recent' ? <Icon.clock /> : kind === 'ungrouped' ? <Icon.inbox /> : <Icon.folder />}</span>
         <span class="folder-name">{props.label ?? (folder ? folder.name : '未分组')}</span>
         <span class="folder-count">{sessions.length}</span>
         {!props.open && waiting > 0 && <span class="dot waiting" title={`${waiting} 个等待确认`} />}
@@ -349,7 +352,7 @@ export function Sidebar(props: {
       {recentDlg && <RecentModal minutes={recentMin} onPick={setRecentMin} onClose={() => setRecentDlg(false)} />}
       <nav class="session-list">
         {recent.length > 0 && (
-          <div class="folder recent" key="recent">
+          <div class="folder kind-recent" key="recent">
             <FolderHeader label="最近" group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} onEdit={() => setRecentDlg(true)} />
             {!collapsed.has('r') && <div class="folder-body">{recent.map(recentItem)}</div>}
           </div>
@@ -360,7 +363,7 @@ export function Sidebar(props: {
           if (!g.folder && groups.length === 1) return g.sessions.map(item);
           if (!g.folder && !g.sessions.length) return null;
           return (
-            <div class="folder" key={key}>
+            <div class={`folder ${g.folder ? 'kind-folder' : 'kind-ungrouped'}`} key={key}>
               <FolderHeader
                 group={g}
                 open={open}
@@ -526,7 +529,7 @@ export function MobileHome(props: {
         {sessions?.length === 0 && <p class="dim pad">还没有会话，点右下角 ＋ 新建，或导入已有的 tmux 会话。</p>}
         {q && !shown.length && <p class="dim pad">没有匹配的会话</p>}
         {recent.length > 0 && (
-          <div class="m-section" key="recent">
+          <div class="m-section kind-recent" key="recent">
             <FolderHeader big label="最近" group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} onEdit={() => setRecentDlg(true)} />
             {!collapsed.has('r') && <div class="m-group">{recent.map(recentRow)}</div>}
           </div>
@@ -537,7 +540,7 @@ export function MobileHome(props: {
           const plain = !g.folder && groups.length === 1;
           if (!g.sessions.length && (plain || !g.folder)) return null;
           return (
-            <div class="m-section" key={key}>
+            <div class={`m-section ${g.folder ? 'kind-folder' : 'kind-ungrouped'}`} key={key}>
               {!plain && <FolderHeader big group={g} open={open} onToggle={() => toggle(key)} onEdit={g.folder ? () => props.onEditFolder(g.folder) : undefined} />}
               {open && (g.sessions.length ? <div class="m-group">{g.sessions.map(row)}</div> : <p class="dim small folder-empty">空文件夹。在会话设置里可以把会话放进来。</p>)}
             </div>
