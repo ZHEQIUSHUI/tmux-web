@@ -216,7 +216,7 @@ export function useCollapsed(): [Set<string>, (key: string) => void] {
 }
 
 /** A collapsible folder header: arrow, name, count, note; drop target for dragged sessions. */
-export function FolderHeader(props: { group: SessionGroup; open: boolean; onToggle: () => void; onEdit?: () => void; onDropSession?: (id: number) => void; big?: boolean; label?: string }) {
+export function FolderHeader(props: { group: SessionGroup; open: boolean; onToggle: () => void; onEdit?: () => void; onDropSession?: (id: number) => void; big?: boolean; label?: string; note?: string }) {
   const { folder, sessions } = props.group;
   const [over, setOver] = useState(false);
   const waiting = sessions.filter((s) => s.status === 'waiting').length;
@@ -243,9 +243,9 @@ export function FolderHeader(props: { group: SessionGroup; open: boolean; onTogg
         <span class="folder-name">{props.label ?? (folder ? folder.name : '未分组')}</span>
         <span class="folder-count">{sessions.length}</span>
         {/* the note: a faint aside on the title line, cut off when long (the full text: hover, or ⋯) */}
-        {folder?.note && (
-          <span class="folder-note" title={folder.note}>
-            {folder.note.split('\n')[0]}
+        {(props.note ?? folder?.note) && (
+          <span class="folder-note" title={props.note ?? folder!.note}>
+            {(props.note ?? folder!.note).split('\n')[0]}
           </span>
         )}
         {!props.open && waiting > 0 && <span class="dot waiting" title={`${waiting} 个等待确认`} />}
@@ -359,7 +359,7 @@ export function Sidebar(props: {
       <nav class="session-list">
         {recent.length > 0 && (
           <div class="folder kind-recent" key="recent">
-            <FolderHeader label="最近" group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} onEdit={() => setRecentDlg(true)} />
+            <FolderHeader label="最近" note={`${recentLabel(recentMin)}内有活动`} group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} onEdit={() => setRecentDlg(true)} />
             {!collapsed.has('r') && <div class="folder-body">{recent.map(recentItem)}</div>}
           </div>
         )}
@@ -536,7 +536,7 @@ export function MobileHome(props: {
         {q && !shown.length && <p class="dim pad">没有匹配的会话</p>}
         {recent.length > 0 && (
           <div class="m-section kind-recent" key="recent">
-            <FolderHeader big label="最近" group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} onEdit={() => setRecentDlg(true)} />
+            <FolderHeader big label="最近" note={`${recentLabel(recentMin)}内有活动`} group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} onEdit={() => setRecentDlg(true)} />
             {!collapsed.has('r') && <div class="m-group">{recent.map(recentRow)}</div>}
           </div>
         )}
