@@ -2588,3 +2588,21 @@ a.btn {
   border-style: dashed;
   background: transparent;
 }
+/* a folder's note: faint, right under its name (lined up with it), two lines at most */
+.folder-note {
+  padding: 0 8px 4px 46px;
+  margin-top: -4px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--dim);
+  opacity: 0.8;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.folder-head.big .folder-note {
+  padding-left: 47px;
+  font-size: 12px;
+}

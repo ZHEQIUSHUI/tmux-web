@@ -249,7 +249,11 @@ export function FolderHeader(props: { group: SessionGroup; open: boolean; onTogg
           <Icon.more />
         </button>
       )}
-      {folder?.note && props.open && <div class="folder-note">{folder.note}</div>}
+      {folder?.note && (
+        <div class="folder-note" title={folder.note}>
+          {folder.note}
+        </div>
+      )}
     </div>
   );
 }
