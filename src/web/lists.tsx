@@ -242,6 +242,12 @@ export function FolderHeader(props: { group: SessionGroup; open: boolean; onTogg
         <span class="folder-kind">{kind === 'recent' ? <Icon.clock /> : kind === 'ungrouped' ? <Icon.inbox /> : <Icon.folder />}</span>
         <span class="folder-name">{props.label ?? (folder ? folder.name : '未分组')}</span>
         <span class="folder-count">{sessions.length}</span>
+        {/* the note: a faint aside on the title line, cut off when long (the full text: hover, or ⋯) */}
+        {folder?.note && (
+          <span class="folder-note" title={folder.note}>
+            {folder.note.split('\n')[0]}
+          </span>
+        )}
         {!props.open && waiting > 0 && <span class="dot waiting" title={`${waiting} 个等待确认`} />}
       </button>
       {(folder || props.label) && props.onEdit && (
@@ -249,11 +255,7 @@ export function FolderHeader(props: { group: SessionGroup; open: boolean; onTogg
           <Icon.more />
         </button>
       )}
-      {folder?.note && (
-        <div class="folder-note" title={folder.note}>
-          {folder.note}
-        </div>
-      )}
+
     </div>
   );
 }
