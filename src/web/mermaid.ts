@@ -4,6 +4,17 @@ import mermaid from 'mermaid';
 let seq = 0;
 let theme = '';
 
+/** Semicolons in the text part of lines ("A->>B: x; y", "Note over A: x; y") escaped as #59;. */
+function forgiving(src: string): string {
+  return src
+    .split('\n')
+    .map((l) => {
+      const i = l.indexOf(':');
+      return i > 0 && l.includes(';', i) ? l.slice(0, i + 1) + l.slice(i + 1).replace(/;/g, '#59;') : l;
+    })
+    .join('\n');
+}
+
 /** Replace a `.mermaid-block` (source in data-src) with the rendered diagram. */
 export async function render(block: HTMLElement) {
   const root = document.documentElement.dataset.theme;
@@ -22,7 +33,14 @@ export async function render(block: HTMLElement) {
   try {
     const id = `tw-mmd-${++seq}`;
     // a syntax error must not leave mermaid's own error graphic in the page
-    const { svg } = await mermaid.render(id, src).finally(() => document.getElementById('d' + id)?.remove());
+    const draw = (code: string, n: string) => mermaid.render(n, code).finally(() => document.getElementById('d' + n)?.remove());
+    // agents often write ";" inside message text, which mermaid takes as the end of a statement:
+    // retry with it escaped (#59; shows as ";")
+    const { svg } = await draw(src, id).catch((e) => {
+      const fixed = forgiving(src);
+      if (fixed === src) throw e;
+      return draw(fixed, `${id}b`);
+    });
     const view = document.createElement('div');
     view.className = 'mermaid-view';
     view.innerHTML = svg;
