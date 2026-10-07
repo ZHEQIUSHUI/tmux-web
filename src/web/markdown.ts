@@ -55,8 +55,14 @@ export function imageUrl(href: string, c: ImageCtx | null = ctx): string | null 
   return IMAGE_EXT.test(path) ? `${c.api}/file-image?path=${encodeURIComponent(path)}` : null;
 }
 
+/**
+ * What the page shows of an image of ours: a version sized for the screen (the server shrinks big
+ * ones, see thumb.ts). Links keep pointing at the original.
+ */
+export const shown = (url: string, width = 1280) => (/^\/_tw\/api\/.*\/(file-)?image\?/.test(url) ? `${url}&w=${width}` : url);
+
 export const imageHtml = (url: string, alt: string) =>
-  `<a class="md-img" href="${esc(url)}" target="_blank" rel="noopener noreferrer"><img src="${esc(url)}" alt="${esc(alt)}" loading="lazy" decoding="async"></a>`;
+  `<a class="md-img" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="点开看原图"><img src="${esc(shown(url))}" alt="${esc(alt)}" loading="lazy" decoding="async"></a>`;
 
 const IMAGE_MD = /!\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)/g;
 /** Plain-text items (your messages, tool output): pull the image references out to show below. */

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { api } from './api';
 import { ago, copyText, store } from './lib';
-import { renderMarkdown } from './markdown';
+import { renderMarkdown, shown } from './markdown';
 import { CopyBtn, Icon, Modal } from './ui';
 
 // File browser: a session's working directory (files tab) or a whole host (global browser). Read
@@ -372,6 +372,11 @@ function FileViewer({ api: base, path, onBack, onActions }: { api: string; path:
   useEffect(() => {
     setBytes(null);
     if (!isImage) void load(0, false);
+    // an image is shown shrunk: its real size goes next to 打开原图
+    else
+      fetch(`${base}/files/read?path=${q(path)}&offset=0&length=1`, { credentials: 'same-origin' })
+        .then((r) => setTotal(Number(r.headers.get('X-File-Size')) || 0))
+        .catch(() => {});
   }, [base, path]);
 
   const binary = useMemo(() => !!bytes && looksBinary(bytes), [bytes]);
@@ -387,7 +392,12 @@ function FileViewer({ api: base, path, onBack, onActions }: { api: string; path:
           <Icon.back />
         </button>
         <span class="fv-file-name">{baseName(path)}</span>
-        {total > 0 && <span class="dim small">{size(total)}</span>}
+        {total > 0 && !isImage && <span class="dim small">{size(total)}</span>}
+        {isImage && (
+          <a class="btn small" href={img} target="_blank" rel="noopener noreferrer" title="显示的是压缩过的版本">
+            打开原图{total ? `（${size(total)}）` : ''}
+          </a>
+        )}
         {isMd && from === 0 && (
           <button class="ghost small" onClick={() => setSource((v) => !v)}>
             {source ? '预览' : '源码'}
@@ -412,7 +422,7 @@ function FileViewer({ api: base, path, onBack, onActions }: { api: string; path:
       {error && <p class="error pad">{error}</p>}
       {isImage ? (
         <a class="md-img fv-image" href={img} target="_blank" rel="noopener noreferrer">
-          <img src={img} alt={path} />
+          <img src={shown(img, 2048)} alt={path} />
         </a>
       ) : !bytes ? (
         !error && <p class="dim small pad">加载中…</p>

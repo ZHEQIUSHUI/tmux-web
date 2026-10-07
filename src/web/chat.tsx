@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api, type ChatItem, type Page, type SessionInfo, type Status } from './api';
-import { renderMarkdown, splitImages } from './markdown';
+import { renderMarkdown, shown, splitImages } from './markdown';
 import { hydrateMermaid } from './mermaid-lazy';
 import { MAX_SESSIONS, saveChat } from './chat-store';
 import { coarsePointer, liveStream, norm, quotePath, store } from './lib';
@@ -15,8 +15,8 @@ function Images({ list }: { list: { url: string; alt: string }[] }) {
   return (
     <div class="msg-images">
       {list.map((im) => (
-        <a key={im.url} class="md-img" href={im.url} target="_blank" rel="noopener noreferrer">
-          <img src={im.url} alt={im.alt} loading="lazy" decoding="async" />
+        <a key={im.url} class="md-img" href={im.url} target="_blank" rel="noopener noreferrer" title="点开看原图">
+          <img src={shown(im.url)} alt={im.alt} loading="lazy" decoding="async" />
         </a>
       ))}
     </div>

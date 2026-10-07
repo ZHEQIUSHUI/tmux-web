@@ -28,6 +28,7 @@ import {
 } from './sessions.js';
 import { claudeState, followLog, readFull, readImage, readPage } from './transcript.js';
 import { changes, diff, fileSize, imageFile, insideCwd, listDir, readPart, search, streamFile } from './files.js';
+import { shrink, thumbWidth } from './thumb.js';
 import { notices, noticesFor, visible, type Notice } from './notify.js';
 import { parsePreviewPath, previewCookie, proxyHttp, proxyUpgrade, readPreviewCookie, type ProxyTarget } from './proxy.js';
 
@@ -299,9 +300,11 @@ const fileError = (e: any): never => {
 
 // Images: served on their own (lazily, cacheable) so message pages stay small.
 const IMAGE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml', avif: 'image/avif' };
-function sendImage(res: ServerResponse, type: string, body: Buffer, cache: string, etag?: string) {
+function sendImage(res: ServerResponse, type: string, body: Buffer, cache: string, etag?: string, original?: number) {
   res.writeHead(200, {
     ...(etag ? { ETag: etag } : {}),
+    // a smaller version was sent: the page can say how big the original is
+    ...(original ? { 'X-Original-Size': String(original) } : {}),
     'Content-Type': type,
     'Content-Length': body.length,
     'Cache-Control': cache,
@@ -373,22 +376,29 @@ for (const [prefix, scope] of FILE_SCOPES) {
     const { p, host, cwd } = at(req, id, url);
     const type = IMAGE_TYPES[p.split('.').pop()!.toLowerCase()];
     if (!type) throw new HttpError(400, '不是图片文件');
+    // ?w=: a smaller version for the screen (see thumb.ts); without it, the original
+    const w = thumbWidth(url.searchParams.get('w'));
     // agents overwrite their output images: revalidate by mtime+size, which costs one tiny round
-    // trip (the file is only sent when it changed)
+    // trip (the file is only sent when it changed). The tag of a smaller version ends in -w<width>;
+    // the host compares the file's own part.
     const known = String(req.headers['if-none-match'] || '');
+    const knownFile = known.replace(/-w\d+"$/, '"');
     let out: Buffer;
     try {
-      out = await imageFile(host, cwd, p, known);
+      out = await imageFile(host, cwd, p, knownFile);
     } catch {
       throw new HttpError(404, '图片不存在或太大');
     }
     const nl = out.indexOf(0x0a);
-    const etag = `"${out.subarray(0, nl).toString()}"`;
-    if (etag === known && nl === out.length - 1) {
-      res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' });
+    const tag = out.subarray(0, nl).toString();
+    if (`"${tag}"` === knownFile && nl === out.length - 1) {
+      res.writeHead(304, { ETag: known, 'Cache-Control': 'private, no-cache' });
       return void res.end();
     }
-    sendImage(res, type, out.subarray(nl + 1), 'private, no-cache', etag);
+    const body = out.subarray(nl + 1);
+    const small = await shrink(`${prefix}${id}:${cwd}:${p}:${tag}`, body, type, w);
+    if (small) sendImage(res, 'image/webp', small, 'private, no-cache', `"${tag}-w${w}"`, body.length);
+    else sendImage(res, type, body, 'private, no-cache', `"${tag}"`);
   });
 }
 
@@ -400,7 +410,11 @@ route('GET', '/_tw/api/sessions/:id/image', async (req, res, [id], url) => {
   const img = await readImage(row.agent, live.host, file, Number(url.searchParams.get('off')), Number(url.searchParams.get('n')));
   if (!img || !Object.values(IMAGE_TYPES).includes(img.mime)) throw new HttpError(404, '图片不存在');
   // log lines never change once written
-  sendImage(res, img.mime, Buffer.from(img.data, 'base64'), 'private, max-age=604800, immutable');
+  const body = Buffer.from(img.data, 'base64');
+  const w = thumbWidth(url.searchParams.get('w'));
+  const small = await shrink(`log:${file}:${url.searchParams.get('off')}:${url.searchParams.get('n')}`, body, img.mime, w);
+  if (small) sendImage(res, 'image/webp', small, 'private, max-age=604800, immutable', undefined, body.length);
+  else sendImage(res, img.mime, body, 'private, max-age=604800, immutable');
 });
 
 /** Claude Code's model and context usage, from the end of its log. */

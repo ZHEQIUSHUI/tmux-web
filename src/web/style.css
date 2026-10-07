@@ -2628,3 +2628,8 @@ a.btn {
 .fv-file-head {
   padding-left: 8px;
 }
+a.btn.small {
+  padding: 3px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
