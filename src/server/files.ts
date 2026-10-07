@@ -6,6 +6,9 @@ import type { Host } from './host.js';
 
 const AT_CWD = `h() { case $1 in "~") printf '%s' "$HOME";; "~/"*) printf '%s/%s' "$HOME" "\${1#??}";; *) printf '%s' "$1";; esac; }; cd "$(h "$1")" 2>/dev/null || exit 5; `;
 
+/** size FILE: from the inode, without reading it (/proc and the like would be read in full by wc). */
+const SIZE = `size() { stat -L -c %s -- "$1" 2>/dev/null || stat -L -f %z -- "$1"; }; `;
+
 /** Then into the directory $2 ('' = stay in the base). */
 const IN_DIR = `d=$(h "$2"); [ -n "$d" ] || d=.; cd "$d" 2>/dev/null || exit 3; `;
 
@@ -49,13 +52,16 @@ export async function listDir(host: Host, cwd: string, path: string): Promise<{ 
 
 /** Bytes [offset, offset+length) of a file, plus its size. */
 export async function readPart(host: Host, cwd: string, path: string, offset: number, length: number): Promise<{ size: number; data: Buffer }> {
-  const out = await host.sh(AT_CWD + `f=$(h "$2"); [ -f "$f" ] || exit 3; wc -c < "$f"; tail -c +$(( $3 + 1 )) -- "$f" | head -c $4`, [cwd, path, String(offset), String(length)]);
+  const out = await host.sh(
+    AT_CWD + SIZE + `f=$(h "$2"); [ -f "$f" ] || exit 3; size "$f"; t=; command -v timeout >/dev/null && t='timeout 15'; $t tail -c +$(( $3 + 1 )) -- "$f" | head -c $4; true`,
+    [cwd, path, String(offset), String(length)],
+  );
   const nl = out.indexOf(0x0a);
   return { size: Number(out.subarray(0, nl).toString().trim()), data: out.subarray(nl + 1) };
 }
 
 export async function fileSize(host: Host, cwd: string, path: string): Promise<number> {
-  return Number((await host.sh(AT_CWD + `f=$(h "$2"); [ -f "$f" ] || exit 3; wc -c < "$f"`, [cwd, path])).toString().trim());
+  return Number((await host.sh(AT_CWD + SIZE + `f=$(h "$2"); [ -f "$f" ] || exit 3; size "$f"`, [cwd, path])).toString().trim());
 }
 
 /** The whole file as a stream (downloads of any size). */

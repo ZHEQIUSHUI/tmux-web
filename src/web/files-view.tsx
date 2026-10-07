@@ -117,17 +117,12 @@ export function FilesView({ target }: { target: FilesTarget }) {
             改动
           </button>
         </div>
-        {doc && (
-          <button class="ghost small" onClick={() => (setDoc(null), top())}>
-            ‹ 返回
-          </button>
-        )}
       </div>
       <div class="fv-body">
         {doc?.kind === 'file' ? (
-          <FileViewer api={target.api} path={doc.path} onActions={() => setActions({ path: doc.path, dir: false })} />
+          <FileViewer api={target.api} path={doc.path} onBack={() => (setDoc(null), top())} onActions={() => setActions({ path: doc.path, dir: false })} />
         ) : doc?.kind === 'diff' ? (
-          <DiffViewer api={target.api} view={doc} onActions={() => setActions({ path: doc.path, dir: false })} />
+          <DiffViewer api={target.api} view={doc} onBack={() => (setDoc(null), top())} onActions={() => setActions({ path: doc.path, dir: false })} />
         ) : mode === 'changes' ? (
           <ChangeList target={target} dir={dir} onOpen={openDoc} />
         ) : (
@@ -243,6 +238,11 @@ function DirList(props: { target: FilesTarget; path: string; onRoot: (r: string)
       ) : (
         <>
           <div class="fv-crumbs">
+            {crumbs.length > 0 && (
+              <button class="icon-btn fv-up" onClick={() => props.onDir(crumbs.length > 1 ? crumbPath(crumbs.length - 2) : absolute ? '/' : '')} aria-label="上一级" title="上一级">
+                <Icon.back />
+              </button>
+            )}
             <button class="link" onClick={() => props.onDir(absolute ? '/' : '')}>
               {rootName}
             </button>
@@ -333,7 +333,7 @@ function Row({ name, dir, meta, onOpen, onActions, onPick }: { name: string; dir
   );
 }
 
-function FileViewer({ api: base, path, onActions }: { api: string; path: string; onActions: () => void }) {
+function FileViewer({ api: base, path, onBack, onActions }: { api: string; path: string; onBack: () => void; onActions: () => void }) {
   const isImage = IMAGE.test(path);
   const isMd = MARKDOWN.test(path);
   const [bytes, setBytes] = useState<Uint8Array | null>(null);
@@ -348,7 +348,9 @@ function FileViewer({ api: base, path, onActions }: { api: string; path: string;
     setLoading(true);
     setError('');
     try {
-      const r = await fetch(`${base}/files/read?path=${q(path)}&offset=${offset}&length=${CHUNK}`, { credentials: 'same-origin' });
+      const r = await fetch(`${base}/files/read?path=${q(path)}&offset=${offset}&length=${CHUNK}`, { credentials: 'same-origin', signal: AbortSignal.timeout(25_000) }).catch((e) => {
+        throw new Error(e?.name === 'TimeoutError' ? '读取超时：这个文件读不出来（可能是特殊文件）' : e.message);
+      });
       if (!r.ok) throw new Error((await r.json().catch(() => null))?.error || `HTTP ${r.status}`);
       const chunk = new Uint8Array(await r.arrayBuffer());
       setTotal(Number(r.headers.get('X-File-Size')) || 0);
@@ -372,7 +374,7 @@ function FileViewer({ api: base, path, onActions }: { api: string; path: string;
     if (!isImage) void load(0, false);
   }, [base, path]);
 
-  const binary = useMemo(() => !!bytes && bytes.subarray(0, 8000).includes(0), [bytes]);
+  const binary = useMemo(() => !!bytes && looksBinary(bytes), [bytes]);
   const text = useMemo(() => (bytes && !binary ? new TextDecoder('utf-8').decode(bytes) : ''), [bytes, binary]);
   const end = from + (bytes?.length ?? 0);
   const html = useMemo(() => (isMd && !source && text && from === 0 ? renderMarkdown(text, { api: base, off: '0', base: parent(path) }) : ''), [text, isMd, source, from]);
@@ -381,6 +383,9 @@ function FileViewer({ api: base, path, onActions }: { api: string; path: string;
   return (
     <div class="fv-file">
       <div class="fv-file-head">
+        <button class="icon-btn fv-back" onClick={onBack} aria-label="返回列表" title="返回列表">
+          <Icon.back />
+        </button>
         <span class="fv-file-name">{baseName(path)}</span>
         {total > 0 && <span class="dim small">{size(total)}</span>}
         {isMd && from === 0 && (
@@ -389,7 +394,7 @@ function FileViewer({ api: base, path, onActions }: { api: string; path: string;
           </button>
         )}
         {text && <CopyBtn class="ghost small" label="复制内容" text={text} title={end < total ? '复制已加载的部分' : '复制全部内容'} />}
-        {!isImage && !isMd && (
+        {!isImage && !isMd && !binary && (
           <button
             class="ghost small"
             onClick={() => {
@@ -412,7 +417,12 @@ function FileViewer({ api: base, path, onActions }: { api: string; path: string;
       ) : !bytes ? (
         !error && <p class="dim small pad">加载中…</p>
       ) : binary ? (
-        <p class="pad dim">二进制文件，不能直接显示。可以在右上角 ⋯ 里下载。</p>
+        <div class="pad fv-binary">
+          <p class="dim">二进制文件，不能直接显示。</p>
+          <a class="btn" href={`${base}/files/download?path=${q(path)}`} download={baseName(path)}>
+            下载（{size(total)}）
+          </a>
+        </div>
       ) : (
         <>
           {from > 0 && (
@@ -440,6 +450,22 @@ function FileViewer({ api: base, path, onActions }: { api: string; path: string;
       )}
     </div>
   );
+}
+
+/** Binary, not text: NUL bytes, many control bytes, or not valid UTF-8 (judged on the start). */
+function looksBinary(bytes: Uint8Array): boolean {
+  const head = bytes.subarray(0, 8000);
+  if (head.includes(0)) return true;
+  let control = 0;
+  for (const b of head) if (b < 32 && b !== 9 && b !== 10 && b !== 13 && b !== 12 && b !== 27) control++;
+  if (control > head.length * 0.05) return true;
+  // a cut-off character at the end of the sample is fine
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(head.subarray(0, Math.max(0, head.length - 4)));
+  } catch {
+    return true;
+  }
+  return false;
 }
 
 const STATUS_NAME: Record<string, string> = { M: '修改', A: '新增', D: '删除', R: '重命名', C: '复制', '?': '新文件', U: '冲突' };
@@ -494,7 +520,7 @@ function ChangeList({ target, dir, onOpen }: { target: FilesTarget; dir: string;
   );
 }
 
-function DiffViewer({ api: base, view, onActions }: { api: string; view: Extract<Doc, { kind: 'diff' }>; onActions: () => void }) {
+function DiffViewer({ api: base, view, onBack, onActions }: { api: string; view: Extract<Doc, { kind: 'diff' }>; onBack: () => void; onActions: () => void }) {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -508,6 +534,9 @@ function DiffViewer({ api: base, view, onActions }: { api: string; view: Extract
   return (
     <div class="fv-file">
       <div class="fv-file-head">
+        <button class="icon-btn fv-back" onClick={onBack} aria-label="返回改动列表" title="返回改动列表">
+          <Icon.back />
+        </button>
         <span class="fv-file-name">{baseName(view.path)}</span>
         <span class="dim small">{STATUS_NAME[statusOf(view.status)]}</span>
         {text && <CopyBtn class="ghost small" label="复制" text={text} title="复制这份 diff" />}

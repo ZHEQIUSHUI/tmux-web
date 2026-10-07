@@ -2609,3 +2609,22 @@ a.btn {
 .folder-head.big .folder-note {
   font-size: 12.5px;
 }
+/* files: a clear way back */
+.fv-back,
+.fv-up {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  margin-left: -6px;
+}
+.fv-up {
+  margin-right: 2px;
+}
+.fv-back svg,
+.fv-up svg {
+  width: 18px;
+  height: 18px;
+}
+.fv-file-head {
+  padding-left: 8px;
+}
