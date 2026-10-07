@@ -271,6 +271,7 @@ export function Sidebar(props: {
   onPick: (id: number) => void;
   onNew: () => void;
   onFiles: () => void;
+  onStats: () => void;
   filesOpen?: boolean;
   onAdmin: () => void;
   onPassword: () => void;
@@ -340,6 +341,9 @@ export function Sidebar(props: {
     <aside class="sidebar">
       <div class="side-head">
         <span class="brand">tmux-web</span>
+        <button class="icon-btn" onClick={props.onStats} aria-label="服务器资源" title="服务器资源">
+          <Icon.gauge />
+        </button>
         <button class={`icon-btn ${props.filesOpen ? 'on' : ''}`} onClick={props.onFiles} aria-label="文件浏览器" title="文件浏览器">
           <Icon.files />
         </button>
@@ -421,6 +425,7 @@ export function MobileHome(props: {
   onPick: (id: number) => void;
   onNew: () => void;
   onFiles: () => void;
+  onStats: () => void;
   filesOpen?: boolean;
   onMenu: () => void;
   onAdmin: () => void;
@@ -505,6 +510,9 @@ export function MobileHome(props: {
           <h1>会话</h1>
           {summary && <span class="m-summary">{summary}</span>}
         </div>
+        <button class="icon-btn" onClick={props.onStats} aria-label="服务器资源">
+          <Icon.gauge />
+        </button>
         <button class="icon-btn" onClick={props.onFiles} aria-label="文件浏览器">
           <Icon.files />
         </button>

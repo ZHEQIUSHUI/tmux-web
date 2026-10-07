@@ -8,6 +8,7 @@ import { AdminModal, FolderModal, NewSession, PasswordModal, SessionSettings, To
 import { MenuSheet, MobileHome, Sidebar, Toasts, alertsEnabled, useUnread } from './lists';
 import { PreviewView } from './preview';
 import { FilesView } from './files-view';
+import { StatsModal } from './stats-view';
 
 export type Tab = 'chat' | 'term' | 'files' | 'preview';
 
@@ -106,7 +107,7 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
     setNewAt({ hostId, cwd });
     setModal('new');
   };
-  const [modal, setModal] = useState<'new' | 'admin' | 'password' | 'menu' | 'tokens' | null>(null);
+  const [modal, setModal] = useState<'new' | 'admin' | 'password' | 'menu' | 'tokens' | 'stats' | null>(null);
   const [folders, setFolders] = useState<Folder[]>([]);
   // folder being edited; null = creating one; undefined = dialog closed
   const [editFolder, setEditFolder] = useState<Folder | null | undefined>(undefined);
@@ -218,6 +219,7 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             onPick={pick}
             onNew={() => setModal('new')}
             onFiles={openFiles}
+            onStats={() => setModal('stats')}
             onMenu={() => setModal('menu')}
             onAdmin={() => setModal('admin')}
             onEditFolder={setEditFolder}
@@ -249,6 +251,7 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             onPick={pick}
             onNew={() => setModal('new')}
             onFiles={openFiles}
+            onStats={() => setModal('stats')}
             filesOpen={filesOpen}
             onAdmin={() => setModal('admin')}
             onPassword={() => setModal('password')}
@@ -294,6 +297,7 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
       {modal === 'admin' && <AdminModal me={me} onClose={() => setModal(null)} />}
       {modal === 'password' && <PasswordModal onClose={() => setModal(null)} />}
       {modal === 'tokens' && <TokensModal onClose={() => setModal(null)} />}
+      {modal === 'stats' && <StatsModal onClose={() => setModal(null)} />}
     </div>
   );
 }

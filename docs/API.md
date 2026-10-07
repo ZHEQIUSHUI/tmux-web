@@ -83,6 +83,7 @@ The session list itself also has a live stream: `GET events` (SSE: `sessions` fu
 | GET/POST/DELETE | `tokens`, `tokens/:id` | List / create `{name}` (the response includes `token`, shown only this once) / revoke API tokens |
 | GET/POST/PATCH/DELETE | `folders`, `folders/:id` | Your folders `{name, note, position}` |
 | GET | `hosts`, `hosts/:id/dirs`, `hosts/:id/ports`, `hosts/:id/tmux`, `hosts/:id/claude-history` | Hosts, directory suggestions, listening ports, existing tmux sessions, Claude history conversations |
+| GET | `hosts/:id/stats` | Resource usage: CPU (sampled over half a second), memory / swap, GPUs (when `nvidia-smi` is available), disks, and the processes using the most CPU right now. Cached for 2 seconds |
 | POST | `hosts/:id/adopt` | Adopt an existing tmux session: `{name, socket?: "default"}` |
 
 App preview: `/p/<hostId>/<port>/<path>` proxies to that port on the host (HTTP and WebSocket); it also requires login.

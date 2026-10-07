@@ -2633,3 +2633,141 @@ a.btn.small {
   font-size: 12px;
   white-space: nowrap;
 }
+
+/* 服务器资源 */
+.modal.stats {
+  width: min(520px, 100%);
+}
+.st-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 8px;
+}
+.st-head select {
+  max-width: 45%;
+}
+.st-live {
+  margin-left: auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--idle);
+  opacity: 0.35;
+  transition: opacity 0.3s;
+}
+.st-live.on {
+  opacity: 1;
+}
+.st-body section {
+  display: grid;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.st-body section:first-child {
+  border-top: 0;
+}
+.st-body h3 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dim);
+  font-weight: 600;
+}
+.st-bar-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.st-bar-top span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.st-bar-top .dim {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.st-meter {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--code);
+  overflow: hidden;
+}
+.st-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--idle);
+  transition: width 0.4s ease;
+}
+.st-fill.mid {
+  background: var(--busy);
+}
+.st-fill.hi {
+  background: var(--danger);
+}
+.st-gpu {
+  display: grid;
+  gap: 6px;
+}
+.st-gpu-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.st-procs {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.st-procs td {
+  padding: 3px 0;
+}
+.st-procs td + td {
+  text-align: right;
+  padding-left: 12px;
+  white-space: nowrap;
+}
+.st-pname {
+  max-width: 0;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.st-gpu-bars {
+  display: grid;
+  grid-template-columns: 2fr 3fr;
+  gap: 14px;
+}
+.st-gpu-bars .st-bar-top {
+  font-size: 12px;
+}
+/* the sidebar head holds the brand, three icons and 新建 on one line */
+.side-head {
+  gap: 2px;
+}
+.side-head .brand {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.side-head {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.side-head .icon-btn {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+}
+.side-head .small-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: 4px;
+}

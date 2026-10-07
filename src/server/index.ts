@@ -29,6 +29,7 @@ import {
 import { claudeState, followLog, readFull, readImage, readPage } from './transcript.js';
 import { changes, diff, fileSize, imageFile, insideCwd, listDir, readPart, search, streamFile } from './files.js';
 import { shrink, thumbWidth } from './thumb.js';
+import { hostStats } from './stats.js';
 import { notices, noticesFor, visible, type Notice } from './notify.js';
 import { parsePreviewPath, previewCookie, proxyHttp, proxyUpgrade, readPreviewCookie, type ProxyTarget } from './proxy.js';
 
@@ -716,6 +717,18 @@ route('GET', '/_tw/api/hosts/:id/dirs', async (req, res, [id]) => {
     sendJson(req, res, 200, await suggestDirs(getHost(h.id)!));
   } catch (e: any) {
     throw new HttpError(502, e.message);
+  }
+});
+
+/** Resource use of a host (CPU, memory, GPUs, disks, top processes), for the 服务器资源 panel. */
+route('GET', '/_tw/api/hosts/:id/stats', async (req, res, [id]) => {
+  const user = requireUser(req);
+  const h = q.hostById.get(Number(id));
+  if (!h || !canUseHost(user, h)) throw new HttpError(404, '主机不存在');
+  try {
+    sendJson(req, res, 200, await hostStats(getHost(h.id)!, h.id));
+  } catch (e: any) {
+    throw new HttpError(502, `读取失败：${e.message}`);
   }
 });
 
