@@ -70,6 +70,13 @@ function blockText(c: unknown): string {
   return '';
 }
 
+/**
+ * Claude Code logs pasted text wrapped as <pasted_content id="…">…</pasted_content id="…"> (the
+ * page sends messages by pasting, so every multi-line one): show what was typed.
+ */
+const unwrapPasted = (s: string) =>
+  s.includes('<pasted_content') ? s.replace(/<pasted_content(?: id="[^"]*")?>\n?([\s\S]*?)\n?<\/pasted_content(?: id="[^"]*")?>/g, '$1').replace(/^\s*\n/, '') : s;
+
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 const stripTags = (s: string) => stripAnsi(s.replace(/<\/?[a-z-]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 const tagText = (s: string, tag: string) => stripAnsi(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(s)?.[1] ?? '').replace(/\s+/g, ' ').trim();
@@ -79,7 +86,7 @@ function parseClaude(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
   // attachment (the queue-operation lines around it are bookkeeping and would duplicate it)
   if (o.type === 'attachment' && o.attachment?.type === 'queued_command' && !o.isSidechain) {
     const a = o.attachment;
-    const text = typeof a.prompt === 'string' ? a.prompt : blockText(a.prompt);
+    const text = unwrapPasted(typeof a.prompt === 'string' ? a.prompt : blockText(a.prompt));
     if (!text?.trim()) return [];
     return a.commandMode && a.commandMode !== 'prompt' ? [{ role: 'meta', text: `${a.commandMode}: ${text}` }] : [{ role: 'user', text }];
   }
@@ -117,7 +124,7 @@ function parseClaude(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
       const cleaned = stripTags(content);
       return cleaned ? [{ role: 'meta', text: cleaned }] : [];
     }
-    return [{ role: 'user', text: content }];
+    return [{ role: 'user', text: unwrapPasted(content) }];
   }
   if (Array.isArray(content)) {
     const out: Omit<ChatItem, 'id'>[] = [];
@@ -126,7 +133,7 @@ function parseClaude(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
         const t = blockText(b.content).trim();
         if (t) out.push({ role: 'tool', tool: b.is_error ? 'error' : 'result', text: t });
       } else if (b.type === 'text' && b.text?.trim()) {
-        out.push({ role: 'user', text: b.text });
+        out.push({ role: 'user', text: unwrapPasted(b.text) });
       } else if (b.type === 'image') {
         out.push({ role: 'user', text: imageMarkdown(b) });
       }

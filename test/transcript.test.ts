@@ -149,3 +149,9 @@ test('claude state: after /compact the context is the compacted size until the n
   const f2 = writeLines('compact2.jsonl', [usage(862000), boundary, usage(20000)]);
   assert.equal((await claudeState(local, f2)).contextTokens, 20001);
 });
+
+test('claude: pasted text (how the page sends) is shown as typed, without the wrapper', () => {
+  const pasted = '\n\n<pasted_content id="19a5">\n第一行\n第二行\n</pasted_content id="19a5">\n';
+  assert.deepEqual(items(cc.user(pasted)), [{ role: 'user', text: '第一行\n第二行\n' }]);
+  assert.deepEqual(items(cc.user('看下这个：<pasted_content>\nerror 1\n</pasted_content>')), [{ role: 'user', text: '看下这个：error 1' }]);
+});

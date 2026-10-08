@@ -376,10 +376,23 @@ function updatePending(id: number, f: (ps: Pending[]) => Pending[]) {
   pendingSubs.get(id)?.forEach((fn) => fn(next));
 }
 
-/** Drop the placeholders of messages that have now shown up in the log. */
+/**
+ * Drop the placeholders of messages that have now shown up in the log. A message of yours that
+ * matches none (Claude Code may rewrite it, e.g. an image path into "[Image #1]") takes the oldest
+ * sent one: they arrive in order.
+ */
 function arrived(id: number, items: ChatItem[]) {
   const texts = items.filter((i) => i.role === 'user').map((i) => norm(i.text));
-  if (texts.length && pendingStore.has(id)) updatePending(id, (ps) => ps.filter((p) => !texts.some((a) => a === norm(p.text) || a.startsWith(norm(p.text).slice(0, 200)))));
+  if (!texts.length || !pendingStore.has(id)) return;
+  updatePending(id, (ps) => {
+    let left = [...ps];
+    for (const a of texts) {
+      const i = left.findIndex((p) => a === norm(p.text) || a.startsWith(norm(p.text).slice(0, 200)) || norm(p.text).startsWith(a.slice(0, 200)));
+      const j = i >= 0 ? i : left.findIndex((p) => p.sent);
+      if (j >= 0) left = left.filter((_, k) => k !== j);
+    }
+    return left;
+  });
 }
 
 function usePending(id: number): Pending[] {

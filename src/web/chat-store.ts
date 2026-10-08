@@ -10,7 +10,11 @@ export const MAX_SESSIONS = 50;
 /** items kept per session (the newest); older ones load on scroll as usual */
 const MAX_ITEMS = 400;
 
+/** Bumped when what the server sends for a chat changes (older saved chats are dropped). */
+const VERSION = 2;
+
 interface Rec {
+  v?: number;
   user: number;
   sid: number;
   c: ChatCache;
@@ -55,7 +59,8 @@ async function readChats(userId: number): Promise<[number, ChatCache][]> {
       r.onsuccess = () => resolve(r.result as Rec[]);
       r.onerror = () => resolve([]);
     });
-    const mine = all.filter((r) => r.user === userId).sort((a, b) => a.c.at - b.c.at);
+    for (const r of all) if (r.v !== VERSION) os.delete(key(r.user, r.sid));
+    const mine = all.filter((r) => r.user === userId && r.v === VERSION).sort((a, b) => a.c.at - b.c.at);
     for (const r of mine.slice(0, Math.max(0, mine.length - MAX_SESSIONS))) os.delete(key(r.user, r.sid));
     await done(t);
     return mine.slice(-MAX_SESSIONS).map((r) => [r.sid, r.c]);
@@ -95,7 +100,7 @@ async function flush() {
     const t = db.transaction(STORE, 'readwrite');
     const os = t.objectStore(STORE);
     for (const [sid, c] of batch) {
-      if (c) os.put({ user, sid, c: trim(c) } satisfies Rec, key(user, sid));
+      if (c) os.put({ v: VERSION, user, sid, c: trim(c) } satisfies Rec, key(user, sid));
       else os.delete(key(user, sid));
     }
     await done(t);
