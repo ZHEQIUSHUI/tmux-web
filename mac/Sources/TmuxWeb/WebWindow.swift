@@ -62,6 +62,7 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
   let status = Status()
   private var loadedPort: Int?
   private var popups: [NSWindow] = []
+  private var overlay: NSView?
 
   override init() {
     let config = WKWebViewConfiguration()
@@ -87,6 +88,9 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     window.delegate = self
 
     let overlay = NSHostingView(rootView: StatusView(status: status))
+    // the overlay must not size the window: empty once connected, it shrank it to nothing
+    overlay.sizingOptions = []
+    self.overlay = overlay
     let box = NSView()
     for v in [web, overlay] as [NSView] {
       v.translatesAutoresizingMaskIntoConstraints = false
@@ -104,6 +108,7 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     window.toolbar = bar
     window.toolbarStyle = .unifiedCompact
     if window.frame.origin == .zero { window.center() }
+    fixSize()
   }
 
   private static let reloadItem = NSToolbarItem.Identifier("reload")
@@ -125,6 +130,8 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
   func show(_ s: Tunnel.State, title: String) {
     status.title = title
     status.state = s
+    // connected: nothing to show over the page (and nothing to catch clicks)
+    if case .ready = s { overlay?.isHidden = true } else { overlay?.isHidden = false }
     window.title = title.isEmpty ? "tmux-web" : "tmux-web · \(title)"
     if case .ready(let port) = s {
       // the password / code dialog (another process) took the focus: come back to the front
@@ -142,8 +149,17 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
 
   /// The window in front, whatever happened to it: closed (ordered out), minimized, under other
   /// windows, or off every screen (a display that is gone).
+  /// A window too small to use (a size saved by an older version that shrank it): normal size, centered.
+  private func fixSize() {
+    if window.frame.width >= window.minSize.width && window.frame.height >= window.minSize.height { return }
+    let s = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+    window.setFrame(NSRect(x: 0, y: 0, width: min(1280, s.width - 40), height: min(820, s.height - 40)), display: true)
+    window.center()
+  }
+
   func bringBack() {
     if window.isMiniaturized { window.deminiaturize(nil) }
+    fixSize()
     if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) {
       if let s = NSScreen.main?.visibleFrame {
         let size = NSSize(width: min(window.frame.width, s.width - 40), height: min(window.frame.height, s.height - 40))
