@@ -5,6 +5,9 @@ import Foundation
 struct Profile: Codable, Identifiable, Equatable, Hashable {
   var id = UUID()
   var name = ""
+  /// "ssh": through an SSH port forward; "direct": open `directURL` as it is (EasyTier, LAN…)
+  var mode = "direct"
+  var directURL = ""
   /// user@host, or a Host alias from ~/.ssh/config
   var target = ""
   var sshPort = 22
@@ -18,8 +21,42 @@ struct Profile: Codable, Identifiable, Equatable, Hashable {
   /// more ssh options, e.g. "-J jump-host"
   var extraArgs = ""
 
-  var title: String { name.trimmingCharacters(in: .whitespaces).isEmpty ? target : name }
-  var isComplete: Bool { !target.trimmingCharacters(in: .whitespaces).isEmpty && remotePort > 0 && localPort > 0 }
+  var isDirect: Bool { mode == "direct" }
+  var title: String {
+    let n = name.trimmingCharacters(in: .whitespaces)
+    return !n.isEmpty ? n : isDirect ? (URL(string: directBase ?? "")?.host ?? directURL) : target
+  }
+  var isComplete: Bool {
+    isDirect ? directBase != nil : !target.trimmingCharacters(in: .whitespaces).isEmpty && remotePort > 0 && localPort > 0
+  }
+  /// The direct address as http(s)://host[:port], or nil when it isn't one ("10.0.0.2:8080" gets http://).
+  var directBase: String? {
+    var s = directURL.trimmingCharacters(in: .whitespaces)
+    if s.isEmpty { return nil }
+    if !s.contains("://") { s = "http://" + s }
+    while s.hasSuffix("/") { s.removeLast() }
+    guard let u = URL(string: s), let scheme = u.scheme, ["http", "https"].contains(scheme), u.host != nil else { return nil }
+    return s
+  }
+
+  init() {}
+
+  // settings saved by older versions lack the newer fields
+  init(from d: Decoder) throws {
+    let c = try d.container(keyedBy: CodingKeys.self)
+    let fresh = Profile()
+    id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? fresh.id
+    name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+    mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "ssh"
+    directURL = try c.decodeIfPresent(String.self, forKey: .directURL) ?? ""
+    target = try c.decodeIfPresent(String.self, forKey: .target) ?? ""
+    sshPort = try c.decodeIfPresent(Int.self, forKey: .sshPort) ?? 22
+    remoteHost = try c.decodeIfPresent(String.self, forKey: .remoteHost) ?? "127.0.0.1"
+    remotePort = try c.decodeIfPresent(Int.self, forKey: .remotePort) ?? 8080
+    localPort = try c.decodeIfPresent(Int.self, forKey: .localPort) ?? 18080
+    keyPath = try c.decodeIfPresent(String.self, forKey: .keyPath) ?? ""
+    extraArgs = try c.decodeIfPresent(String.self, forKey: .extraArgs) ?? ""
+  }
 
   /// The private key to use, if any.
   var privateKey: String? {

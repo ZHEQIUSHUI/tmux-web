@@ -17,6 +17,9 @@ import javax.crypto.spec.GCMParameterSpec
 data class Profile(
   val id: String = UUID.randomUUID().toString(),
   val name: String = "",
+  /** "direct": open [directUrl] as it is (EasyTier, LAN…); "ssh": through an SSH port forward */
+  val mode: String = "direct",
+  val directUrl: String = "",
   /** user@host */
   val target: String = "",
   val sshPort: Int = 22,
@@ -30,20 +33,31 @@ data class Profile(
   /** empty = asked for when the server wants it */
   val password: String = "",
 ) {
-  val title get() = name.ifBlank { target }
+  val isDirect get() = mode == "direct"
+  val title get() = name.ifBlank { if (isDirect) directBase?.let { android.net.Uri.parse(it).host } ?: directUrl else target }
   val user get() = target.substringBefore('@', "")
   val host get() = target.substringAfter('@')
-  val isComplete get() = target.contains('@') && host.isNotBlank() && user.isNotBlank() && remotePort > 0 && localPort > 0
+  val isComplete get() = if (isDirect) directBase != null else target.contains('@') && host.isNotBlank() && user.isNotBlank() && remotePort > 0 && localPort > 0
+
+  /** The direct address as http(s)://host[:port] ("10.0.0.2:8080" gets http://), or null. */
+  val directBase: String?
+    get() {
+      var s = directUrl.trim().trimEnd('/')
+      if (s.isEmpty()) return null
+      if (!s.contains("://")) s = "http://$s"
+      val u = android.net.Uri.parse(s)
+      return if ((u.scheme == "http" || u.scheme == "https") && !u.host.isNullOrBlank()) s else null
+    }
 
   fun toJson() = JSONObject().apply {
-    put("id", id); put("name", name); put("target", target); put("sshPort", sshPort)
+    put("id", id); put("name", name); put("mode", mode); put("directUrl", directUrl); put("target", target); put("sshPort", sshPort)
     put("remoteHost", remoteHost); put("remotePort", remotePort); put("localPort", localPort)
     put("privateKey", privateKey); put("keyPassphrase", keyPassphrase); put("password", password)
   }
 
   companion object {
     fun fromJson(o: JSONObject) = Profile(
-      id = o.optString("id", UUID.randomUUID().toString()), name = o.optString("name"), target = o.optString("target"),
+      id = o.optString("id", UUID.randomUUID().toString()), name = o.optString("name"), mode = o.optString("mode", "ssh"), directUrl = o.optString("directUrl"), target = o.optString("target"),
       sshPort = o.optInt("sshPort", 22), remoteHost = o.optString("remoteHost", "127.0.0.1"), remotePort = o.optInt("remotePort", 8080),
       localPort = o.optInt("localPort", 18080), privateKey = o.optString("privateKey"), keyPassphrase = o.optString("keyPassphrase"),
       password = o.optString("password"),

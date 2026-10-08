@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- the page comes over the SSH forward on 127.0.0.1: plain http there, nowhere else -->
+<!-- the page comes from the user's own server: over the SSH forward (127.0.0.1) or directly
+     (EasyTier, LAN), usually plain http -->
 <network-security-config>
-  <domain-config cleartextTrafficPermitted="true">
-    <domain includeSubdomains="false">127.0.0.1</domain>
-    <domain includeSubdomains="false">localhost</domain>
-  </domain-config>
+  <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

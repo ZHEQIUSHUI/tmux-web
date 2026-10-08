@@ -22,11 +22,11 @@ object Updater {
   private const val GITHUB = "https://github.com/ZHEQIUSHUI/tmux-web/releases/latest/download/"
   private const val EVERY_MS = 6 * 3600 * 1000L
 
-  fun checkSoon(a: Activity, port: Int, force: Boolean = false) {
+  fun checkSoon(a: Activity, base: String, force: Boolean = false) {
     val prefs = a.getSharedPreferences("updates", Context.MODE_PRIVATE)
     if (!force && System.currentTimeMillis() - prefs.getLong("checked", 0) < EVERY_MS) return
     Thread {
-      val info = fetchJson("http://127.0.0.1:$port/_tw/api/app/version.json") ?: fetchJson(GITHUB + "version.json") ?: return@Thread
+      val info = fetchJson("$base/_tw/api/app/version.json") ?: fetchJson(GITHUB + "version.json") ?: return@Thread
       prefs.edit().putLong("checked", System.currentTimeMillis()).apply()
       val android = info.optJSONObject("android") ?: return@Thread
       val code = android.optInt("versionCode")
@@ -36,7 +36,7 @@ object Updater {
         AlertDialog.Builder(a)
           .setTitle("发现新版本 ${info.optString("version")}")
           .setMessage(info.optString("notes").ifBlank { "当前版本 ${BuildConfig.VERSION_NAME}" })
-          .setPositiveButton("更新") { _, _ -> download(a, port, android) }
+          .setPositiveButton("更新") { _, _ -> download(a, base, android) }
           .setNegativeButton("以后") { _, _ -> }
           .setNeutralButton("跳过这个版本") { _, _ -> prefs.edit().putInt("skipped", code).apply() }
           .show()
@@ -44,14 +44,14 @@ object Updater {
     }.start()
   }
 
-  private fun download(a: Activity, port: Int, android: JSONObject) {
+  private fun download(a: Activity, base: String, android: JSONObject) {
     val name = android.optString("file", "tmux-web-android.apk")
     val sha = android.optString("sha256")
     Toast.makeText(a, "正在下载更新…", Toast.LENGTH_SHORT).show()
     Thread {
       val dir = File(a.cacheDir, "updates").apply { mkdirs() }
       val apk = File(dir, "tmux-web.apk")
-      val ok = listOf("http://127.0.0.1:$port/_tw/api/app/download/$name", GITHUB + name).any { url ->
+      val ok = listOf("$base/_tw/api/app/download/$name", GITHUB + name).any { url ->
         fetchFile(url, apk) && (sha.isEmpty() || sha256(apk).equals(sha, ignoreCase = true))
       }
       a.runOnUiThread {

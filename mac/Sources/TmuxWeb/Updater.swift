@@ -10,11 +10,11 @@ enum Updater {
   static var current: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
 
   /// Look for a new version (at most every 6 hours unless asked); `quiet` = say nothing if none.
-  static func check(port: Int, window: NSWindow, asked: Bool = false) {
+  static func check(base: String, window: NSWindow, asked: Bool = false) {
     let d = UserDefaults.standard
     if !asked, Date().timeIntervalSince1970 - d.double(forKey: "updateChecked") < every { return }
     Task {
-      var found = await json("http://127.0.0.1:\(port)/_tw/api/app/version.json")
+      var found = await json("\(base)/_tw/api/app/version.json")
       if found == nil { found = await json(github + "version.json") }
       guard let info = found else {
         if asked { await alert(window, "检查更新失败", "服务器和 GitHub 都没取到版本信息，稍后再试。") }
@@ -35,14 +35,14 @@ enum Updater {
         a.addButton(withTitle: "以后")
         a.addButton(withTitle: "跳过这个版本")
         a.beginSheetModal(for: window) { r in
-          if r == .alertFirstButtonReturn { Task { await install(port: port, mac: mac, window: window) } }
+          if r == .alertFirstButtonReturn { Task { await install(base: base, mac: mac, window: window) } }
           if r == .alertThirdButtonReturn { UserDefaults.standard.set(version, forKey: "updateSkipped") }
         }
       }
     }
   }
 
-  private static func install(port: Int, mac: [String: Any], window: NSWindow) async {
+  private static func install(base: String, mac: [String: Any], window: NSWindow) async {
     let app = Bundle.main.bundlePath
     // started from Downloads without moving it: macOS runs a read-only copy we can't replace
     if app.contains("/AppTranslocation/") || !FileManager.default.isWritableFile(atPath: (app as NSString).deletingLastPathComponent) {
@@ -53,7 +53,7 @@ enum Updater {
     let sha = (mac["sha256"] as? String ?? "").lowercased()
     await MainActor.run { window.title = "tmux-web · 正在下载更新…" }
     var data: Data?
-    for url in ["http://127.0.0.1:\(port)/_tw/api/app/download/\(name)", github + name] {
+    for url in ["\(base)/_tw/api/app/download/\(name)", github + name] {
       if let d = await fetch(url), sha.isEmpty || SHA256.hash(data: d).map({ String(format: "%02x", $0) }).joined() == sha {
         data = d
         break

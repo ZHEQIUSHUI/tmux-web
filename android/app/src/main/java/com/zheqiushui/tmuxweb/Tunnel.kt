@@ -25,7 +25,8 @@ import java.security.Security
 sealed class TunnelState {
   object Idle : TunnelState()
   object Connecting : TunnelState()
-  data class Ready(val port: Int) : TunnelState()
+  /** the page's address: the forward (http://127.0.0.1:<port>) or the direct one */
+  data class Ready(val base: String) : TunnelState()
   /** gone after it worked: trying again on its own */
   data class Reconnecting(val message: String) : TunnelState()
   /** never came up: waiting for the user */
@@ -83,7 +84,23 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
     onState(TunnelState.Idle)
   }
 
+  /** No SSH: the address is reachable as it is. One look whether tmux-web answers there. */
+  private fun direct(p: Profile, gen: Int) {
+    val base = p.directBase ?: return report(gen, TunnelState.Failed("地址不对：${p.directUrl}"))
+    report(gen, TunnelState.Connecting)
+    try {
+      val c = java.net.URL("$base/_tw/api/me").openConnection() as java.net.HttpURLConnection
+      c.connectTimeout = 10_000
+      c.readTimeout = 10_000
+      c.responseCode // any answer (401 = not logged in yet) means it's there
+      report(gen, TunnelState.Ready(base))
+    } catch (e: Exception) {
+      report(gen, TunnelState.Failed("打不开 $base：${describe(e)}"))
+    }
+  }
+
   private fun run(p: Profile, gen: Int) {
+    if (p.isDirect) return direct(p, gen)
     var everReady = false
     var retry = 0
     while (wanted && gen == generation) {
@@ -152,7 +169,7 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
     ss.reuseAddress = true
     ss.bind(InetSocketAddress("127.0.0.1", p.localPort))
     server = ss
-    report(gen, TunnelState.Ready(p.localPort))
+    report(gen, TunnelState.Ready("http://127.0.0.1:${p.localPort}"))
     onReady()
     // blocks while the forward runs; a broken connection ends it
     val fwd = ssh.newLocalPortForwarder(Parameters("127.0.0.1", p.localPort, p.remoteHost, p.remotePort), ss)

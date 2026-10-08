@@ -18,16 +18,23 @@ import android.widget.Toast
 class SettingsActivity : Activity() {
   private lateinit var store: ProfileStore
   private lateinit var draft: Profile
+  private var mode = "direct"
   private val fields = mutableMapOf<String, EditText>()
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     store = ProfileStore(this)
     draft = store.current ?: Profile()
+    mode = draft.mode
     title = "服务器设置"
 
     val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(16), dp(20), dp(24)) }
+    // the fields of each way to connect; only the chosen one shows
+    val directBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    val sshBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    var into = form
     fun field(key: String, label: String, value: String, hint: String, type: Int = InputType.TYPE_CLASS_TEXT, lines: Int = 1) {
+      val form = into
       form.addView(TextView(this).apply { text = label; textSize = 13f; setPadding(0, dp(12), 0, dp(2)) })
       val e = EditText(this).apply {
         setText(value)
@@ -41,15 +48,38 @@ class SettingsActivity : Activity() {
     val number = InputType.TYPE_CLASS_NUMBER
     val secret = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
     field("name", "名称", draft.name, "可选，比如「工作站」")
+    form.addView(TextView(this).apply { text = "连接方式"; textSize = 13f; setPadding(0, dp(12), 0, dp(2)) })
+    val modes = android.widget.RadioGroup(this).apply { orientation = LinearLayout.HORIZONTAL }
+    val directBtn = android.widget.RadioButton(this).apply { text = "直接访问"; id = android.view.View.generateViewId() }
+    val sshBtn = android.widget.RadioButton(this).apply { text = "SSH 转发"; id = android.view.View.generateViewId() }
+    modes.addView(directBtn)
+    modes.addView(sshBtn)
+    form.addView(modes)
+    form.addView(directBox)
+    form.addView(sshBox)
+    val showMode = { direct: Boolean ->
+      directBox.visibility = if (direct) android.view.View.VISIBLE else android.view.View.GONE
+      sshBox.visibility = if (direct) android.view.View.GONE else android.view.View.VISIBLE
+    }
+    modes.setOnCheckedChangeListener { _, id -> mode = if (id == directBtn.id) "direct" else "ssh"; showMode(mode == "direct") }
+    modes.check(if (draft.isDirect) directBtn.id else sshBtn.id)
+    showMode(draft.isDirect)
+
+    into = directBox
+    field("directUrl", "网址", draft.directUrl, "比如 http://10.126.126.2:8080", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+    directBox.addView(TextView(this).apply { text = "已经能直接访问服务器时用（比如在 EasyTier、局域网里），不经过 SSH。"; textSize = 12f; alpha = 0.7f; setPadding(0, dp(8), 0, 0) })
+
+    into = sshBox
     field("target", "SSH 目标", draft.target, "user@host", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
     field("sshPort", "SSH 端口", draft.sshPort.toString(), "22", number)
     field("remotePort", "服务器上 tmux-web 的端口", draft.remotePort.toString(), "8080", number)
     field("localPort", "本地端口", draft.localPort.toString(), "18080", number)
     field("password", "SSH 密码", draft.password, "可选，留空则需要时弹框输入", secret)
     field("privateKey", "SSH 私钥", draft.privateKey, "可选：粘贴私钥内容（-----BEGIN … PRIVATE KEY-----），或从文件导入", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS, 3)
-    form.addView(Button(this).apply { text = "从文件导入私钥…"; setOnClickListener { pickKey() } })
+    sshBox.addView(Button(this).apply { text = "从文件导入私钥…"; setOnClickListener { pickKey() } })
     field("keyPassphrase", "私钥口令", draft.keyPassphrase, "私钥有口令才填", secret)
-    form.addView(TextView(this).apply {
+    into = form
+    sshBox.addView(TextView(this).apply {
       text = "配置（包括密码和私钥）加密保存在手机里。本地端口固定不变，网页的登录状态才能保留。"
       textSize = 12f
       alpha = 0.7f
@@ -59,10 +89,11 @@ class SettingsActivity : Activity() {
     val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
     buttons.addView(Button(this).apply { text = "保存并连接"; setOnClickListener { save() } }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
     form.addView(buttons)
-    form.addView(Button(this).apply {
+    sshBox.addView(Button(this).apply {
       text = "忘记主机密钥"
       setOnClickListener {
         val p = collect() ?: return@setOnClickListener
+        if (p.isDirect) return@setOnClickListener
         KnownHosts(this@SettingsActivity).forget(p.host, p.sshPort)
         Toast.makeText(this@SettingsActivity, "已忘记 ${p.host} 的主机密钥，下次连接时重新记录", Toast.LENGTH_SHORT).show()
       }
@@ -82,11 +113,11 @@ class SettingsActivity : Activity() {
     fun t(k: String) = fields[k]!!.text.toString().trim()
     fun n(k: String, d: Int) = t(k).toIntOrNull() ?: d
     val p = draft.copy(
-      name = t("name"), target = t("target"), sshPort = n("sshPort", 22), remotePort = n("remotePort", 8080), localPort = n("localPort", 18080),
+      name = t("name"), mode = mode, directUrl = t("directUrl"), target = t("target"), sshPort = n("sshPort", 22), remotePort = n("remotePort", 8080), localPort = n("localPort", 18080),
       password = fields["password"]!!.text.toString(), privateKey = t("privateKey"), keyPassphrase = fields["keyPassphrase"]!!.text.toString(),
     )
     if (!p.isComplete) {
-      Toast.makeText(this, "请填写 SSH 目标（user@host）和端口", Toast.LENGTH_LONG).show()
+      Toast.makeText(this, if (p.isDirect) "请填写网址，比如 http://10.126.126.2:8080" else "请填写 SSH 目标（user@host）和端口", Toast.LENGTH_LONG).show()
       return null
     }
     val key = p.privateKey

@@ -7,7 +7,8 @@ final class Tunnel {
   enum State: Equatable {
     case idle
     case connecting
-    case ready(port: Int)
+    /// the page's address: the forward (http://127.0.0.1:<port>) or the direct one
+    case ready(base: String)
     /// gone after it worked: trying again (on its own)
     case reconnecting(String)
     /// never came up: wait for the user (wrong password, host unreachable…)
@@ -45,7 +46,26 @@ final class Tunnel {
     wanted = true
     everReady = false
     retry = 0
+    if p.isDirect { return direct(p) }
     launch()
+  }
+
+  /// No SSH: the address is reachable as it is (EasyTier, LAN…). One look whether it answers.
+  private func direct(_ p: Profile) {
+    guard let base = p.directBase, let url = URL(string: base + "/_tw/api/me") else {
+      state = .failed("地址不对：\(p.directURL)")
+      return
+    }
+    state = .connecting
+    var req = URLRequest(url: url)
+    req.timeoutInterval = 10
+    URLSession.shared.dataTask(with: req) { [weak self] _, resp, err in
+      DispatchQueue.main.async {
+        guard let self, self.wanted else { return }
+        // any answer from tmux-web (401 = not logged in yet) means it's there
+        if resp is HTTPURLResponse { self.state = .ready(base: base) } else { self.state = .failed("打不开 \(base)：\(err?.localizedDescription ?? "没有响应")") }
+      }
+    }.resume()
   }
 
   func stop() {
@@ -140,7 +160,7 @@ final class Tunnel {
         self.everReady = true
         self.retry = 0
         self.dropKeyCopy() // logged in: ssh has read it
-        self.state = .ready(port: pr.localPort)
+        self.state = .ready(base: "http://127.0.0.1:\(pr.localPort)")
       }
     }
   }

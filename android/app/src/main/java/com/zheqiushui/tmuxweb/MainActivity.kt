@@ -46,7 +46,7 @@ class MainActivity : Activity() {
   private lateinit var cardSpinner: ProgressBar
   private lateinit var cardText: TextView
   private lateinit var cardButtons: LinearLayout
-  private var loadedPort = -1
+  private var loadedBase: String? = null
   private var fileCallback: ValueCallback<Array<Uri>>? = null
   private var pendingSession: Int? = null
   private val dark get() = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
@@ -99,7 +99,7 @@ class MainActivity : Activity() {
   }
 
   private fun openSession(id: Int) {
-    if (loadedPort > 0) web.evaluateJavascript("location.hash = '#/s/$id'", null) else pendingSession = id
+    if (loadedBase != null) web.evaluateJavascript("location.hash = '#/s/$id'", null) else pendingSession = id
   }
 
   @Deprecated("Deprecated in Java")
@@ -120,16 +120,16 @@ class MainActivity : Activity() {
     when (s) {
       is TunnelState.Ready -> {
         card.visibility = View.GONE
-        if (loadedPort != s.port || web.url == null) {
-          loadedPort = s.port
-          web.loadUrl("http://127.0.0.1:${s.port}/" + (pendingSession?.let { "#/s/$it" } ?: ""))
+        if (loadedBase != s.base || web.url == null) {
+          loadedBase = s.base
+          web.loadUrl("${s.base}/" + (pendingSession?.let { "#/s/$it" } ?: ""))
           pendingSession = null
-          Updater.checkSoon(this, s.port)
+          Updater.checkSoon(this, s.base)
         }
       }
       is TunnelState.Reconnecting -> {
         // the page stays; it reconnects its own streams once the forward is back
-        card.visibility = if (loadedPort > 0) View.GONE else View.VISIBLE
+        card.visibility = if (loadedBase != null) View.GONE else View.VISIBLE
         title.text = s.message
         cardState(true, s.message, false)
       }
@@ -139,7 +139,7 @@ class MainActivity : Activity() {
       }
       is TunnelState.Failed -> {
         card.visibility = View.VISIBLE
-        loadedPort = -1
+        loadedBase = null
         cardState(false, "连不上 ${Hub.profileTitle}\n\n${s.message}", true)
       }
     }
@@ -210,7 +210,7 @@ class MainActivity : Activity() {
       override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
         val u = req.url
         // other sites open in the browser
-        if (u.host != "127.0.0.1" && (u.scheme == "http" || u.scheme == "https")) {
+        if (u.host != "127.0.0.1" && u.host != loadedBase?.let { Uri.parse(it).host } && (u.scheme == "http" || u.scheme == "https")) {
           startActivity(Intent(Intent.ACTION_VIEW, u))
           return true
         }

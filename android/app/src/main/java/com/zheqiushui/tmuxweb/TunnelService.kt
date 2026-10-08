@@ -75,7 +75,7 @@ class TunnelService : Service() {
     tunnel = Tunnel(this, { prompt, secret -> Hub.ask(this, prompt, secret) }) { s ->
       Hub.publish(s)
       updateNotification(s)
-      if (s is TunnelState.Ready) followAlerts(s.port)
+      if (s is TunnelState.Ready) followAlerts(s.base)
     }
   }
 
@@ -126,17 +126,17 @@ class TunnelService : Service() {
    * tmux-web's alert stream (SSE), through the forward, with the page's login: a notification for
    * each while you aren't looking at the app.
    */
-  private fun followAlerts(port: Int) {
+  private fun followAlerts(base: String) {
     alertsThread?.interrupt()
     alertsThread = Thread({
       while (!Thread.currentThread().isInterrupted && Hub.state is TunnelState.Ready) {
         try {
-          val cookie = CookieManager.getInstance().getCookie("http://127.0.0.1:$port")
+          val cookie = CookieManager.getInstance().getCookie(base)
           if (cookie == null || !cookie.contains("tw_sid")) {
             Thread.sleep(10_000) // not logged in yet
             continue
           }
-          val c = URL("http://127.0.0.1:$port/_tw/api/notifications/stream").openConnection() as HttpURLConnection
+          val c = URL("$base/_tw/api/notifications/stream").openConnection() as HttpURLConnection
           c.setRequestProperty("Cookie", cookie)
           c.setRequestProperty("Accept", "text/event-stream")
           c.readTimeout = 60_000 // the server pings every 20 s

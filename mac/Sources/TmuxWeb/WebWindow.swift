@@ -60,9 +60,9 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
   let window: NSWindow
   let web: WKWebView
   let status = Status()
-  private var loadedPort: Int?
-  /** the forward's port while connected */
-  var port: Int? { loadedPort }
+  private var loadedBase: String?
+  /// the page's address while connected
+  var base: String? { loadedBase }
   private var popups: [NSWindow] = []
   private var overlay: NSView?
 
@@ -135,17 +135,17 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     // connected: nothing to show over the page (and nothing to catch clicks)
     if case .ready = s { overlay?.isHidden = true } else { overlay?.isHidden = false }
     window.title = title.isEmpty ? "tmux-web" : "tmux-web · \(title)"
-    if case .ready(let port) = s {
+    if case .ready(let base) = s {
       // the password / code dialog (another process) took the focus: come back to the front
-      if loadedPort != port { bringBack() }
+      if loadedBase != base { bringBack() }
       // after a reconnect the page reconnects its own streams: only load when it isn't there yet
-      if loadedPort != port || web.url == nil {
-        loadedPort = port
-        web.load(URLRequest(url: URL(string: "http://127.0.0.1:\(port)/")!))
-        Updater.check(port: port, window: window)
+      if loadedBase != base || web.url == nil {
+        loadedBase = base
+        web.load(URLRequest(url: URL(string: base + "/")!))
+        Updater.check(base: base, window: window)
       }
     }
-    if case .failed = s { loadedPort = nil }
+    if case .failed = s { loadedBase = nil }
   }
 
   func reload() { web.reloadFromOrigin() }
@@ -210,7 +210,7 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
   func webView(_ w: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
     if a.shouldPerformDownload { return decisionHandler(.download) }
     // other sites open in the browser
-    if let url = a.request.url, let host = url.host, host != "127.0.0.1", ["http", "https"].contains(url.scheme ?? "") {
+    if let url = a.request.url, let host = url.host, host != "127.0.0.1", host != loadedBase.flatMap({ URL(string: $0)?.host }), ["http", "https"].contains(url.scheme ?? "") {
       NSWorkspace.shared.open(url)
       return decisionHandler(.cancel)
     }

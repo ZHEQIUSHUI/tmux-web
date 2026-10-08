@@ -43,6 +43,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key><true/>
+    <key>NSAllowsArbitraryLoads</key><true/>
     <key>NSAllowsArbitraryLoadsInWebContent</key><true/>
   </dict>
 </dict>

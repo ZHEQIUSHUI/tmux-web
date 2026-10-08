@@ -56,13 +56,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
   @objc private func reconnect() { connect() }
   @objc private func checkUpdates() {
-    guard let port = main.port else {
+    guard let base = main.base else {
       let a = NSAlert()
       a.messageText = "连上服务器后才能检查更新"
       a.runModal()
       return
     }
-    Updater.check(port: port, window: main.window, asked: true)
+    Updater.check(base: base, window: main.window, asked: true)
   }
   @objc private func reloadPage() { main.reload() }
   @objc private func showMain() { main.bringBack() }
