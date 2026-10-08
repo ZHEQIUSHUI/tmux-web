@@ -5,6 +5,7 @@ import { hydrateMermaid } from './mermaid-lazy';
 import { MAX_SESSIONS, saveChat } from './chat-store';
 import { coarsePointer, liveStream, norm, quotePath, store } from './lib';
 import { FilesView } from './files-view';
+import { followChat } from './streams';
 import { CopyBtn, Icon, Modal } from './ui';
 
 // ---------------- chat ----------------
@@ -528,13 +529,14 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
     setError('');
     // resume from the last byte offset we have (also when the stream has to be reopened)
     const begin = (end: number) => {
-        let offset = end;
         endRef.current = end;
-        stop = liveStream(
-          () => `/_tw/api/sessions/${id}/stream?from=${offset}${logRef.current ? `&log=${encodeURIComponent(logRef.current)}` : ''}`,
+        // one connection for every chat on the page (streams.ts)
+        stop = followChat(
+          id,
+          () => ({ from: endRef.current, log: logRef.current }),
           {
-            msg: (fresh: ChatItem[], ev) => {
-              if (ev.lastEventId) offset = endRef.current = Number(ev.lastEventId);
+            msg: (fresh: ChatItem[], to) => {
+              if (to) endRef.current = to;
               if (fresh.length) {
                 setItems((cur) => {
                   const seen = new Set(cur.map((i) => i.id));

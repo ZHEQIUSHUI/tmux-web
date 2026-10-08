@@ -2,7 +2,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { config } from './config.js';
-import { db, groupIdsOf, q, type Agent, type FolderRow, type HostRow, type Role, type Share, type UserRow } from './db.js';
+import { db, groupIdsOf, q, type Agent, type FolderRow, type HostRow, type Role, type SessionRow, type Share, type UserRow } from './db.js';
 import { createApiToken, clientIp, currentUser, endSession, isSecureRequest, hashPassword, loginLockedFor, recordLogin, sameOrigin, startSession, verifyLogin, verifyPassword } from './auth.js';
 import { HttpError, readJson, sendBody, sendJson, serveStatic, Sse } from './http.js';
 import { ensureSshKey, forgetHost, getHost, publicKey, type Host } from './host.js';
@@ -25,12 +25,13 @@ import {
   suggestDirs,
   updateSession,
   type Access,
+  type LiveSession,
 } from './sessions.js';
 import { claudeState, followLog, readFull, readImage, readPage } from './transcript.js';
 import { changes, diff, fileSize, imageFile, insideCwd, listDir, readPart, search, streamFile } from './files.js';
 import { shrink, thumbWidth } from './thumb.js';
 import { hostStats } from './stats.js';
-import { notices, noticesFor, visible, type Notice } from './notify.js';
+import { notices, noticesFor, visible, visible as visibleNotice, type Notice } from './notify.js';
 import { parsePreviewPath, previewCookie, proxyHttp, proxyUpgrade, readPreviewCookie, type ProxyTarget } from './proxy.js';
 
 // ---------- helpers ----------
@@ -437,48 +438,79 @@ route('GET', '/_tw/api/sessions/:id/claude-state', async (req, res, [id]) => {
  * automatic reconnect resumes exactly where it left off), plus status/preview of the screen.
  * Chat items are pushed by `tail -F` on the host, not polled.
  */
-route('GET', '/_tw/api/sessions/:id/stream', (req, res, [id], url) => {
-  const { row, live } = sessionFor(requireUser(req), id, 'view');
-  const lastId = req.headers['last-event-id'];
-  const offset = Number(lastId ?? url.searchParams.get('from') ?? 0) || 0;
+/**
+ * Follow one session for a page: its screen state, and new chat items pushed by `tail -F` on the
+ * host from `offset` on. `log` is the conversation the page's offsets belong to (a /clear starts a
+ * new one: then it is told to start over). Returns the cleanup.
+ */
+function followSession(row: SessionRow, live: LiveSession, offset: number, log: string | null, send: (event: string, data: unknown, end?: number) => void): () => void {
   let stopFollow: (() => void) | null = null;
   let timer: NodeJS.Timeout | null = null;
   let following: string | null = null;
-  const onState = (st: { status: string; preview: string }) => sse.send('state', st);
+  let closed = false;
+  const onState = (st: unknown) => send('state', st);
   // the agent may switch conversations (/clear): then the page has to start over from the new log
   const watchSwitch = setInterval(async () => {
     if (!following) return;
     await live.syncClaudeSession();
     const file = await live.transcriptPath().catch(() => null);
-    if (file && file !== following) sse.send('reset', 0);
+    if (file && file !== following) send('reset', 0);
   }, 10000);
-  const sse = new Sse(req, res, () => {
-    if (timer) clearTimeout(timer);
-    clearInterval(watchSwitch);
-    stopFollow?.();
-    live.off('state', onState);
-  });
-  sse.send('state', live.stateView());
+  send('state', live.stateView());
   live.on('state', onState);
-  if (row.agent === 'bash') return;
-
   // the log appears only after the agent's first message: look for it until it exists
   const waitForLog = async () => {
-    if (sse.closed) return;
+    if (closed) return;
     const file = await live.transcriptPath().catch(() => null);
     const host = live.host;
-    if (sse.closed) return;
+    if (closed) return;
     if (!file || !host) {
       timer = setTimeout(waitForLog, 2000);
       return;
     }
-    // a client resuming from its cache of another conversation (/clear since): start over
-    const log = url.searchParams.get('log');
-    if (log && log !== path.posix.basename(file)) return sse.send('reset', 0);
+    if (log && log !== path.posix.basename(file)) return send('reset', 0);
     following = file;
-    stopFollow = followLog(row.agent, host, file, offset, (items, end) => sse.send('msg', items, end));
+    stopFollow = followLog(row.agent, host, file, offset, (items, end) => send('msg', items, end));
   };
-  waitForLog();
+  if (row.agent !== 'bash') void waitForLog();
+  return () => {
+    closed = true;
+    if (timer) clearTimeout(timer);
+    clearInterval(watchSwitch);
+    stopFollow?.();
+    live.off('state', onState);
+  };
+}
+
+/**
+ * Live stream for one session: new chat items (event id = byte offset, so EventSource's
+ * automatic reconnect resumes exactly where it left off), plus status/preview of the screen.
+ */
+route('GET', '/_tw/api/sessions/:id/stream', (req, res, [id], url) => {
+  const { row, live } = sessionFor(requireUser(req), id, 'view');
+  const offset = Number(req.headers['last-event-id'] ?? url.searchParams.get('from') ?? 0) || 0;
+  const sse = new Sse(req, res, () => stop());
+  const stop = followSession(row, live, offset, url.searchParams.get('log'), (event, data, end) => sse.send(event, data, end));
+});
+
+/**
+ * Several sessions on one connection (the page's split view: browsers allow only ~6 open
+ * connections per site over http). ?s=<id>:<from>:<log>,… ; every event carries {sid, data, end}.
+ * No event ids: the page reconnects with the offsets it has reached.
+ */
+route('GET', '/_tw/api/streams', (req, res, _p, url) => {
+  const user = requireUser(req);
+  const stops: (() => void)[] = [];
+  const sse = new Sse(req, res, () => stops.forEach((f) => f()));
+  for (const spec of (url.searchParams.get('s') || '').split(',').filter(Boolean).slice(0, 8)) {
+    const [sid, from, log] = spec.split(':');
+    try {
+      const { row, live } = sessionFor(user, sid, 'view');
+      stops.push(followSession(row, live, Number(from) || 0, log ? decodeURIComponent(log) : null, (event, data, end) => sse.send(event, { sid: row.id, data, end })));
+    } catch {
+      sse.send('gone', { sid: Number(sid) });
+    }
+  }
 });
 
 route('POST', '/_tw/api/sessions/:id/input', async (req, res, [id]) => {
@@ -541,7 +573,7 @@ route('POST', '/_tw/api/sessions/:id/keys', async (req, res, [id]) => {
 });
 
 /** Sidebar: session list + status changes. */
-route('GET', '/_tw/api/events', (req, res) => {
+route('GET', '/_tw/api/events', (req, res, _p, url) => {
   const user = requireUser(req);
   let visible = new Set<number>();
   const sendList = () => {
@@ -558,14 +590,19 @@ route('GET', '/_tw/api/events', (req, res) => {
   const onActivity = (id: number, at: number) => {
     if (visible.has(id)) sse.send('activity', { id, at });
   };
+  // notifications ride along (the page keeps fewer connections open); ?notices=1 asks for them
+  const wantNotices = url.searchParams.get('notices') === '1';
+  const onNotice = (n: Notice) => visibleNotice(user, n) && sse.send('notice', n);
   const sse = new Sse(req, res, () => {
     hub.off('list', sendList);
     hub.off('status', onStatus);
     hub.off('activity', onActivity);
+    notices.off('notice', onNotice);
   });
   hub.on('list', sendList);
   hub.on('status', onStatus);
   hub.on('activity', onActivity);
+  if (wantNotices) notices.on('notice', onNotice);
   sendList();
 });
 

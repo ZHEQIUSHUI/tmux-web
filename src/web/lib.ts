@@ -29,7 +29,11 @@ export const coarsePointer = matchMedia('(pointer: coarse)').matches;
  * sleeps a stream can look open while being dead. Reopen when closed, when the server's
  * heartbeat stops arriving, and whenever the page becomes visible or the network comes back.
  */
-export function liveStream(url: () => string, handlers: Record<string, (data: any, ev: MessageEvent) => void>, onLink?: (ok: boolean) => void) {
+/**
+ * `fresh`: on a broken connection reopen with url() again rather than let the browser retry the
+ * old URL (for streams whose position lives in the URL, not in event ids).
+ */
+export function liveStream(url: () => string, handlers: Record<string, (data: any, ev: MessageEvent) => void>, onLink?: (ok: boolean) => void, opts: { fresh?: boolean } = {}) {
   let es: EventSource | null = null;
   let closed = false;
   let last = Date.now();
@@ -54,6 +58,7 @@ export function liveStream(url: () => string, handlers: Record<string, (data: an
     };
     cur.onerror = () => {
       onLink?.(false);
+      if (opts.fresh) cur.close();
       if (cur.readyState === EventSource.CLOSED) {
         clearTimeout(timer);
         timer = window.setTimeout(open, Math.min(15000, 1000 * 2 ** retry++));

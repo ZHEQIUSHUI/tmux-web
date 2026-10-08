@@ -125,22 +125,17 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   const [missed, setMissed] = useState(0);
   const currentRef = useRef(current);
   currentRef.current = current;
-  useEffect(
-    () =>
-      liveStream(() => '/_tw/api/notifications/stream', {
-        notice: (n: Notice) => {
-          if (!alertsEnabled()) return;
-          // already looking at it
-          if (!document.hidden && currentRef.current === n.sessionId) return;
-          const key = n.id;
-          setToasts((t) => [...t.filter((x) => x.n.sessionId !== n.sessionId).slice(-2), { key, n }]);
-          setTimeout(() => setToasts((t) => t.filter((x) => x.key !== key)), n.kind === 'waiting' ? 15000 : 8000);
-          if (document.hidden) setMissed((m) => m + 1);
-          if (n.kind === 'waiting' || n.kind === 'done') navigator.vibrate?.(n.kind === 'waiting' ? [120, 60, 120] : 80);
-        },
-      }),
-    [],
-  );
+  // in-page alerts (they come on the events stream below)
+  const onNotice = (n: Notice) => {
+    if (!alertsEnabled()) return;
+    // already looking at it
+    if (!document.hidden && currentRef.current === n.sessionId) return;
+    const key = n.id;
+    setToasts((t) => [...t.filter((x) => x.n.sessionId !== n.sessionId).slice(-2), { key, n }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.key !== key)), n.kind === 'waiting' ? 15000 : 8000);
+    if (document.hidden) setMissed((m) => m + 1);
+    if (n.kind === 'waiting' || n.kind === 'done') navigator.vibrate?.(n.kind === 'waiting' ? [120, 60, 120] : 80);
+  };
   useEffect(() => {
     const on = () => !document.hidden && setMissed(0);
     document.addEventListener('visibilitychange', on);
@@ -158,12 +153,14 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   useEffect(
     () =>
       liveStream(
-        () => '/_tw/api/events',
+        // the in-page alerts come on this stream too (?notices=1), one connection less
+        () => '/_tw/api/events?notices=1',
         {
           sessions: setSessions,
           folders: setFolders,
           status: ({ id, status }) => setSessions((cur) => cur && cur.map((s) => (s.id === id ? { ...s, status } : s))),
           activity: ({ id, at }) => setSessions((cur) => cur && cur.map((s) => (s.id === id ? { ...s, activityAt: Math.max(s.activityAt, at) } : s))),
+          notice: onNotice,
         },
         // a 401 also ends up as an error: confirm the login is still valid
         (ok) => ok || api('GET', '/_tw/api/me').catch(() => {}),
