@@ -1,16 +1,14 @@
-# Builds the Mac and Android apps and publishes them as the latest GitHub release, together with
-# version.json (what the apps check for updates). Only when asked: a tag app-v1.2.0, or
-# Actions → Apps → Run workflow. Pushing code (the web page) does not trigger it.
+# Builds the Mac and Android apps into the one release "latest" (replaced each time, no version
+# numbers to manage), with version.json for the apps' update check. Runs when the app code changes
+# (mac/, android/) or by hand (Actions → Apps → Run workflow); the web page's changes don't.
 name: Apps
 
 on:
   push:
-    tags: ['app-v*']
+    branches: [main]
+    paths: ['mac/**', 'android/**', '.github/workflows/apps.yml']
   workflow_dispatch:
     inputs:
-      version:
-        description: 版本号（比如 1.2.0）
-        required: true
       notes:
         description: 更新说明（可选）
         required: false
@@ -18,23 +16,22 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: apps
+  cancel-in-progress: true
+
 jobs:
   version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
       code: ${{ steps.v.outputs.code }}
-      tag: ${{ steps.v.outputs.tag }}
     steps:
+      # date + build number: always growing, nothing to keep track of (2026.10.8.12)
       - id: v
         run: |
-          V="${{ github.event.inputs.version }}"
-          [ -n "$V" ] || V="${GITHUB_REF_NAME#app-v}"
-          echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "版本号要是 x.y.z：$V"; exit 1; }
-          IFS=. read -r a b c <<< "$V"
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "code=$((a * 10000 + b * 100 + c))" >> "$GITHUB_OUTPUT"
-          echo "tag=app-v$V" >> "$GITHUB_OUTPUT"
+          echo "version=$(TZ=Asia/Shanghai date +%Y.%-m.%-d).${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "code=$((20000 + ${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
 
   mac:
     needs: version
@@ -70,9 +67,11 @@ jobs:
   release:
     needs: [version, mac, android]
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 20 }
       - uses: actions/download-artifact@v4
         with: { path: out, merge-multiple: true }
       - name: version.json 和发布说明
@@ -80,12 +79,9 @@ jobs:
           NOTES_INPUT: ${{ github.event.inputs.notes }}
         run: |
           V=${{ needs.version.outputs.version }}
-          TAG=${{ needs.version.outputs.tag }}
           NOTES="$NOTES_INPUT"
-          # a tag's own message, when it was pushed as an annotated tag (checkout leaves a plain tag
-          # behind: fetch the real one first)
-          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || true
-          [ "$(git cat-file -t "$TAG" 2>/dev/null)" = tag ] && [ -z "$NOTES" ] && NOTES=$(git tag -l --format='%(contents)' "$TAG" | sed '/^-----BEGIN/,$d')
+          # by default: the app changes since the last build
+          [ -n "$NOTES" ] || NOTES=$(git log --format='- %s' -n 8 ${{ github.event.before || 'HEAD~1' }}..HEAD -- mac android 2>/dev/null | head -8)
           [ -n "$NOTES" ] || NOTES="App 更新"
           sha() { sha256sum "out/$1" | cut -d' ' -f1; }
           size() { stat -c %s "out/$1"; }
@@ -99,7 +95,7 @@ jobs:
           }, ensure_ascii=False, indent=2))
           PY
           cat > out/body.md <<MD
-          ## tmux-web App $V
+          **最近一次更新：$V**
 
           $NOTES
 
@@ -115,18 +111,16 @@ jobs:
 
           ### 更新
 
-          已经装好的 App 会自己检查新版本（通过你的 tmux-web 服务器，连不上时直接访问 GitHub），提示后一键更新。
+          这个发布每次都会被新版本替换，下载链接不变。已经装好的 App 会自己检查新版本（通过你的 tmux-web 服务器，连不上时直接访问 GitHub），提示后一键更新。
 
-          固定的下载链接（总是最新版）：\`https://github.com/${{ github.repository }}/releases/latest/download/<文件名>\`
+          本项目按现状提供，不承担任何责任。安卓签名密钥是公开的，请只从这里下载安装包。
           MD
           cat out/version.json
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          name: App ${{ needs.version.outputs.version }}
-          body_path: out/body.md
-          make_latest: 'true'
-          files: |
-            out/tmux-web-mac.zip
-            out/tmux-web-android.apk
-            out/version.json
+      # one release, "latest": the old one goes, a new one in its place (and the old numbered ones)
+      - name: 发布
+        run: |
+          for t in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+            case "$t" in latest|app-v*) gh release delete "$t" --yes --cleanup-tag || true ;; esac
+          done
+          gh release create latest out/tmux-web-mac.zip out/tmux-web-android.apk out/version.json \
+            --target "$GITHUB_SHA" --title "tmux-web App（最新版）" --notes-file out/body.md --latest

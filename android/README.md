@@ -35,10 +35,10 @@ cd android
 
 ## 发版（CI）
 
-`.github/workflows/apps.yml` 同时编译 Mac 和安卓版，发布到 GitHub Release（标记为最新），并生成 `version.json` 给 App 检查更新用。**平时推代码不会触发**，只有下面两种情况才会：
+`.github/workflows/apps.yml` 同时编译 Mac 和安卓版，发布到唯一的一个 GitHub Release「latest」（每次替换，下载链接不变），并生成 `version.json` 给 App 检查更新用。版本标识自动生成（日期 + 编译序号，比如 `2026.10.8.12`），不用手动管理。
 
-- 推送标签：`git tag -a app-v1.2.0 -m "更新说明" && git push origin app-v1.2.0`
-- 在 GitHub 的 Actions → Apps → Run workflow 手动运行，填版本号和更新说明
+- `mac/`、`android/` 下的代码有改动推送到 main 时自动运行；只改网页不会触发
+- 也可以在 GitHub 的 Actions → Apps → Run workflow 手动运行（可以填更新说明）
 
 ### 签名密钥
 
