@@ -5,7 +5,9 @@
 ## 安装和使用
 
 1. 下载 [tmux-web-android.apk](https://github.com/ZHEQIUSHUI/tmux-web/releases/latest/download/tmux-web-android.apk)，点开安装（系统可能要求允许「安装未知应用」）。Android 8 起。
-2. 第一次打开填写服务器：
+2. 第一次打开填写服务器，先选连接方式：
+   - **直接访问**：已经能直接访问服务器时用（比如在 EasyTier、局域网里），只填网址，比如 `http://10.126.126.2:8080`
+   - **SSH 转发**：通过 SSH 端口转发访问，填下面这些：
    - **SSH 目标**：`user@host`
    - **SSH 端口**、**服务器上 tmux-web 的端口**（默认 8080）、**本地端口**（默认 18080，固定不变，网页的登录状态才能保留）
    - **SSH 密码**：可选，留空则需要时弹框输入
