@@ -1,31 +1,31 @@
-# tmux-web for macOS
+# tmux-web 的 Mac App
 
-A shell App: it maintains an SSH port forward to the server's tmux-web and shows the page in its own window. The page content still comes from the server, so when the server updates, the App does too (if a refresh is needed, click ⟳ in the upper right or press ⌘R).
+一个「壳」App：它在后台维持一条到服务器的 SSH 端口转发，在自己的窗口里打开 tmux-web 网页。网页内容还是由服务器提供，服务器上更新了网页，App 里也跟着更新（需要时点右上角的 ⟳ 或按 ⌘R 刷新）。
 
-## Usage
+## 使用
 
-1. Unzip `tmux-web-mac.zip` and drag `tmux-web.app` into "Applications".
-2. On first launch, **right-click → Open** (no Apple developer signature, so macOS asks once).
-3. Fill in the server settings:
-   - **SSH target**: `user@host`, or an alias from `~/.ssh/config` (then port, jump host, and key all follow that config).
-   - **tmux-web port on the server**: defaults to 8080.
-   - **Local port**: defaults to 18080. It stays fixed so the page's login state and settings persist.
-   - **SSH private key**: optional. Picking a public key `.pub` is fine too; the private key with the same name is used automatically.
-   - **Other ssh options**: optional, e.g. `-J jump-host`.
-4. Click "保存并连接". When a verification code or password is needed, a dialog pops up for you to enter it.
+1. 解压 `tmux-web-mac.zip`，把 `tmux-web.app` 拖进「应用程序」。
+2. 第一次打开时**右键 → 打开**（没有苹果开发者签名，系统会询问一次）。
+3. 填写服务器：
+   - **SSH 目标**：`user@host`，或者 `~/.ssh/config` 里的别名（这样端口、跳板机、密钥都按配置来）
+   - **服务器上 tmux-web 的端口**：默认 8080
+   - **本地端口**：默认 18080。固定不变，网页的登录状态和设置才能保留
+   - **SSH 私钥**：可选。选了公钥 `.pub` 也可以，会自动用同名的私钥
+   - **其他 ssh 参数**：可选，比如 `-J 跳板机`
+4. 点「保存并连接」。需要验证码或密码时会弹框输入。
 
-## Features
+## 功能
 
-- Uses the system's `ssh`; `~/.ssh/config`, keys, `ssh-agent`, and `known_hosts` all apply.
-- Reconnects automatically after a disconnect. Quitting the App or a crash takes the forward down with it; nothing lingers.
-- The page's "waiting for confirmation / task done" alerts become **macOS system notifications** (when you aren't looking at the window); clicking one jumps to that session.
-- File upload and download (into "Downloads") work, and "打开原图" opens a new window.
-- Closing the window doesn't quit the App (notifications keep coming); click the Dock icon to bring it back. ⌘Q quits.
-- The "服务器" menu holds the server list, reconnect, and edit (multiple servers are supported).
+- 用系统自带的 `ssh`，`~/.ssh/config`、密钥、`ssh-agent`、`known_hosts` 全部照常生效
+- 断线自动重连；App 退出或崩溃时转发也跟着关闭，不会残留
+- 网页的「等待确认 / 任务完成」提醒会变成 **macOS 系统通知**（只在你没看着窗口时发），点通知直接跳到那个会话
+- 能上传、下载文件（下载到「下载」文件夹），「打开原图」会开新窗口
+- 关掉窗口 App 不退出（通知照常收），点程序坞图标就回来；⌘Q 才退出
+- 菜单栏「服务器」里有服务器列表、重新连接、编辑（支持多台服务器）
 
-## Building (on a Mac)
+## 编译（在 Mac 上）
 
 ```sh
-xcode-select --install   # first time only
-./build.sh               # → build/tmux-web.app, build/tmux-web-mac.zip (Apple silicon + Intel, macOS 13+)
+xcode-select --install   # 第一次需要
+./build.sh               # → build/tmux-web.app、build/tmux-web-mac.zip（Apple 芯片 + Intel，macOS 13 起）
 ```
