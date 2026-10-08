@@ -205,3 +205,28 @@ export async function copyText(text: string): Promise<boolean> {
 
 /** A path as typed into a message: quoted when it has spaces or shell-special characters. */
 export const quotePath = (p: string) => (/[\s"'$`\\]/.test(p) ? `"${p.replace(/(["\\$`])/g, '\\$1')}"` : p);
+
+// ---------------- layout: auto / phone / desktop ----------------
+
+export type LayoutPref = 'auto' | 'mobile' | 'desktop';
+export const LAYOUT_LABEL: Record<LayoutPref, string> = { auto: '自动', mobile: '手机版', desktop: '电脑版' };
+export const layoutPref = (): LayoutPref => (store.get('tw:layout') as LayoutPref) || 'auto';
+
+/**
+ * Forcing a layout on a phone or tablet: the page is laid out at a fixed width and scaled to the
+ * screen, so every style for that layout applies as a whole (desktop browsers ignore it).
+ */
+export function applyLayout() {
+  const meta = document.querySelector('meta[name="viewport"]');
+  if (!meta) return;
+  const auto = 'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content';
+  const p = layoutPref();
+  // fixed scale (no pinch / focus zoom): the scaled page always fits the screen
+  const fixed = (w: number) => `width=${w}, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content`;
+  meta.setAttribute('content', p === 'mobile' ? fixed(480) : p === 'desktop' ? fixed(1180) : auto);
+}
+export function setLayout(p: LayoutPref) {
+  store.set('tw:layout', p === 'auto' ? null : p);
+  // a clean start in the new layout
+  location.reload();
+}

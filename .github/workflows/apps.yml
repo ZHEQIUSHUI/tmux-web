@@ -1,0 +1,134 @@
+# Builds the Mac and Android apps and publishes them as the latest GitHub release, together with
+# version.json (what the apps check for updates). Only when asked: a tag app-v1.2.0, or
+# Actions → Apps → Run workflow. Pushing code (the web page) does not trigger it.
+name: Apps
+
+on:
+  push:
+    tags: ['app-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 版本号（比如 1.2.0）
+        required: true
+      notes:
+        description: 更新说明（可选）
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      code: ${{ steps.v.outputs.code }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        run: |
+          V="${{ github.event.inputs.version }}"
+          [ -n "$V" ] || V="${GITHUB_REF_NAME#app-v}"
+          echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "版本号要是 x.y.z：$V"; exit 1; }
+          IFS=. read -r a b c <<< "$V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "code=$((a * 10000 + b * 100 + c))" >> "$GITHUB_OUTPUT"
+          echo "tag=app-v$V" >> "$GITHUB_OUTPUT"
+
+  mac:
+    needs: version
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: VERSION=${{ needs.version.outputs.version }} ./mac/build.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: mac, path: mac/build/tmux-web-mac.zip }
+
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: 签名密钥
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          [ -n "$KEYSTORE_B64" ] || { echo "缺少 Secret ANDROID_KEYSTORE_B64（见 android/README.md）"; exit 1; }
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+      - name: 编译
+        working-directory: android
+        env:
+          TW_KEYSTORE: ${{ runner.temp }}/release.jks
+          TW_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          ./gradlew --no-daemon assembleRelease -PversionName=${{ needs.version.outputs.version }} -PversionCode=${{ needs.version.outputs.code }}
+          cp app/build/outputs/apk/release/app-release.apk ../tmux-web-android.apk
+      - uses: actions/upload-artifact@v4
+        with: { name: android, path: tmux-web-android.apk }
+
+  release:
+    needs: [version, mac, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - name: version.json 和发布说明
+        env:
+          NOTES_INPUT: ${{ github.event.inputs.notes }}
+        run: |
+          V=${{ needs.version.outputs.version }}
+          TAG=${{ needs.version.outputs.tag }}
+          NOTES="$NOTES_INPUT"
+          # a tag's own message, when it was pushed as an annotated tag
+          [ -n "$NOTES" ] || NOTES=$(git tag -l --format='%(contents)' "$TAG" 2>/dev/null | sed '/^-----BEGIN/,$d')
+          [ -n "$NOTES" ] || NOTES="App 更新"
+          sha() { sha256sum "out/$1" | cut -d' ' -f1; }
+          size() { stat -c %s "out/$1"; }
+          python3 - "$V" "${{ needs.version.outputs.code }}" "$NOTES" "$(sha tmux-web-mac.zip)" "$(size tmux-web-mac.zip)" "$(sha tmux-web-android.apk)" "$(size tmux-web-android.apk)" > out/version.json <<'PY'
+          import json, sys
+          v, code, notes, msha, msize, asha, asize = sys.argv[1:]
+          print(json.dumps({
+            "version": v, "notes": notes,
+            "mac": {"file": "tmux-web-mac.zip", "sha256": msha, "size": int(msize)},
+            "android": {"file": "tmux-web-android.apk", "versionCode": int(code), "sha256": asha, "size": int(asize)},
+          }, ensure_ascii=False, indent=2))
+          PY
+          cat > out/body.md <<MD
+          ## tmux-web App $V
+
+          $NOTES
+
+          ### 下载
+
+          - **Mac**：[tmux-web-mac.zip](https://github.com/${{ github.repository }}/releases/latest/download/tmux-web-mac.zip)（Apple 芯片和 Intel，macOS 13 起）
+            1. 解压，把 \`tmux-web.app\` 拖进「应用程序」
+            2. **在终端执行一次**（App 没有苹果开发者签名，不执行的话系统会拦着不让打开）：
+               \`\`\`
+               xattr -c /Applications/tmux-web.app
+               \`\`\`
+          - **安卓**：[tmux-web-android.apk](https://github.com/${{ github.repository }}/releases/latest/download/tmux-web-android.apk)（Android 8 起）。下载后点开安装，系统可能会要求允许「安装未知应用」。
+
+          ### 更新
+
+          已经装好的 App 会自己检查新版本（通过你的 tmux-web 服务器，连不上时直接访问 GitHub），提示后一键更新。
+
+          固定的下载链接（总是最新版）：\`https://github.com/${{ github.repository }}/releases/latest/download/<文件名>\`
+          MD
+          cat out/version.json
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: App ${{ needs.version.outputs.version }}
+          body_path: out/body.md
+          make_latest: 'true'
+          files: |
+            out/tmux-web-mac.zip
+            out/tmux-web-android.apk
+            out/version.json

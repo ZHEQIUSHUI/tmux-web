@@ -86,6 +86,8 @@
 | GET/POST/PATCH/DELETE | `folders`, `folders/:id` | 你的文件夹 `{name, note, position}` |
 | GET | `hosts`, `hosts/:id/dirs`, `hosts/:id/ports`, `hosts/:id/tmux`, `hosts/:id/claude-history` | 主机、目录建议、监听中的端口、已有的 tmux 会话、Claude 历史对话 |
 | GET | `hosts/:id/stats` | 资源占用：CPU（采样半秒）、内存和交换分区、显卡（有 `nvidia-smi` 时）、磁盘、当前最占 CPU 的进程。结果缓存 2 秒 |
+| GET | `app/version.json` | App 的最新版本信息（转发自 GitHub 最新 Release 的 version.json，缓存 10 分钟）。不需要登录 |
+| GET | `app/download/<文件名>` | 下载最新版 App 的安装包（服务器从 GitHub 下载一次后缓存）。不需要登录 |
 | POST | `hosts/:id/adopt` | 接管已有的 tmux 会话：`{name, socket?: "default"}` |
 
 网页预览：`/p/<主机id>/<端口>/<路径>` 会转发到主机上的这个端口（HTTP 和 WebSocket 都支持），同样需要登录。

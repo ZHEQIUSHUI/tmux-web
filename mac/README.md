@@ -4,8 +4,11 @@
 
 ## 使用
 
-1. 解压 `tmux-web-mac.zip`，把 `tmux-web.app` 拖进「应用程序」。
-2. 第一次打开时**右键 → 打开**（没有苹果开发者签名，系统会询问一次）。
+1. 下载 [tmux-web-mac.zip](https://github.com/ZHEQIUSHUI/tmux-web/releases/latest/download/tmux-web-mac.zip)，解压，把 `tmux-web.app` 拖进「应用程序」。
+2. **在终端执行一次**（App 没有苹果开发者签名，不执行的话系统会拦着不让打开）：
+   ```sh
+   xattr -c /Applications/tmux-web.app
+   ```
 3. 填写服务器：
    - **SSH 目标**：`user@host`，或者 `~/.ssh/config` 里的别名（这样端口、跳板机、密钥都按配置来）
    - **服务器上 tmux-web 的端口**：默认 8080
@@ -23,6 +26,7 @@
 - 能上传、下载文件（下载到「下载」文件夹），「打开原图」会开新窗口
 - 关掉窗口 App 不退出（通知照常收），点程序坞图标就回来；⌘Q 才退出
 - 菜单栏「服务器」里有服务器列表、重新连接、编辑（支持多台服务器）
+- 自动检查更新（每 6 小时，或菜单「tmux-web → 检查更新…」），通过你的 tmux-web 服务器下载，取不到时直接访问 GitHub；更新时自动替换并重启。需要 App 放在「应用程序」里才能原地更新
 
 ## 编译（在 Mac 上）
 

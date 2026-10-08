@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api, type Folder, type Notice, type Me, type SessionInfo, type Status } from './api';
-import { AGENT_LABEL, STATUS_LABEL, ago, coarsePointer, shortPath, store } from './lib';
+import { AGENT_LABEL, LAYOUT_LABEL, STATUS_LABEL, ago, coarsePointer, layoutPref, setLayout, shortPath, store, type LayoutPref } from './lib';
 import { prefetchAll, prefetchChat } from './chat';
 import { Chevron, Icon, Modal, ThemeCycle, ThemeSwitch } from './ui';
 
@@ -449,6 +449,12 @@ export function Sidebar(props: {
           <Icon.clock />
         </button>
         <ThemeCycle />
+        {/* touch screens (tablets): switch between the phone and desktop layouts */}
+        {coarsePointer && (
+          <button class="ghost small" onClick={() => setLayout(layoutPref() === 'desktop' ? 'mobile' : layoutPref() === 'mobile' ? 'auto' : 'mobile')} title={`页面布局：${LAYOUT_LABEL[layoutPref()]}（点击切换）`}>
+            {layoutPref() === 'mobile' ? '📱' : '🖥'}
+          </button>
+        )}
         {me.role === 'admin' && (
           <button class="ghost small" onClick={props.onAdmin}>
             账号
@@ -630,6 +636,10 @@ export function MenuSheet({ me, onClose, onAdmin, onPassword, onTokens, onLogout
         <span class="dim small">外观</span>
         <ThemeSwitch />
       </div>
+      <div class="sheet-theme">
+        <span class="dim small">页面布局</span>
+        <LayoutSwitch />
+      </div>
       <label class="sheet-toggle">
         <span>
           页内提醒
@@ -649,5 +659,19 @@ export function MenuSheet({ me, onClose, onAdmin, onPassword, onTokens, onLogout
         </button>
       </div>
     </Modal>
+  );
+}
+
+/** 自动 / 手机版 / 电脑版 (the page reloads in the chosen layout) */
+export function LayoutSwitch() {
+  const cur = layoutPref();
+  return (
+    <div class="tabs theme-switch">
+      {(['auto', 'mobile', 'desktop'] as LayoutPref[]).map((p) => (
+        <button key={p} class={cur === p ? 'on' : ''} onClick={() => cur !== p && setLayout(p)}>
+          {LAYOUT_LABEL[p]}
+        </button>
+      ))}
+    </div>
   );
 }

@@ -55,6 +55,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
   }
 
   @objc private func reconnect() { connect() }
+  @objc private func checkUpdates() {
+    guard let port = main.port else {
+      let a = NSAlert()
+      a.messageText = "连上服务器后才能检查更新"
+      a.runModal()
+      return
+    }
+    Updater.check(port: port, window: main.window, asked: true)
+  }
   @objc private func reloadPage() { main.reload() }
   @objc private func showMain() { main.bringBack() }
 
@@ -106,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     let appItem = NSMenuItem()
     let appMenu = NSMenu()
     appMenu.addItem(withTitle: "关于 tmux-web", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+    appMenu.addItem(withTitle: "检查更新…", action: #selector(checkUpdates), keyEquivalent: "")
     appMenu.addItem(.separator())
     appMenu.addItem(withTitle: "服务器设置…", action: #selector(openSettings), keyEquivalent: ",")
     appMenu.addItem(.separator())

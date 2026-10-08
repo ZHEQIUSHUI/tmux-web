@@ -61,6 +61,8 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
   let web: WKWebView
   let status = Status()
   private var loadedPort: Int?
+  /** the forward's port while connected */
+  var port: Int? { loadedPort }
   private var popups: [NSWindow] = []
   private var overlay: NSView?
 
@@ -140,6 +142,7 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
       if loadedPort != port || web.url == nil {
         loadedPort = port
         web.load(URLRequest(url: URL(string: "http://127.0.0.1:\(port)/")!))
+        Updater.check(port: port, window: window)
       }
     }
     if case .failed = s { loadedPort = nil }

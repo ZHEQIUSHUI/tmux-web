@@ -14,7 +14,7 @@
 - 可以**导入主机上已有的 tmux 会话**：里面的程序不重启，你在本机照常 attach，网页上同时可见
 - 手机端按终端 App 的方式设计：会话卡片列表、终端附加键栏（Ctrl/Alt/Esc/方向键/粘贴）、双指缩放字号，可以添加到主屏幕
 
-Mac 上也可以用 [macOS App](mac/README.md)：它自动维持 SSH 端口转发并打开网页，提醒会变成系统通知。
+也可以用 App：[Mac](mac/README.md) 和 [安卓](android/README.md)。它们自动维持 SSH 端口转发并打开网页，提醒会变成系统通知，并且会自动更新。下载：[最新版本](https://github.com/ZHEQIUSHUI/tmux-web/releases/latest)。
 
 ## 快速开始
 

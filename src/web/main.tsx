@@ -1,7 +1,7 @@
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { api, type Me } from './api';
-import { coarsePointer } from './lib';
+import { applyLayout, coarsePointer, layoutPref } from './lib';
 import { Shell } from './shell';
 import { chatCache } from './chat';
 import { clearChats, loadChats } from './chat-store';
@@ -87,7 +87,8 @@ function App() {
 // iOS doesn't shrink the layout when the keyboard opens; size the app to the visible viewport
 // so the input box stays above the keyboard.
 const vv = window.visualViewport;
-if (vv && coarsePointer) {
+// (not with a forced layout: the page is scaled to the screen, and keeps its full height)
+if (vv && coarsePointer && layoutPref() === 'auto') {
   const fitViewport = () => {
     document.documentElement.style.setProperty('--app-h', `${vv.height}px`);
     if (vv.offsetTop) window.scrollTo(0, 0);
@@ -97,4 +98,5 @@ if (vv && coarsePointer) {
   fitViewport();
 }
 
+applyLayout();
 render(<App />, document.getElementById('app')!);

@@ -1,4 +1,5 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { config } from './config.js';
@@ -31,6 +32,7 @@ import { claudeState, followLog, readFull, readImage, readPage } from './transcr
 import { changes, diff, fileSize, imageFile, insideCwd, listDir, readPart, search, streamFile } from './files.js';
 import { shrink, thumbWidth } from './thumb.js';
 import { hostStats } from './stats.js';
+import { latestVersion, releaseFile } from './app-updates.js';
 import { notices, noticesFor, visible, visible as visibleNotice, type Notice } from './notify.js';
 import { parsePreviewPath, previewCookie, proxyHttp, proxyUpgrade, readPreviewCookie, type ProxyTarget } from './proxy.js';
 
@@ -758,6 +760,32 @@ route('GET', '/_tw/api/hosts/:id/dirs', async (req, res, [id]) => {
 });
 
 /** Resource use of a host (CPU, memory, GPUs, disks, top processes), for the 服务器资源 panel. */
+// ---- app updates (Mac / Android), relayed from the latest GitHub release; no login needed ----
+
+route('GET', '/_tw/api/app/version.json', async (req, res) => {
+  try {
+    sendJson(req, res, 200, await latestVersion());
+  } catch (e: any) {
+    throw new HttpError(502, `取不到版本信息：${e.message}`);
+  }
+});
+
+route('GET', '/_tw/api/app/download/:name', async (req, res, [name]) => {
+  let f: { path: string; size: number };
+  try {
+    f = await releaseFile(decodeURIComponent(name));
+  } catch (e: any) {
+    throw new HttpError(e.status || 502, `下载失败：${e.message}`);
+  }
+  res.writeHead(200, {
+    'Content-Type': name.endsWith('.apk') ? 'application/vnd.android.package-archive' : 'application/octet-stream',
+    'Content-Length': f.size,
+    'Content-Disposition': `attachment; filename="${name}"`,
+    'Cache-Control': 'no-store',
+  });
+  fs.createReadStream(f.path).pipe(res);
+});
+
 route('GET', '/_tw/api/hosts/:id/stats', async (req, res, [id]) => {
   const user = requireUser(req);
   const h = q.hostById.get(Number(id));
