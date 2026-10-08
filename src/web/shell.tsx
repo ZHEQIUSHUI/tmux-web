@@ -5,7 +5,9 @@ import { Icon } from './ui';
 import { ChatView } from './chat';
 import { TerminalView } from './terminal-view';
 import { AdminModal, FolderModal, NewSession, PasswordModal, SessionSettings, TokensModal, useHosts } from './dialogs';
-import { MenuSheet, MobileHome, Sidebar, Toasts, alertsEnabled, useUnread } from './lists';
+import { MenuSheet, MobileHome, Sidebar, Toasts, alertsEnabled, recentReach, useUnread } from './lists';
+import { idsOf, newViewId, place, removeView, saveView, useHashView, useViews } from './multi';
+import { DropZones, MultiPane, useSessionDrag } from './multi-view';
 import { PreviewView } from './preview';
 import { FilesView } from './files-view';
 import { StatsModal } from './stats-view';
@@ -21,7 +23,7 @@ export const VIEWS: [Tab, string, () => any][] = [
 
 type NewAt = (hostId: number, cwd: string) => void;
 
-export function SessionPane({ me, session, folders, narrow, onBack, onNewAt }: { me: Me; session: SessionInfo; folders: Folder[]; narrow: boolean; onBack: () => void; onNewAt: NewAt }) {
+export function SessionPane({ me, session, folders, narrow, onBack, onNewAt, onClose }: { me: Me; session: SessionInfo; folders: Folder[]; narrow: boolean; onBack: () => void; onNewAt: NewAt; onClose?: () => void }) {
   const tabKey = `tw:tab:${session.id}`;
   const initialTab = (): Tab => (store.get(tabKey) as Tab) || (session.agent === 'bash' ? 'term' : 'chat');
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -73,6 +75,11 @@ export function SessionPane({ me, session, folders, narrow, onBack, onNewAt }: {
         <button class="icon-btn" onClick={() => setSettings(true)} aria-label="设置">
           <Icon.more />
         </button>
+        {onClose && (
+          <button class="icon-btn pane-close" onClick={onClose} aria-label="移出分屏" title="移出分屏（会话不受影响）">
+            ✕
+          </button>
+        )}
       </header>
       {tab === 'chat' && <ChatView key={session.id} session={session} onOpenTerminal={() => pick('term')} />}
       {tab === 'term' && <TerminalView key={session.id} sessionId={session.id} canWrite={session.access === 'control'} />}
@@ -112,7 +119,29 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   // folder being edited; null = creating one; undefined = dialog closed
   const [editFolder, setEditFolder] = useState<Folder | null | undefined>(undefined);
   const [hostBanner, setHostBanner] = useState(false);
-  const unread = useUnread(sessions, current);
+  // split view (desktop): #/m/<id>, a layout of up to 2×2 sessions kept in this browser
+  const [viewId, setViewId] = useHashView();
+  const views = useViews();
+  const view = !narrow && viewId ? (views.find((v) => v.id === viewId) ?? null) : null;
+  const onScreen = view ? idsOf(view.grid) : current !== null ? [current] : [];
+  const dragging = useSessionDrag();
+  const unread = useUnread(sessions, onScreen);
+  // the session list can be made wider or narrower (desktop)
+  const [sideW, setSideW] = useState(() => Number(store.get('tw:side-w')) || 260);
+  const resizeSide = (e: PointerEvent) => {
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    document.body.classList.add('resizing');
+    let w = sideW;
+    const move = (ev: PointerEvent) => setSideW((w = Math.max(200, Math.min(520, ev.clientX))));
+    const up = () => {
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', up);
+      document.body.classList.remove('resizing');
+      store.set('tw:side-w', String(Math.round(w)));
+    };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+  };
   // relative times in the lists
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -125,11 +154,13 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   const [missed, setMissed] = useState(0);
   const currentRef = useRef(current);
   currentRef.current = current;
+  const onScreenRef = useRef(onScreen);
+  onScreenRef.current = onScreen;
   // in-page alerts (they come on the events stream below)
   const onNotice = (n: Notice) => {
     if (!alertsEnabled()) return;
     // already looking at it
-    if (!document.hidden && currentRef.current === n.sessionId) return;
+    if (!document.hidden && onScreenRef.current.includes(n.sessionId)) return;
     const key = n.id;
     setToasts((t) => [...t.filter((x) => x.n.sessionId !== n.sessionId).slice(-2), { key, n }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.key !== key)), n.kind === 'waiting' ? 15000 : 8000);
@@ -169,6 +200,18 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   );
 
   const session = sessions?.find((s) => s.id === current) ?? null;
+  useEffect(() => {
+    if (!sessions) return;
+    const reach = recentReach() * 60_000;
+    for (const v of views) {
+      if (v.id === viewId) continue;
+      const members = idsOf(v.grid)
+        .map((id) => sessions.find((s) => s.id === id))
+        .filter((s): s is SessionInfo => !!s);
+      const recent = members.some((s) => s.status === 'busy' || s.status === 'waiting' || Date.now() - s.activityAt < reach);
+      if (members.length < 2 || !recent) removeView(v.id);
+    }
+  }, [sessions, views.length, viewId]);
   // opened from the list: "back" is a real history step back (same as the system back gesture)
   const fromList = useRef(false);
   const pick = (id: number) => {
@@ -204,7 +247,7 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   }, [session?.name, session?.status, missed]);
 
   return (
-    <div class="app">
+    <div class="app" style={narrow ? undefined : { '--side-w': `${sideW}px` }}>
       {narrow ? (
         <>
           {/* the list stays mounted under the session view: going back keeps its scroll and state */}
@@ -245,6 +288,14 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             alerts={alerts}
             onToggleAlerts={toggleAlerts}
             current={current}
+            active={onScreen}
+            views={views.map((v) => ({ id: v.id, ids: idsOf(v.grid) }))}
+            viewId={view?.id ?? null}
+            onPickView={setViewId}
+            onRemoveView={(id) => {
+              removeView(id);
+              if (id === viewId) setViewId(null);
+            }}
             onPick={pick}
             onNew={() => setModal('new')}
             onFiles={openFiles}
@@ -255,8 +306,36 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             onTokens={() => setModal('tokens')}
             onLogout={logout}
           />
-          {session ? (
-            <SessionPane me={me} session={session} folders={folders} narrow={false} onBack={() => setCurrent(null)} onNewAt={newSessionAt} />
+          <div class="side-resizer" onPointerDown={resizeSide} title="拖动调整宽度" />
+          {view && sessions ? (
+            <MultiPane
+              me={me}
+              view={view}
+              sessions={sessions}
+              folders={folders}
+              renderPane={({ session: s, onClose }) => <SessionPane me={me} session={s} folders={folders} narrow={false} onBack={onClose!} onNewAt={newSessionAt} onClose={onClose} />}
+              onSingle={(sid) => {
+                removeView(view.id);
+                setCurrent(sid);
+              }}
+            />
+          ) : session ? (
+            <div class="single-pane">
+              <SessionPane me={me} session={session} folders={folders} narrow={false} onBack={() => setCurrent(null)} onNewAt={newSessionAt} />
+              {/* drag another session in: the two side by side */}
+              {dragging && (
+                <DropZones
+                  can={() => true}
+                  onDrop={(d, sid) => {
+                    const grid = place([[session.id]], session.id, d, sid);
+                    if (!grid) return;
+                    const id = newViewId();
+                    saveView({ id, grid });
+                    setViewId(id);
+                  }}
+                />
+              )}
+            </div>
           ) : filesOpen ? (
             <GlobalFiles narrow={false} onBack={() => setFilesOpen(false)} onNewAt={newSessionAt} />
           ) : (

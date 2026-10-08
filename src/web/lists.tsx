@@ -20,6 +20,8 @@ const readReach = () => {
 };
 // "0" was how hiding used to be stored
 const readHidden = () => store.get('tw:recent-off') === '1' || store.get('tw:recent-min') === '0';
+/** How far back 最近 reaches, in minutes (also while it is hidden): split views expire with it. */
+export const recentReach = () => readReach();
 const recentLabel = (m: number) => (!m ? '不显示' : m < 60 ? `${m} 分钟` : `${m / 60} 小时`);
 
 /** The setting, shared by every list on the page: minutes, 0 = section hidden. */
@@ -106,7 +108,7 @@ export function sortSessions(list: SessionInfo[]): SessionInfo[] {
  * What you have seen, per session (activity time when you last looked), kept in this browser.
  * A session is unread when it did something after that.
  */
-export function useUnread(sessions: SessionInfo[] | null, current: number | null): Set<number> {
+export function useUnread(sessions: SessionInfo[] | null, onScreen: number[]): Set<number> {
   const [seen, setSeen] = useState<Record<number, number>>(() => {
     try {
       return JSON.parse(store.get('tw:seen') || '{}');
@@ -135,13 +137,14 @@ export function useUnread(sessions: SessionInfo[] | null, current: number | null
       return save(next);
     });
   }, [sessions]);
-  // the open session is being read, as long as the page is in front
-  const open = sessions?.find((s) => s.id === current);
+  // the sessions on screen are being read, as long as the page is in front
+  const open = (sessions || []).filter((s) => onScreen.includes(s.id));
+  const openKey = open.map((s) => `${s.id}:${s.activityAt}`).join();
   useEffect(() => {
-    if (!open || !visible) return;
-    setSeen((cur) => (cur[open.id] >= open.activityAt ? cur : save({ ...cur, [open.id]: open.activityAt })));
-  }, [open?.id, open?.activityAt, visible]);
-  return new Set((sessions || []).filter((s) => s.activityAt > (seen[s.id] ?? Infinity) + 1000 && !(s.id === current && visible)).map((s) => s.id));
+    if (!open.length || !visible) return;
+    setSeen((cur) => (open.every((s) => cur[s.id] >= s.activityAt) ? cur : save({ ...cur, ...Object.fromEntries(open.map((s) => [s.id, s.activityAt])) })));
+  }, [openKey, visible]);
+  return new Set((sessions || []).filter((s) => s.activityAt > (seen[s.id] ?? Infinity) + 1000 && !(onScreen.includes(s.id) && visible)).map((s) => s.id));
 }
 
 // ---------------- in-page alerts ----------------
@@ -268,6 +271,13 @@ export function Sidebar(props: {
   sessions: SessionInfo[];
   folders: Folder[];
   current: number | null;
+  /** sessions on screen (several in a split view) */
+  active: number[];
+  /** split views to list in 最近, and the open one */
+  views: { id: string; ids: number[] }[];
+  viewId: string | null;
+  onPickView: (id: string) => void;
+  onRemoveView: (id: string) => void;
   onPick: (id: number) => void;
   onNew: () => void;
   onFiles: () => void;
@@ -289,6 +299,33 @@ export function Sidebar(props: {
   const [recentMin, setRecentMin] = useRecentMinutes();
   const [recentDlg, setRecentDlg] = useState(false);
   const recent = recentSessions(sessions, recentMin);
+  // split views stay in 最近 while one of their sessions does
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const recentIds = new Set(recent.map((s) => s.id));
+  const views = props.views
+    .map((v) => ({ ...v, members: v.ids.map((id) => byId.get(id)).filter((s): s is SessionInfo => !!s) }))
+    .filter((v) => v.members.length >= 2 && v.members.some((s) => recentIds.has(s.id)));
+  const viewItem = (v: (typeof views)[number]) => {
+    const latest = Math.max(...v.members.map((s) => s.activityAt));
+    const st = v.members.find((s) => s.status === 'waiting') ?? v.members.find((s) => s.status === 'busy');
+    return (
+      <div key={`v${v.id}`} class={`session-item view-item ${props.viewId === v.id ? 'active' : ''}`}>
+        <button class="view-open" onClick={() => props.onPickView(v.id)} title={v.members.map((s) => s.name).join(' + ')}>
+          <span class={`dot ${st?.status ?? 'idle'}`} />
+          <span class="s-main">
+            <span class="s-name">
+              <span class="view-icon">⊞</span> {v.members.map((s) => s.name).join(' + ')}
+            </span>
+            <span class="s-sub">分屏 · {v.members.length} 个会话</span>
+          </span>
+          <span class="s-time">{ago(latest)}</span>
+        </button>
+        <button class="icon-btn view-remove" onClick={() => props.onRemoveView(v.id)} aria-label="移除这个分屏" title="移除这个分屏（不影响会话）">
+          ✕
+        </button>
+      </div>
+    );
+  };
   // as on phones: keep every chat warm (and saved), fetching only sessions that did something
   const activityKey = sessions.map((x) => x.activityAt).join();
   useEffect(() => {
@@ -297,7 +334,16 @@ export function Sidebar(props: {
   }, [activityKey]);
   // the recent section: name, conversation title and which folder it lives in
   const recentItem = (s: SessionInfo) => (
-    <button key={`r${s.id}`} class={`session-item ${s.id === current ? 'active' : ''}`} onPointerDown={() => prefetchChat(s)} onMouseEnter={() => prefetchChat(s)} onClick={() => props.onPick(s.id)} title={s.title || undefined}>
+    <button
+      key={`r${s.id}`}
+      class={`session-item ${props.active.includes(s.id) ? 'active' : ''}`}
+      onPointerDown={() => prefetchChat(s)}
+      onMouseEnter={() => prefetchChat(s)}
+      onClick={() => props.onPick(s.id)}
+      draggable={!coarsePointer}
+      onDragStart={(e) => e.dataTransfer?.setData('text/tw-session', String(s.id))}
+      title={s.title || undefined}
+    >
       <span class={`dot ${s.status}`} title={STATUS_LABEL[s.status]} />
       <span class="s-main">
         <span class="s-name">
@@ -315,11 +361,12 @@ export function Sidebar(props: {
   const item = (s: SessionInfo) => (
     <button
       key={s.id}
-      class={`session-item ${s.id === current ? 'active' : ''}`}
+      class={`session-item ${props.active.includes(s.id) ? 'active' : ''}`}
       onPointerDown={() => prefetchChat(s)}
       onMouseEnter={() => prefetchChat(s)}
       onClick={() => props.onPick(s.id)}
-      draggable={!coarsePointer && props.folders.length > 0}
+      // to a folder, or onto the chat to show it side by side
+      draggable={!coarsePointer}
       onDragStart={(e) => e.dataTransfer?.setData('text/tw-session', String(s.id))}
       title={s.note || undefined}
     >
@@ -364,7 +411,12 @@ export function Sidebar(props: {
         {recent.length > 0 && (
           <div class="folder kind-recent" key="recent">
             <FolderHeader label="最近" note={`${recentLabel(recentMin)}内有活动`} group={{ folder: null, sessions: recent }} open={!collapsed.has('r')} onToggle={() => toggle('r')} onEdit={() => setRecentDlg(true)} />
-            {!collapsed.has('r') && <div class="folder-body">{recent.map(recentItem)}</div>}
+            {!collapsed.has('r') && (
+              <div class="folder-body">
+                {views.map(viewItem)}
+                {recent.map(recentItem)}
+              </div>
+            )}
           </div>
         )}
         {groups.map((g) => {

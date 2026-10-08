@@ -37,6 +37,7 @@ Session fields: `id, name, agent, cwd, hostId, host, owner, note, folderId, grou
 | GET | `sessions/:id/claude-state` | Model, context usage, permission mode |
 | GET | `sessions/:id/image?off=<offset>&n=<n>` | An image embedded in the conversation. In messages, embedded base64 images are replaced with `tw-img:<n>`, and `off` is the first part of the item `id` |
 | GET | `sessions/:id/file-image?path=<path>` | An image file on the host (relative paths resolve from the session's working directory; paths outside it require control access; at most 20MB) |
+| GET | `streams?s=<id>:<from>:<log>,…` | Several sessions on one SSE connection (`msg` / `state` / `reset` events, each with `{sid, data, end}`; `gone` for sessions you can't access). No event ids: on reconnect, pass the offsets you have reached |
 | POST | `sessions/:id/input` | Send text and press Enter: `{text, submit?: true}` |
 | POST | `sessions/:id/keys` | Send keys: `{keys: ["Escape"]}`. Allowed: Enter Escape Tab BTab Up Down Left Right Space BSpace C-c C-d C-l y n 1–9 |
 | WS | `sessions/:id/term` | Terminal: server→client binary frames are raw terminal output (the first frame is a screen snapshot), text frames are JSON (`hello`/`size`/`pong`). Client→server: binary is keystrokes, text is `{type:"resize",cols,rows}` / `{type:"ping"}` |
@@ -73,7 +74,7 @@ Notification: `{id, at, sessionId, session, kind, title, text}`. `kind`:
 - `offline`: host unreachable
 - `ended`: session ended
 
-The session list itself also has a live stream: `GET events` (SSE: `sessions` full list, `folders`, `status` `{id, status}`).
+The session list itself also has a live stream: `GET events` (SSE: `sessions` full list, `folders`, `status` `{id, status}`, `activity`; with `?notices=1`, notifications too as `notice`).
 
 ## Other
 
