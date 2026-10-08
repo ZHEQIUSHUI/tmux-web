@@ -74,7 +74,14 @@ final class Tunnel {
       "-p", String(p.sshPort),
       "-L", "127.0.0.1:\(p.localPort):\(p.remoteHost):\(p.remotePort)",
     ]
-    if let key = p.privateKey { args += ["-i", key, "-o", "IdentitiesOnly=yes"] }
+    if let key = p.privateKey {
+      switch KeyFile.usable(key, for: p.id) {
+      case .success(let path): args += ["-i", path, "-o", "IdentitiesOnly=yes"]
+      case .failure(let e):
+        state = .failed(e.message)
+        return
+      }
+    }
     args += p.extraArgs.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
     args.append(p.target.trimmingCharacters(in: .whitespaces))
 
@@ -197,4 +204,36 @@ enum Askpass {
     chmod(file.path, 0o700)
     return file.path
   }()
+}
+
+/// The key as ssh will take it: a private key (judged by its content, not its name), only readable
+/// by us — ssh refuses keys others can read (0777 after a download or a USB stick), so those are
+/// used through a private copy; the file itself is left alone.
+enum KeyFile {
+  struct Problem: Error { let message: String }
+
+  static func usable(_ path: String, for id: UUID) -> Result<String, Problem> {
+    let fm = FileManager.default
+    guard let data = fm.contents(atPath: path) else {
+      return .failure(Problem(message: "读不到密钥文件：\(path)"))
+    }
+    let head = String(decoding: data.prefix(200), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    if head.hasPrefix("ssh-") || head.hasPrefix("ecdsa-") || head.hasPrefix("sk-") {
+      return .failure(Problem(message: "选的是公钥（\((path as NSString).lastPathComponent)），登录需要对应的私钥：内容以「-----BEGIN … PRIVATE KEY-----」开头的那个文件，通常和公钥同名、没有 .pub。"))
+    }
+    if !head.hasPrefix("-----BEGIN") {
+      return .failure(Problem(message: "这个文件看起来不是 SSH 私钥：\(path)"))
+    }
+    let mode = ((try? fm.attributesOfItem(atPath: path))?[.posixPermissions] as? NSNumber)?.intValue ?? 0o600
+    if mode & 0o077 == 0 { return .success(path) }
+    // others may read it: hand ssh a copy only we can read
+    let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("TmuxWeb/keys")
+    try? fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    let copy = dir.appendingPathComponent(id.uuidString)
+    try? fm.removeItem(at: copy)
+    guard fm.createFile(atPath: copy.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+      return .failure(Problem(message: "密钥文件权限太宽（\(String(mode, radix: 8))），复制一份也失败了。可以在终端运行：chmod 600 \(path)"))
+    }
+    return .success(copy.path)
+  }
 }
