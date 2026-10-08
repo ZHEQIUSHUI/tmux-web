@@ -40,13 +40,6 @@ cd android
 - 推送标签：`git tag -a app-v1.2.0 -m "更新说明" && git push origin app-v1.2.0`
 - 在 GitHub 的 Actions → Apps → Run workflow 手动运行，填版本号和更新说明
 
-### 安卓签名密钥（只需设置一次）
+### 签名密钥
 
-安卓 App 每次更新必须用同一个密钥签名，否则无法覆盖安装。密钥不能放进仓库，要存到 GitHub 的 Secrets 里：仓库 Settings → Secrets and variables → Actions → New repository secret，添加两个：
-
-| 名字 | 内容 |
-|---|---|
-| `ANDROID_KEYSTORE_B64` | 密钥文件的 base64（`base64 -w0 release.jks`） |
-| `ANDROID_KEYSTORE_PASSWORD` | 密钥的密码 |
-
-密钥文件和密码务必另外备份好：丢了以后，新版本就没法覆盖安装旧版本了（只能卸载重装）。
+安卓 App 每次更新必须用同一个密钥签名，否则无法覆盖安装。为了省去配置，签名密钥直接放在仓库里（`android/release.jks`，密码写在 `app/build.gradle.kts` 里），是公开的。这意味着任何人都能用它签名一个看起来是「tmux-web」的安装包，所以**请只从本项目的 GitHub Release 下载安装**。想用自己的密钥，设置环境变量 `TW_KEYSTORE`（密钥文件路径）和 `TW_KEYSTORE_PASSWORD` 即可。

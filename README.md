@@ -133,3 +133,7 @@ ADMIN_PASSWORD=test1234 DATA_DIR=.dev/data PORT=18080 npm start
 ```
 
 不设置 `HOST_USER` 时，第一台主机是「本进程直接运行」，不经过 SSH。
+
+## 开源协议和免责声明
+
+MIT 协议，见 [LICENSE](LICENSE)。本项目按现状提供，作者不对使用它造成的任何问题负责。注意：安卓 App 的签名密钥是公开的，请只从本项目的 GitHub Release 下载安装包。

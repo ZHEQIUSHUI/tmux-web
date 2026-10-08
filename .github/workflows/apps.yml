@@ -54,17 +54,9 @@ jobs:
         with: { distribution: temurin, java-version: '17' }
       - uses: android-actions/setup-android@v3
       - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - name: 签名密钥
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-        run: |
-          [ -n "$KEYSTORE_B64" ] || { echo "缺少 Secret ANDROID_KEYSTORE_B64（见 android/README.md）"; exit 1; }
-          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+      # signed with the public key in the repository (android/release.jks)
       - name: 编译
         working-directory: android
-        env:
-          TW_KEYSTORE: ${{ runner.temp }}/release.jks
-          TW_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           ./gradlew --no-daemon assembleRelease -PversionName=${{ needs.version.outputs.version }} -PversionCode=${{ needs.version.outputs.code }}
           cp app/build/outputs/apk/release/app-release.apk ../tmux-web-android.apk

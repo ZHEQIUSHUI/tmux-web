@@ -17,21 +17,21 @@ android {
     versionName = (findProperty("versionName") as String?) ?: "0.1.0"
   }
 
-  // releases are signed with the same key every time (an update must match), kept out of the repo:
-  // TW_KEYSTORE (path), TW_KEYSTORE_PASSWORD; without them the debug key is used
-  val keystore = System.getenv("TW_KEYSTORE")
+  // Releases are signed with the same key every time (an update has to match the installed app).
+  // The key is public, in the repository (android/release.jks): anyone can sign with it, so install
+  // only from this project's GitHub releases. TW_KEYSTORE / TW_KEYSTORE_PASSWORD use another key.
   signingConfigs {
-    if (keystore != null) create("release") {
-      storeFile = file(keystore)
-      storePassword = System.getenv("TW_KEYSTORE_PASSWORD")
+    create("release") {
+      storeFile = file(System.getenv("TW_KEYSTORE") ?: "../release.jks")
+      storePassword = System.getenv("TW_KEYSTORE_PASSWORD") ?: "OewNWntWQdrLHFE8aoF9SOJTIUOF"
       keyAlias = System.getenv("TW_KEY_ALIAS") ?: "tmuxweb"
-      keyPassword = System.getenv("TW_KEYSTORE_PASSWORD")
+      keyPassword = System.getenv("TW_KEYSTORE_PASSWORD") ?: "OewNWntWQdrLHFE8aoF9SOJTIUOF"
     }
   }
   buildTypes {
     release {
       isMinifyEnabled = false
-      signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+      signingConfig = signingConfigs.getByName("release")
     }
   }
   compileOptions {
