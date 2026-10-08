@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: write
+  actions: write # to delete the build artifacts once released
 
 concurrency:
   group: apps
@@ -40,7 +41,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: VERSION=${{ needs.version.outputs.version }} ./mac/build.sh
       - uses: actions/upload-artifact@v4
-        with: { name: mac, path: mac/build/tmux-web-mac.zip }
+        with: { name: mac, path: mac/build/tmux-web-mac.zip, retention-days: 1, compression-level: 0 }
 
   android:
     needs: version
@@ -62,7 +63,7 @@ jobs:
           ./gradlew --no-daemon assembleRelease -PversionName=${{ needs.version.outputs.version }} -PversionCode=${{ needs.version.outputs.code }}
           cp app/build/outputs/apk/release/app-release.apk ../tmux-web-android.apk
       - uses: actions/upload-artifact@v4
-        with: { name: android, path: tmux-web-android.apk }
+        with: { name: android, path: tmux-web-android.apk, retention-days: 1, compression-level: 0 }
 
   release:
     needs: [version, mac, android]
@@ -124,3 +125,11 @@ jobs:
           done
           gh release create latest out/tmux-web-mac.zip out/tmux-web-android.apk out/version.json \
             --target "$GITHUB_SHA" --title "tmux-web App（最新版）" --notes-file out/body.md --latest
+      # the builds only pass through artifacts on the way to the release: don't keep them, this run's
+      # or older runs' (storage is limited)
+      - name: 删除临时构件
+        if: always()
+        run: |
+          for id in $(gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" --jq '.artifacts[].id'); do
+            gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" || true
+          done
