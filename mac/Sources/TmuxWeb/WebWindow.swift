@@ -128,10 +128,7 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     window.title = title.isEmpty ? "tmux-web" : "tmux-web · \(title)"
     if case .ready(let port) = s {
       // the password / code dialog (another process) took the focus: come back to the front
-      if loadedPort != port {
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-      }
+      if loadedPort != port { bringBack() }
       // after a reconnect the page reconnects its own streams: only load when it isn't there yet
       if loadedPort != port || web.url == nil {
         loadedPort = port
@@ -142,6 +139,27 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
   }
 
   func reload() { web.reloadFromOrigin() }
+
+  /// The window in front, whatever happened to it: closed (ordered out), minimized, under other
+  /// windows, or off every screen (a display that is gone).
+  func bringBack() {
+    if window.isMiniaturized { window.deminiaturize(nil) }
+    if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) {
+      if let s = NSScreen.main?.visibleFrame {
+        let size = NSSize(width: min(window.frame.width, s.width - 40), height: min(window.frame.height, s.height - 40))
+        window.setFrame(NSRect(origin: .zero, size: size), display: false)
+      }
+      window.center()
+    }
+    window.makeKeyAndOrderFront(nil)
+    window.orderFrontRegardless()
+    NSApp.activate(ignoringOtherApps: true)
+    Log.write("bringBack \(describe())")
+  }
+
+  func describe() -> String {
+    "visible=\(window.isVisible) mini=\(window.isMiniaturized) key=\(window.isKeyWindow) frame=\(NSStringFromRect(window.frame)) screens=\(NSScreen.screens.map { NSStringFromRect($0.frame) })"
+  }
 
   func open(session id: Int) {
     window.makeKeyAndOrderFront(nil)

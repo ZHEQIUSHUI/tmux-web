@@ -66,3 +66,25 @@ final class ProfileStore: ObservableObject {
     defaults.set(currentID?.uuidString, forKey: "current")
   }
 }
+
+/// A small log for looking into problems: ~/Library/Logs/tmux-web.log (kept short).
+enum Log {
+  private static let url = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/tmux-web.log")
+  private static let queue = DispatchQueue(label: "log")
+
+  static func write(_ line: String) {
+    let text = "\(ISO8601DateFormatter().string(from: Date())) \(line)\n"
+    queue.async {
+      let fm = FileManager.default
+      if let size = (try? fm.attributesOfItem(atPath: url.path))?[.size] as? Int, size > 512 * 1024 { try? fm.removeItem(at: url) }
+      if let h = try? FileHandle(forWritingTo: url) {
+        h.seekToEndOfFile()
+        h.write(Data(text.utf8))
+        try? h.close()
+      } else {
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? Data(text.utf8).write(to: url)
+      }
+    }
+  }
+}

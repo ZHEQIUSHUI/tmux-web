@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     main.status.edit = { [weak self] in self?.openSettings() }
     tunnel.onState = { [weak self] s in
       guard let self else { return }
+      Log.write("state \(s)")
       self.main.show(s, title: ProfileStore.shared.current?.title ?? "")
     }
     UNUserNotificationCenter.current().delegate = self
@@ -31,10 +32,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
   func applicationWillTerminate(_ n: Notification) { tunnel.stop() }
 
-  // the Dock icon brings the window back after it was closed
+  // the Dock icon always brings the window back (closed, minimized, behind others, off screen)
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-    if !hasVisibleWindows { main.window.makeKeyAndOrderFront(nil) }
-    return true
+    Log.write("reopen visible=\(hasVisibleWindows) \(main.describe())")
+    main.bringBack()
+    return false
+  }
+
+  /// right-click on the Dock icon
+  func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+    let m = NSMenu()
+    m.addItem(withTitle: "显示主窗口", action: #selector(showMain), keyEquivalent: "")
+    m.addItem(withTitle: "重新连接", action: #selector(reconnect), keyEquivalent: "")
+    m.addItem(withTitle: "服务器设置…", action: #selector(openSettings), keyEquivalent: "")
+    return m
   }
 
   private func connect() {
@@ -45,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
   @objc private func reconnect() { connect() }
   @objc private func reloadPage() { main.reload() }
-  @objc private func showMain() { main.window.makeKeyAndOrderFront(nil) }
+  @objc private func showMain() { main.bringBack() }
 
   @objc func openSettings() {
     if let s = settings {

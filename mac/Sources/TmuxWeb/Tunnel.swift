@@ -63,6 +63,7 @@ final class Tunnel {
     }
     state = everReady ? .reconnecting("正在重新连接…") : .connecting
     errText = ""
+    Askpass.clearMarks()
 
     var args = [
       "-N", "-T",
@@ -93,6 +94,8 @@ final class Tunnel {
     var env = ProcessInfo.processInfo.environment
     // passwords and verification codes: our dialog, never a terminal
     env["SSH_ASKPASS"] = Askpass.path
+    // a saved password answers ssh's password prompt by itself (codes and other questions still ask)
+    if let pw = Keychain.password(for: p.id), !pw.isEmpty { env["TW_SSH_PASSWORD"] = pw } else { env.removeValue(forKey: "TW_SSH_PASSWORD") }
     env["SSH_ASKPASS_REQUIRE"] = "force"
     env["DISPLAY"] = env["DISPLAY"] ?? ":0"
     task.environment = env
@@ -184,13 +187,30 @@ final class Tunnel {
 
 /// The program ssh runs to ask for a password or a code: a native dialog via osascript.
 enum Askpass {
+  /// the "saved password already tried" marks of earlier connections
+  static func clearMarks() {
+    let dir = NSTemporaryDirectory()
+    for f in (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [] where f.hasPrefix("tw-askpass-") {
+      try? FileManager.default.removeItem(atPath: (dir as NSString).appendingPathComponent(f))
+    }
+  }
+
   static let path: String = {
     let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("TmuxWeb")
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let file = dir.appendingPathComponent("askpass.sh")
     let script = """
       #!/bin/sh
-      # ssh's prompt (password, verification code…) in a dialog; the answer goes to ssh
+      # ssh's prompt (password, verification code…) in a dialog; the answer goes to ssh.
+      # The password saved in the app answers the password prompt itself — once: a second ask
+      # means it was wrong, so then the dialog comes.
+      case "$1" in
+        *assword*)
+          if [ -n "$TW_SSH_PASSWORD" ]; then
+            f="${TMPDIR:-/tmp}/tw-askpass-$PPID"
+            if [ ! -e "$f" ]; then : > "$f"; printf '%s\n' "$TW_SSH_PASSWORD"; exit 0; fi
+          fi ;;
+      esac
       exec /usr/bin/osascript - "$1" <<'APPLESCRIPT'
       on run argv
         set p to item 1 of argv
