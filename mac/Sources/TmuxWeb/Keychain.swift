@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import Security
 
 // Secrets live in a file only this user can read, not in the keychain: an app without a developer
 // signature counts as a different app after every update, and the keychain then asks for the
@@ -36,25 +35,5 @@ enum Keychain {
     var m = all()
     m[id.uuidString] = (pw?.isEmpty ?? true) ? nil : pw
     if let d = try? JSONEncoder().encode(m), let enc = Sealed.seal(d) { UserDefaults.standard.set(enc, forKey: defaultsKey) }
-  }
-}
-
-/// What versions up to 1.0.0 kept in the keychain: read once to move it over (this may ask for
-/// the login password one last time), never written.
-enum LegacyKeychain {
-  static func configKey() -> SymmetricKey? {
-    guard let d = read(service: "tmux-web config", account: "key"), d.count == 32 else { return nil }
-    return SymmetricKey(data: d)
-  }
-
-  static func password(for id: UUID) -> String? {
-    read(service: "tmux-web ssh", account: id.uuidString).flatMap { String(data: $0, encoding: .utf8) }
-  }
-
-  private static func read(service: String, account: String) -> Data? {
-    let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account, kSecReturnData as String: true]
-    var out: AnyObject?
-    guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { return nil }
-    return out as? Data
   }
 }

@@ -84,16 +84,10 @@ final class ProfileStore: ObservableObject {
     var migrate = false
     if let enc = defaults.data(forKey: "profiles.v2"), let data = Sealed.open(enc), let list = try? JSONDecoder().decode([Profile].self, from: data) {
       profiles = list
-    } else if let enc = defaults.data(forKey: "profiles.enc"), !defaults.bool(forKey: "legacyTried") {
-      // 1.0.0 and before: the key was in the keychain. Read it once (this may ask for the login
-      // password one last time); passwords come over too. Denied: the settings are filled in again.
-      defaults.set(true, forKey: "legacyTried")
-      if let key = LegacyKeychain.configKey(), let box = try? AES.GCM.SealedBox(combined: enc), let data = try? AES.GCM.open(box, using: key), let list = try? JSONDecoder().decode([Profile].self, from: data) {
-        profiles = list
-        for p in list { if let pw = LegacyKeychain.password(for: p.id) { Keychain.setPassword(pw, for: p.id) } }
-      } else {
-        profiles = []
-      }
+    } else if defaults.data(forKey: "profiles.enc") != nil {
+      // 1.0.0 kept its key in the keychain: reading it would ask for the login password, so the
+      // settings are simply filled in again
+      profiles = []
       migrate = true
     } else if let data = defaults.data(forKey: "profiles"), let list = try? JSONDecoder().decode([Profile].self, from: data) {
       profiles = list
