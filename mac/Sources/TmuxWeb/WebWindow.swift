@@ -127,6 +127,11 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     status.state = s
     window.title = title.isEmpty ? "tmux-web" : "tmux-web · \(title)"
     if case .ready(let port) = s {
+      // the password / code dialog (another process) took the focus: come back to the front
+      if loadedPort != port {
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+      }
       // after a reconnect the page reconnects its own streams: only load when it isn't there yet
       if loadedPort != port || web.url == nil {
         loadedPort = port
