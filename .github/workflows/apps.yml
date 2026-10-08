@@ -52,8 +52,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      # the runner image has the Android SDK; make sure of the pieces this app builds with
+      - name: 安卓 SDK
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          SDKM=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -1)
+          yes | "$SDKM" --install "platforms;android-35" "build-tools;35.0.0" > /dev/null
       # signed with the public key in the repository (android/release.jks)
       - name: 编译
         working-directory: android
