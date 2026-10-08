@@ -81,17 +81,31 @@ final class ProfileStore: ObservableObject {
   private init() {
     // the settings file holds them encrypted (the key is in the keychain); an older version's
     // plain list is read once and saved encrypted
-    var plain = false
-    if let enc = defaults.data(forKey: "profiles.enc"), let data = Sealed.open(enc), let list = try? JSONDecoder().decode([Profile].self, from: data) {
+    var migrate = false
+    if let enc = defaults.data(forKey: "profiles.v2"), let data = Sealed.open(enc), let list = try? JSONDecoder().decode([Profile].self, from: data) {
       profiles = list
+    } else if let enc = defaults.data(forKey: "profiles.enc"), !defaults.bool(forKey: "legacyTried") {
+      // 1.0.0 and before: the key was in the keychain. Read it once (this may ask for the login
+      // password one last time); passwords come over too. Denied: the settings are filled in again.
+      defaults.set(true, forKey: "legacyTried")
+      if let key = LegacyKeychain.configKey(), let box = try? AES.GCM.SealedBox(combined: enc), let data = try? AES.GCM.open(box, using: key), let list = try? JSONDecoder().decode([Profile].self, from: data) {
+        profiles = list
+        for p in list { if let pw = LegacyKeychain.password(for: p.id) { Keychain.setPassword(pw, for: p.id) } }
+      } else {
+        profiles = []
+      }
+      migrate = true
     } else if let data = defaults.data(forKey: "profiles"), let list = try? JSONDecoder().decode([Profile].self, from: data) {
       profiles = list
-      plain = true
+      migrate = true
     } else {
       profiles = []
     }
     currentID = defaults.string(forKey: "current").flatMap(UUID.init(uuidString:))
-    if plain { save() }
+    if migrate {
+      save()
+      defaults.removeObject(forKey: "profiles.enc")
+    }
   }
 
   var current: Profile? { profiles.first { $0.id == currentID } ?? profiles.first }
@@ -110,27 +124,22 @@ final class ProfileStore: ObservableObject {
   private func save() {
     guard let data = try? JSONEncoder().encode(profiles) else { return }
     if let enc = Sealed.seal(data) {
-      defaults.set(enc, forKey: "profiles.enc")
+      defaults.set(enc, forKey: "profiles.v2")
       defaults.removeObject(forKey: "profiles")
-    } else {
-      // no keychain to hold the key (very unusual): better kept plain than lost
-      Log.write("keychain unavailable: settings saved unencrypted")
-      defaults.set(data, forKey: "profiles")
     }
     defaults.set(currentID?.uuidString, forKey: "current")
   }
 }
 
-/// AES-GCM with a random key kept in the keychain: what the settings file stores.
+/// AES-GCM with the key from LocalKey: what the settings file stores.
 enum Sealed {
   static func seal(_ data: Data) -> Data? {
-    guard let key = Keychain.configKey() else { return nil }
-    return try? AES.GCM.seal(data, using: key).combined
+    try? AES.GCM.seal(data, using: LocalKey.key).combined
   }
 
   static func open(_ data: Data) -> Data? {
-    guard let key = Keychain.configKey(), let box = try? AES.GCM.SealedBox(combined: data) else { return nil }
-    return try? AES.GCM.open(box, using: key)
+    guard let box = try? AES.GCM.SealedBox(combined: data) else { return nil }
+    return try? AES.GCM.open(box, using: LocalKey.key)
   }
 }
 
