@@ -25,6 +25,13 @@ final class Tunnel {
   private var proc: Process?
   /// held open while we run; its closing ends the ssh
   private var lifeline: Pipe?
+  /// our private copy of a too-open key: only on disk while ssh logs in
+  private var keyCopy: String?
+
+  private func dropKeyCopy() {
+    if let k = keyCopy { try? FileManager.default.removeItem(atPath: k) }
+    keyCopy = nil
+  }
   private var errText = ""
   private var profile: Profile?
   private var wanted = false
@@ -47,6 +54,7 @@ final class Tunnel {
     poll = nil
     try? lifeline?.fileHandleForWriting.close()
     lifeline = nil
+    dropKeyCopy()
     if let p = proc, p.isRunning { p.terminate() }
     proc = nil
     state = .idle
@@ -77,7 +85,9 @@ final class Tunnel {
     ]
     if let key = p.privateKey {
       switch KeyFile.usable(key, for: p.id) {
-      case .success(let path): args += ["-i", path, "-o", "IdentitiesOnly=yes"]
+      case .success(let path):
+        args += ["-i", path, "-o", "IdentitiesOnly=yes"]
+        keyCopy = path.hasPrefix(KeyFile.dir.path) ? path : nil
       case .failure(let e):
         state = .failed(e.message)
         return
@@ -129,6 +139,7 @@ final class Tunnel {
         t.invalidate()
         self.everReady = true
         self.retry = 0
+        self.dropKeyCopy() // logged in: ssh has read it
         self.state = .ready(port: pr.localPort)
       }
     }
@@ -137,6 +148,7 @@ final class Tunnel {
   private func ended(_ t: Process) {
     guard t === proc else { return }
     poll?.invalidate()
+    dropKeyCopy()
     proc = nil
     guard wanted else { return }
     let why = message()
@@ -231,6 +243,7 @@ enum Askpass {
 /// used through a private copy; the file itself is left alone.
 enum KeyFile {
   struct Problem: Error { let message: String }
+  static let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("TmuxWeb/keys")
 
   static func usable(_ path: String, for id: UUID) -> Result<String, Problem> {
     let fm = FileManager.default
@@ -247,7 +260,7 @@ enum KeyFile {
     let mode = ((try? fm.attributesOfItem(atPath: path))?[.posixPermissions] as? NSNumber)?.intValue ?? 0o600
     if mode & 0o077 == 0 { return .success(path) }
     // others may read it: hand ssh a copy only we can read
-    let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("TmuxWeb/keys")
+    let dir = Self.dir
     try? fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     let copy = dir.appendingPathComponent(id.uuidString)
     try? fm.removeItem(at: copy)

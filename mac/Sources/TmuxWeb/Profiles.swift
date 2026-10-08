@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// One server: where to SSH to, and which port of it serves tmux-web.
@@ -41,12 +42,19 @@ final class ProfileStore: ObservableObject {
   @Published var currentID: UUID? { didSet { save() } }
 
   private init() {
-    if let data = defaults.data(forKey: "profiles"), let list = try? JSONDecoder().decode([Profile].self, from: data) {
+    // the settings file holds them encrypted (the key is in the keychain); an older version's
+    // plain list is read once and saved encrypted
+    var plain = false
+    if let enc = defaults.data(forKey: "profiles.enc"), let data = Sealed.open(enc), let list = try? JSONDecoder().decode([Profile].self, from: data) {
       profiles = list
+    } else if let data = defaults.data(forKey: "profiles"), let list = try? JSONDecoder().decode([Profile].self, from: data) {
+      profiles = list
+      plain = true
     } else {
       profiles = []
     }
     currentID = defaults.string(forKey: "current").flatMap(UUID.init(uuidString:))
+    if plain { save() }
   }
 
   var current: Profile? { profiles.first { $0.id == currentID } ?? profiles.first }
@@ -57,13 +65,35 @@ final class ProfileStore: ObservableObject {
   }
 
   func remove(_ id: UUID) {
+    Keychain.setPassword(nil, for: id)
     profiles.removeAll { $0.id == id }
     if currentID == id { currentID = profiles.first?.id }
   }
 
   private func save() {
-    if let data = try? JSONEncoder().encode(profiles) { defaults.set(data, forKey: "profiles") }
+    guard let data = try? JSONEncoder().encode(profiles) else { return }
+    if let enc = Sealed.seal(data) {
+      defaults.set(enc, forKey: "profiles.enc")
+      defaults.removeObject(forKey: "profiles")
+    } else {
+      // no keychain to hold the key (very unusual): better kept plain than lost
+      Log.write("keychain unavailable: settings saved unencrypted")
+      defaults.set(data, forKey: "profiles")
+    }
     defaults.set(currentID?.uuidString, forKey: "current")
+  }
+}
+
+/// AES-GCM with a random key kept in the keychain: what the settings file stores.
+enum Sealed {
+  static func seal(_ data: Data) -> Data? {
+    guard let key = Keychain.configKey() else { return nil }
+    return try? AES.GCM.seal(data, using: key).combined
+  }
+
+  static func open(_ data: Data) -> Data? {
+    guard let key = Keychain.configKey(), let box = try? AES.GCM.SealedBox(combined: data) else { return nil }
+    return try? AES.GCM.open(box, using: key)
   }
 }
 

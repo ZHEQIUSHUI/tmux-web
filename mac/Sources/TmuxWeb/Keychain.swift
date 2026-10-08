@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -10,6 +11,20 @@ enum Keychain {
     var out: AnyObject?
     guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
     return String(data: d, encoding: .utf8)
+  }
+
+  /// The key the settings are encrypted with: made once, kept in the keychain.
+  static func configKey() -> SymmetricKey? {
+    let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "tmux-web config", kSecAttrAccount as String: "key"]
+    var get = q
+    get[kSecReturnData as String] = true
+    var out: AnyObject?
+    if SecItemCopyMatching(get as CFDictionary, &out) == errSecSuccess, let d = out as? Data, d.count == 32 { return SymmetricKey(data: d) }
+    let key = SymmetricKey(size: .bits256)
+    var add = q
+    add[kSecValueData as String] = key.withUnsafeBytes { Data($0) }
+    add[kSecAttrLabel as String] = "tmux-web 配置加密密钥"
+    return SecItemAdd(add as CFDictionary, nil) == errSecSuccess ? key : nil
   }
 
   /// nil or "" removes it
