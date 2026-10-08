@@ -82,8 +82,10 @@ jobs:
           V=${{ needs.version.outputs.version }}
           TAG=${{ needs.version.outputs.tag }}
           NOTES="$NOTES_INPUT"
-          # a tag's own message, when it was pushed as an annotated tag
-          [ -n "$NOTES" ] || NOTES=$(git tag -l --format='%(contents)' "$TAG" 2>/dev/null | sed '/^-----BEGIN/,$d')
+          # a tag's own message, when it was pushed as an annotated tag (checkout leaves a plain tag
+          # behind: fetch the real one first)
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || true
+          [ "$(git cat-file -t "$TAG" 2>/dev/null)" = tag ] && [ -z "$NOTES" ] && NOTES=$(git tag -l --format='%(contents)' "$TAG" | sed '/^-----BEGIN/,$d')
           [ -n "$NOTES" ] || NOTES="App 更新"
           sha() { sha256sum "out/$1" | cut -d' ' -f1; }
           size() { stat -c %s "out/$1"; }
