@@ -100,3 +100,13 @@ test('Claude is back after a restart only when its box shows up below the launch
   assert.equal((await screen([...old, '$ claude --resume abc'])).claudeReady('claude --resume abc'), false);
   assert.equal((await screen([...old, '$ claude --resume abc', ' ▐▛███▜▌   Claude Code', SEP, '❯ ', SEP])).claudeReady('claude --resume abc'), true);
 });
+
+test('typed text in the box: not the queue hint, not queued messages above the box', async () => {
+  const box = (rows: string[]) => screen(['✻ Working… (12s)', '', ...rows, '  ⏵⏵ bypass permissions on'].map((l) => l));
+  // a queued message above the box and the queue hint inside it: nothing typed
+  let s = await box(['❯ 感觉pid效果更好', SEP, '❯ Press up to edit queued messages', SEP]);
+  assert.equal(s.hasPromptInput(), false);
+  // something typed in the box
+  s = await box([SEP, '❯ 还没发出去的字', SEP]);
+  assert.equal(s.hasPromptInput(), true);
+});

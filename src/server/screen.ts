@@ -130,7 +130,12 @@ export class Screen {
     while (last > 0 && !buf.getLine(buf.viewportY + last)?.translateToString(true).trim()) last--;
     for (let y = last; y >= Math.max(0, last - 15); y--) {
       const line = buf.getLine(buf.viewportY + y);
-      if (!line || !/^[❯>]\s/.test(line.translateToString(true))) continue;
+      const text = line?.translateToString(true) ?? '';
+      if (!line || !/^[❯>]\s/.test(text)) continue;
+      // only the box itself (right under its top edge): queued messages above it start with ❯ too.
+      // "Press up to edit queued messages" in the box is a hint, not typed text.
+      const above = buf.getLine(buf.viewportY + y - 1)?.translateToString(true) ?? '';
+      if (!SEPARATOR.test(above) || /Press up to edit queued messages/i.test(text)) return false;
       for (let x = 1; x < line.length; x++) {
         const cell = line.getCell(x);
         const ch = cell?.getChars();
