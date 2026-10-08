@@ -150,7 +150,6 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   }, []);
   // in-page alerts from the server's notifications
   const [toasts, setToasts] = useState<{ key: number; n: Notice }[]>([]);
-  const [alerts, setAlerts] = useState(alertsEnabled());
   const [missed, setMissed] = useState(0);
   const currentRef = useRef(current);
   currentRef.current = current;
@@ -176,10 +175,6 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
     document.addEventListener('visibilitychange', on);
     return () => document.removeEventListener('visibilitychange', on);
   }, []);
-  const toggleAlerts = () => {
-    store.set('tw:alerts', alerts ? 'off' : null);
-    setAlerts(!alerts);
-  };
   useEffect(() => {
     if (me.role !== 'admin' || modal) return;
     api<HostInfo[]>('GET', '/_tw/api/hosts').then((hs) => setHostBanner(hs.some((h) => h.ok === false)), () => {});
@@ -289,8 +284,7 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             folders={folders}
             onEditFolder={setEditFolder}
             unread={unread}
-            alerts={alerts}
-            onToggleAlerts={toggleAlerts}
+            onMenu={() => setModal('menu')}
             current={current}
             active={onScreen}
             views={views.map((v) => ({ id: v.id, ids: idsOf(v.grid) }))}

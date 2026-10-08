@@ -2942,3 +2942,10 @@ body.resizing .splitter:active {
 .view-item:hover .view-remove:hover {
   opacity: 1;
 }
+
+.side-user {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

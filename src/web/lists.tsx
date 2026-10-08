@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { api, type Folder, type Notice, type Me, type SessionInfo, type Status } from './api';
 import { AGENT_LABEL, LAYOUT_LABEL, STATUS_LABEL, ago, coarsePointer, layoutPref, setLayout, shortPath, store, type LayoutPref } from './lib';
 import { prefetchAll, prefetchChat } from './chat';
-import { Chevron, Icon, Modal, ThemeCycle, ThemeSwitch } from './ui';
+import { Chevron, Icon, Modal, ThemeSwitch } from './ui';
 
 // ---------------- shell ----------------
 
@@ -289,8 +289,7 @@ export function Sidebar(props: {
   onEditFolder: (f: Folder | null) => void;
   onTokens: () => void;
   unread: Set<number>;
-  alerts: boolean;
-  onToggleAlerts: () => void;
+  onMenu: () => void;
 }) {
   const { me, sessions, current } = props;
   const multiHost = new Set(sessions.map((s) => s.hostId)).size > 1;
@@ -439,35 +438,14 @@ export function Sidebar(props: {
         })}
         {!sessions.length && <p class="dim small pad">还没有会话，点「新建」开始。</p>}
       </nav>
+      {/* the rarely used settings live behind ⚙ (the same sheet as 我的 on phones): a narrow list can't push them out */}
       <div class="side-foot">
-        <span class="dim small" title={me.username}>{me.username}</span>
+        <span class="dim small side-user" title={me.username}>
+          {me.username}
+        </span>
         <span class="spacer" />
-        <button class="ghost small" onClick={props.onToggleAlerts} title={props.alerts ? '页内提醒：开（点击关闭）' : '页内提醒：关（点击开启）'}>
-          {props.alerts ? '🔔' : '🔕'}
-        </button>
-        <button class="ghost small" onClick={() => setRecentDlg(true)} title={`「最近」分组：${recentLabel(recentMin)}`} aria-label="「最近」分组">
-          <Icon.clock />
-        </button>
-        <ThemeCycle />
-        {/* touch screens (tablets): switch between the phone and desktop layouts */}
-        {coarsePointer && (
-          <button class="ghost small" onClick={() => setLayout(layoutPref() === 'desktop' ? 'mobile' : layoutPref() === 'mobile' ? 'auto' : 'mobile')} title={`页面布局：${LAYOUT_LABEL[layoutPref()]}（点击切换）`}>
-            {layoutPref() === 'mobile' ? '📱' : '🖥'}
-          </button>
-        )}
-        {me.role === 'admin' && (
-          <button class="ghost small" onClick={props.onAdmin}>
-            账号
-          </button>
-        )}
-        <button class="ghost small" onClick={props.onPassword}>
-          密码
-        </button>
-        <button class="ghost small" onClick={props.onTokens} title="API 令牌（App / 脚本）">
-          令牌
-        </button>
-        <button class="ghost small" onClick={props.onLogout} title={`退出登录（${me.username}）`}>
-          退出
+        <button class="icon-btn" onClick={props.onMenu} aria-label="设置" title="设置：外观、提醒、「最近」范围、布局、账号、密码、令牌、退出">
+          <Icon.gear />
         </button>
       </div>
     </aside>
