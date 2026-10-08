@@ -148,7 +148,41 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     if case .failed = s { loadedBase = nil }
   }
 
-  func reload() { web.reloadFromOrigin() }
+  /// ⟳ / ⌘R: the page again, fresh from the server (and if it never came up, load it anew)
+  func reload() {
+    guard let base = loadedBase else { return }
+    if web.url == nil || web.isLoading == false && web.title?.isEmpty != false {
+      web.load(URLRequest(url: URL(string: base + "/")!, cachePolicy: .reloadIgnoringLocalCacheData))
+    } else {
+      web.reloadFromOrigin()
+    }
+  }
+
+  // MARK: the page's own troubles: a blank window is never left behind
+
+  func webView(_ w: WKWebView, didFinish n: WKNavigation!) {
+    if w === web { Log.write("page loaded \(w.url?.absoluteString ?? "")") }
+  }
+
+  func webView(_ w: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) { pageFailed(w, e) }
+  func webView(_ w: WKWebView, didFail n: WKNavigation!, withError e: Error) { pageFailed(w, e) }
+
+  private func pageFailed(_ w: WKWebView, _ e: Error) {
+    let ns = e as NSError
+    Log.write("page failed \(ns.domain) \(ns.code) \(ns.localizedDescription)")
+    // replaced by another load (a reload, a link) or turned into a download: not a failure
+    if w !== web || ns.code == NSURLErrorCancelled || (ns.domain == "WebKitErrorDomain" && ns.code == 102) { return }
+    status.state = .failed("网页加载失败：\(ns.localizedDescription)")
+    overlay?.isHidden = false
+    loadedBase = nil
+  }
+
+  /// WebKit's page process died (memory, a crash): it would stay blank — load the page again
+  func webViewWebContentProcessDidTerminate(_ w: WKWebView) {
+    Log.write("web content process terminated")
+    guard w === web, let base = loadedBase else { return }
+    web.load(URLRequest(url: URL(string: base + "/")!))
+  }
 
   /// The window in front, whatever happened to it: closed (ordered out), minimized, under other
   /// windows, or off every screen (a display that is gone).
