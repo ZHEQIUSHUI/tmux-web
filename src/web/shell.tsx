@@ -159,6 +159,10 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   // in-page alerts (they come on the events stream below)
   const onNotice = (n: Notice) => {
     if (!alertsEnabled()) return;
+    // inside the Mac / Android app: it turns them into system notifications (when you aren't looking)
+    const w = window as any;
+    w.webkit?.messageHandlers?.twNotify?.postMessage(n);
+    w.TwApp?.notify?.(JSON.stringify(n));
     // already looking at it
     if (!document.hidden && onScreenRef.current.includes(n.sessionId)) return;
     const key = n.id;
