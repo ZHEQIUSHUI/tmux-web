@@ -70,6 +70,8 @@ class MainActivity : Activity(), ServerList.Actions {
     }
     pendingSession = intent.getIntExtra("sessionId", -1).takeIf { it >= 0 }
     // debug builds only, for automated tests: a profile handed in as base64 JSON
+    // debug builds only, for automated tests: a login cookie for the page
+    if (BuildConfig.DEBUG) intent.getStringExtra("testCookie")?.let { CookieManager.getInstance().setCookie(intent.getStringExtra("testCookieUrl"), it) }
     if (BuildConfig.DEBUG) intent.getStringExtra("testProfile")?.let {
       store.upsert(Profile.fromJson(org.json.JSONObject(String(android.util.Base64.decode(it, android.util.Base64.DEFAULT)))))
     }
@@ -315,6 +317,10 @@ class MainActivity : Activity(), ServerList.Actions {
       databaseEnabled = true
       mediaPlaybackRequiresUserGesture = false
       textZoom = 100
+      // the page's viewport width counts (WebView ignores it unless told): 页面布局 → 手机版 / 电脑版
+      // lays the page out 480 / 1180 wide and scales it to the screen, as in Chrome
+      useWideViewPort = true
+      loadWithOverviewMode = true
     }
     CookieManager.getInstance().setAcceptCookie(true)
     web.webViewClient = object : WebViewClient() {

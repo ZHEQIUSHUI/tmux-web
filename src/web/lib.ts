@@ -223,7 +223,15 @@ export function applyLayout() {
   const p = layoutPref();
   // fixed scale (no pinch / focus zoom): the scaled page always fits the screen
   const fixed = (w: number) => `width=${w}, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content`;
-  meta.setAttribute('content', p === 'mobile' ? fixed(480) : p === 'desktop' ? fixed(1180) : auto);
+  // the phone layout on a screen held sideways (a tablet): wider, or 480 would be blown up ~3×
+  const wide = screen.width > screen.height;
+  meta.setAttribute('content', p === 'mobile' ? fixed(wide ? 720 : 480) : p === 'desktop' ? fixed(1180) : auto);
+}
+/** turning the screen: the forced layout's width follows */
+export function followTurns() {
+  if (layoutPref() === 'auto') return;
+  addEventListener('orientationchange', () => setTimeout(applyLayout, 50));
+  screen.orientation?.addEventListener?.('change', applyLayout);
 }
 export function setLayout(p: LayoutPref) {
   store.set('tw:layout', p === 'auto' ? null : p);

@@ -1,7 +1,7 @@
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { api, type Me } from './api';
-import { applyLayout, coarsePointer, layoutPref } from './lib';
+import { applyLayout, coarsePointer, followTurns, layoutPref } from './lib';
 import { Shell } from './shell';
 import { chatCache } from './chat';
 import { clearChats, loadChats } from './chat-store';
@@ -99,4 +99,5 @@ if (vv && coarsePointer && layoutPref() === 'auto') {
 }
 
 applyLayout();
+followTurns();
 render(<App />, document.getElementById('app')!);
