@@ -928,8 +928,9 @@ async function servePreview(req: IncomingMessage, res: ServerResponse, url: URL,
   }
   // a navigation to /p/... makes this app the target of absolute-path requests
   const dest = req.headers['sec-fetch-dest'];
-  if (t.explicit && (!dest || dest === 'document' || dest === 'iframe')) res.setHeader('Set-Cookie', previewCookie(t.hostId, t.port, isSecureRequest(req)));
-  await proxyHttp(req, res, target);
+  const page = t.explicit && (!dest || dest === 'document' || dest === 'iframe');
+  if (page) res.setHeader('Set-Cookie', previewCookie(t.hostId, t.port, isSecureRequest(req)));
+  await proxyHttp(req, res, target, false, page);
 }
 
 // ---------- server ----------

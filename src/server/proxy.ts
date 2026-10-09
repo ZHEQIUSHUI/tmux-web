@@ -41,6 +41,20 @@ export function readPreviewCookie(req: IncomingMessage): { hostId: number; port:
   return m ? { hostId: Number(m[1]), port: Number(m[2]) } : null;
 }
 
+/**
+ * Single-page apps route on location.pathname: under /p/<host>/<port>/ their router matches
+ * nothing and the page stays blank. A script at the top of the page puts the address back to the
+ * app's own path before the app runs; its absolute-path requests already reach it (the cookie).
+ */
+const UNPREFIX = `<script>(function(){var p=location.pathname.replace(/^\\/p\\/\\d+\\/\\d+/,'');history.replaceState(history.state,'',(p||'/')+location.search+location.hash)})()</script>`;
+
+export function unprefixPage(html: string): string {
+  const head = /<head(\s[^>]*)?>/i.exec(html);
+  if (head) return html.slice(0, head.index + head[0].length) + UNPREFIX + html.slice(head.index + head[0].length);
+  const doc = /<!doctype[^>]*>|<html(\s[^>]*)?>/i.exec(html);
+  return doc ? html.slice(0, doc.index + doc[0].length) + UNPREFIX + html.slice(doc.index + doc[0].length) : UNPREFIX + html;
+}
+
 /** Request headers for the app: our cookies removed, Host/Origin pointing at localhost. */
 function upstreamHeaders(req: IncomingMessage, port: number): http.OutgoingHttpHeaders {
   const h: http.OutgoingHttpHeaders = { ...req.headers };
@@ -78,14 +92,38 @@ async function connectPort(t: ProxyTarget): Promise<number> {
   return t.host.forward(t.port);
 }
 
-export async function proxyHttp(req: IncomingMessage, res: ServerResponse, t: ProxyTarget, retried = false): Promise<void> {
+/** `page`: a page opened at /p/... (its address gets unprefixed, see unprefixPage) */
+export async function proxyHttp(req: IncomingMessage, res: ServerResponse, t: ProxyTarget, retried = false, page = false): Promise<void> {
   const localPort = await connectPort(t);
+  const headers = upstreamHeaders(req, t.port);
+  // the page itself uncompressed, so the script can go in
+  if (page) headers['accept-encoding'] = 'identity';
   await new Promise<void>((resolve) => {
-    const up = http.request({ host: '127.0.0.1', port: localPort, method: req.method, path: t.path, headers: upstreamHeaders(req, t.port) }, (ur) => {
-      res.writeHead(ur.statusCode || 502, ur.statusMessage, downstreamHeaders(ur.headers, t));
-      ur.pipe(res);
-      ur.on('end', resolve);
-      ur.on('error', resolve);
+    const up = http.request({ host: '127.0.0.1', port: localPort, method: req.method, path: t.path, headers }, (ur) => {
+      const h = downstreamHeaders(ur.headers, t);
+      const html = page && /^text\/html/i.test(String(ur.headers['content-type'] || '')) && !ur.headers['content-encoding'] && req.method === 'GET';
+      if (!html) {
+        res.writeHead(ur.statusCode || 502, ur.statusMessage, h);
+        ur.pipe(res);
+        ur.on('end', resolve);
+        ur.on('error', resolve);
+        return;
+      }
+      const parts: Buffer[] = [];
+      ur.on('data', (d: Buffer) => parts.push(d));
+      ur.on('error', () => {
+        fail(res, t);
+        resolve();
+      });
+      ur.on('end', () => {
+        const body = Buffer.from(unprefixPage(Buffer.concat(parts).toString('utf8')));
+        delete h['content-length'];
+        delete h['transfer-encoding'];
+        delete h.etag;
+        res.writeHead(ur.statusCode || 502, ur.statusMessage, { ...h, 'content-length': body.length });
+        res.end(body);
+        resolve();
+      });
     });
     up.on('error', async (e: NodeJS.ErrnoException) => {
       // the SSH forward may have gone away with its master connection: re-add it once
@@ -93,7 +131,7 @@ export async function proxyHttp(req: IncomingMessage, res: ServerResponse, t: Pr
       if (!retried && replayable && e.code === 'ECONNREFUSED' && t.host.row.kind === 'ssh' && !res.headersSent) {
         t.host.dropForward(t.port);
         try {
-          await proxyHttp(req, res, t, true);
+          await proxyHttp(req, res, t, true, page);
         } catch {
           fail(res, t);
         }

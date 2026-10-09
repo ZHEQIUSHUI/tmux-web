@@ -59,6 +59,17 @@ export function PreviewView({ session }: { session: SessionInfo }) {
         <button class="primary">打开</button>
         {src && (
           <>
+            <button
+              type="button"
+              title="回到端口列表"
+              onClick={() => {
+                setSrc(null);
+                store.set(key, null);
+                loadPorts();
+              }}
+            >
+              端口
+            </button>
             <button type="button" title="刷新" onClick={() => setNonce((n) => n + 1)}>
               ↻
             </button>
