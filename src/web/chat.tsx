@@ -817,6 +817,9 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
   );
 }
 
+const UPLOAD_MAX = 25 * 1024 * 1024;
+const mb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
+
 export function Composer(props: {
   sessionId: number;
   status: Status;
@@ -883,25 +886,107 @@ export function Composer(props: {
       t.setSelectionRange(pos, pos);
     });
   };
-  const [files, setFiles] = useState<{ key: number; name: string; error?: string }[]>([]);
+  const [files, setFiles] = useState<{ key: number; name: string; size: number; sent: number; error?: string }[]>([]);
+  const uploads = useRef(new Map<number, XMLHttpRequest>());
   const fileInput = useRef<HTMLInputElement>(null);
   const [attachMenu, setAttachMenu] = useState(false);
   const [picker, setPicker] = useState(false);
-  const upload = (list: FileList | File[]) => {
+  // each file with its progress (XHR: fetch can't tell how much of the body went out)
+  const upload = (list: FileList | File[], folders: string[] = []) => {
+    for (const name of folders) setFiles((fs) => [...fs, { key: Date.now() + Math.random(), name, size: 0, sent: 0, error: '文件夹不能上传，请选里面的文件' }]);
     for (const file of Array.from(list)) {
       const key = Date.now() + Math.random();
       const name = file.name || `paste-${new Date().toTimeString().slice(0, 8).replace(/:/g, '')}.png`;
-      setFiles((fs) => [...fs, { key, name }]);
-      fetch(`/_tw/api/sessions/${sessionId}/upload`, { method: 'POST', body: file, headers: { 'X-File-Name': encodeURIComponent(name) }, credentials: 'same-origin' })
-        .then(async (r) => {
-          const d = await r.json().catch(() => ({}));
-          if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      if (file.size > UPLOAD_MAX) {
+        setFiles((fs) => [...fs, { key, name, size: file.size, sent: 0, error: `文件太大（${mb(file.size)}，上限 25MB）` }]);
+        continue;
+      }
+      setFiles((fs) => [...fs, { key, name, size: file.size, sent: 0 }]);
+      const set = (patch: { sent?: number; error?: string }) => setFiles((fs) => fs.map((f) => (f.key === key ? { ...f, ...patch } : f)));
+      const xhr = new XMLHttpRequest();
+      uploads.current.set(key, xhr);
+      xhr.open('POST', `/_tw/api/sessions/${sessionId}/upload`);
+      xhr.setRequestHeader('X-File-Name', encodeURIComponent(name));
+      xhr.upload.onprogress = (e) => set({ sent: e.loaded });
+      xhr.onload = () => {
+        uploads.current.delete(key);
+        let d: { path?: string; rel?: string; error?: string } = {};
+        try {
+          d = JSON.parse(xhr.responseText);
+        } catch {}
+        if (xhr.status >= 200 && xhr.status < 300 && (d.rel || d.path)) {
           setFiles((fs) => fs.filter((f) => f.key !== key));
-          insertPaths([d.rel || d.path]);
-        })
-        .catch((e) => setFiles((fs) => fs.map((f) => (f.key === key ? { ...f, error: e.message } : f))));
+          insertPaths([(d.rel || d.path)!]);
+        } else set({ error: d.error || `上传失败（HTTP ${xhr.status}）` });
+      };
+      xhr.onerror = () => {
+        uploads.current.delete(key);
+        set({ error: '网络出错，上传失败' });
+      };
+      xhr.send(file);
     }
   };
+  const dropFile = (key: number) => {
+    uploads.current.get(key)?.abort();
+    uploads.current.delete(key);
+    setFiles((fs) => fs.filter((x) => x.key !== key));
+  };
+  const uploadRef = useRef(upload);
+  uploadRef.current = upload;
+
+  // files dragged from this computer onto the conversation: uploaded, their paths go into the box
+  const root = useRef<HTMLDivElement>(null);
+  const canUpload = props.agent !== 'bash';
+  useEffect(() => {
+    const pane = root.current?.closest('.chat') as HTMLElement | null;
+    if (!pane || !canUpload) return;
+    let depth = 0;
+    // only files: a session dragged to the split view isn't ours
+    const isFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
+    const off = () => {
+      depth = 0;
+      pane.classList.remove('dropping');
+    };
+    const enter = (e: DragEvent) => {
+      if (!isFiles(e)) return;
+      e.preventDefault();
+      depth++;
+      pane.classList.add('dropping');
+    };
+    const over = (e: DragEvent) => {
+      if (!isFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = 'copy';
+    };
+    const leave = (e: DragEvent) => {
+      if (isFiles(e) && --depth <= 0) off();
+    };
+    const drop = (e: DragEvent) => {
+      if (!isFiles(e)) return;
+      e.preventDefault();
+      off();
+      const dt = e.dataTransfer!;
+      const folders: string[] = [];
+      const list = Array.from(dt.files).filter((f, i) => {
+        const entry = dt.items?.[i]?.webkitGetAsEntry?.();
+        if (entry?.isDirectory) folders.push(f.name);
+        return !entry?.isDirectory;
+      });
+      keepCaret();
+      uploadRef.current(list, folders);
+    };
+    pane.addEventListener('dragenter', enter);
+    pane.addEventListener('dragover', over);
+    pane.addEventListener('dragleave', leave);
+    pane.addEventListener('drop', drop);
+    return () => {
+      off();
+      pane.removeEventListener('dragenter', enter);
+      pane.removeEventListener('dragover', over);
+      pane.removeEventListener('dragleave', leave);
+      pane.removeEventListener('drop', drop);
+    };
+  }, [sessionId, canUpload]);
   const uploading = files.some((f) => !f.error);
   const hint = !text.trim() && !uploading ? props.suggestion || '' : '';
   // screenshots pasted into the box are uploaded too
@@ -972,7 +1057,7 @@ export function Composer(props: {
   const suggestions = slashMatch ? SLASH.filter(([c]) => c.startsWith('/' + slashMatch[1])).slice(0, 8) : [];
 
   return (
-    <div class="composer">
+    <div class="composer" ref={root}>
       {suggestions.length > 0 && (
         <div class="slash-list">
           {suggestions.map(([cmd, desc, interactive]) => (
@@ -1003,15 +1088,22 @@ export function Composer(props: {
       {err && <div class="error small">{err}</div>}
       {files.length > 0 && (
         <div class="attachments">
-          {files.map((f) => (
-            <span key={f.key} class={`att ${f.error ? 'err' : 'busy'}`} title={f.error || '上传中，完成后路径会插入输入框'}>
-              {f.error ? '⚠' : <span class="spinner small-spin" />}
-              <span class="att-name">{f.name}</span>
-              <button aria-label="移除" onClick={() => setFiles((fs) => fs.filter((x) => x.key !== f.key))}>
-                ✕
-              </button>
-            </span>
-          ))}
+          {files.map((f) => {
+            const pct = f.size ? Math.min(100, Math.round((f.sent / f.size) * 100)) : 0;
+            const saving = !f.error && f.size > 0 && f.sent >= f.size;
+            return (
+              <span key={f.key} class={`att ${f.error ? 'err' : 'busy'}`} title={f.error || `上传中 ${mb(f.sent)} / ${mb(f.size)}，完成后路径会插入输入框`}>
+                {f.error ? '⚠' : <span class="spinner small-spin" />}
+                <span class="att-name">{f.name}</span>
+                {!f.error && <span class="att-pct">{saving ? '保存中' : `${pct}%`}</span>}
+                {f.error && <span class="att-err">{f.error}</span>}
+                <button aria-label={f.error ? '移除' : '取消上传'} title={f.error ? '移除' : '取消上传'} onClick={() => dropFile(f.key)}>
+                  ✕
+                </button>
+                {!f.error && <span class="att-bar" style={{ width: `${pct}%` }} />}
+              </span>
+            );
+          })}
         </div>
       )}
       <div class="input-row">
@@ -1036,7 +1128,7 @@ export function Composer(props: {
             </button>
             {attachMenu && (
               <Modal title="添加文件" onClose={() => setAttachMenu(false)}>
-                <p class="dim small">选中的文件会以路径插入输入框的光标处。</p>
+                <p class="dim small">选中的文件会以路径插入输入框的光标处。本机文件也可以直接拖到对话里。</p>
                 <div class="sheet-list">
                   <button onClick={() => (setAttachMenu(false), setPicker(true))}>
                     服务器上的文件<span class="check dim">选文件或文件夹</span>

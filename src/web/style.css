@@ -454,6 +454,23 @@ label select {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
+}
+/* files dragged over the conversation */
+.chat.dropping::after {
+  content: '松开即可上传，路径会放进输入框';
+  position: absolute;
+  inset: 8px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  color: var(--accent);
+  font-size: 15px;
+  pointer-events: none;
 }
 .scroller {
   flex: 1;
@@ -1366,7 +1383,29 @@ a.btn {
   padding: 3px 4px 3px 8px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  max-width: 220px;
+  max-width: 320px;
+  position: relative;
+  overflow: hidden;
+}
+.att-pct {
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.att-err {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+/* the upload's progress along the bottom of its chip */
+.att-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--accent);
+  transition: width 0.2s;
 }
 .att.err {
   color: var(--danger);
