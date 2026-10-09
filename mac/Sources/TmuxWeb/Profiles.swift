@@ -26,6 +26,12 @@ struct Profile: Codable, Identifiable, Equatable, Hashable {
     let n = name.trimmingCharacters(in: .whitespaces)
     return !n.isEmpty ? n : isDirect ? (URL(string: directBase ?? "")?.host ?? directURL) : target
   }
+  /// what the card shows under the name
+  var address: String {
+    if isDirect { return directBase ?? directURL }
+    let t = target.trimmingCharacters(in: .whitespaces)
+    return "\(t)\(sshPort == 22 ? "" : ":\(sshPort)") → \(remotePort)"
+  }
   var isComplete: Bool {
     isDirect ? directBase != nil : !target.trimmingCharacters(in: .whitespaces).isEmpty && remotePort > 0 && localPort > 0
   }
@@ -70,7 +76,7 @@ struct Profile: Codable, Identifiable, Equatable, Hashable {
   }
 }
 
-/// The servers (one for now; the list is there for later) and which one is in use.
+/// The servers, and the one used last.
 final class ProfileStore: ObservableObject {
   static let shared = ProfileStore()
   private let defaults = UserDefaults.standard
@@ -79,7 +85,7 @@ final class ProfileStore: ObservableObject {
   @Published var currentID: UUID? { didSet { save() } }
 
   private init() {
-    // the settings file holds them encrypted (the key is in the keychain); an older version's
+    // the settings file holds them encrypted (the key is in a file of our own, see LocalKey); an older version's
     // plain list is read once and saved encrypted
     var migrate = false
     if let enc = defaults.data(forKey: "profiles.v2"), let data = Sealed.open(enc), let list = try? JSONDecoder().decode([Profile].self, from: data) {
@@ -106,7 +112,15 @@ final class ProfileStore: ObservableObject {
 
   func upsert(_ p: Profile) {
     if let i = profiles.firstIndex(where: { $0.id == p.id }) { profiles[i] = p } else { profiles.append(p) }
-    currentID = p.id
+    if currentID == nil { currentID = p.id }
+  }
+
+  /// A local port no other SSH server here uses: each keeps its own page login (they belong to the port).
+  func freeLocalPort(except id: UUID? = nil) -> Int {
+    let used = Set(profiles.filter { !$0.isDirect && $0.id != id }.map(\.localPort))
+    var port = 18080
+    while used.contains(port) { port += 1 }
+    return port
   }
 
   func remove(_ id: UUID) {

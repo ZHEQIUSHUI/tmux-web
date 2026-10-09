@@ -13,20 +13,32 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import java.util.UUID
 
-/** The server settings: filled in on first launch, changed from ⚙. */
+/**
+ * One server's settings, from the server list: a new one, an edit ("id"), or a copy ("copy").
+ * Saving hands back the server's id and whether to connect now.
+ */
 class SettingsActivity : Activity() {
   private lateinit var store: ProfileStore
   private lateinit var draft: Profile
+  private var original: Profile? = null
   private var mode = "direct"
   private val fields = mutableMapOf<String, EditText>()
+
+  private val number = InputType.TYPE_CLASS_NUMBER
+  private val secret = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     store = ProfileStore(this)
-    draft = store.current ?: Profile()
+    original = intent.getStringExtra("id")?.let { id -> store.profiles.firstOrNull { it.id == id } }
+    val copyOf = intent.getStringExtra("copy")?.let { id -> store.profiles.firstOrNull { it.id == id } }
+    draft = original
+      ?: copyOf?.let { it.copy(id = UUID.randomUUID().toString(), name = "${it.title} 副本", localPort = if (it.isDirect) it.localPort else store.freeLocalPort()) }
+      ?: Profile(localPort = store.freeLocalPort())
     mode = draft.mode
-    title = "服务器设置"
+    title = if (original == null) "新建服务器" else "编辑服务器"
 
     val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(16), dp(20), dp(24)) }
     // the fields of each way to connect; only the chosen one shows
@@ -43,10 +55,10 @@ class SettingsActivity : Activity() {
         if (lines > 1) { minLines = lines; maxLines = lines + 4; isSingleLine = false; textSize = 11f } else isSingleLine = true
       }
       fields[key] = e
-      form.addView(e, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+      // passwords: dots, or the text after a tap on the eye
+      if (type == secret) form.addView(withEye(this, e), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+      else form.addView(e, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
     }
-    val number = InputType.TYPE_CLASS_NUMBER
-    val secret = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
     field("name", "名称", draft.name, "可选，比如「工作站」")
     form.addView(TextView(this).apply { text = "连接方式"; textSize = 13f; setPadding(0, dp(12), 0, dp(2)) })
     val modes = android.widget.RadioGroup(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -80,14 +92,15 @@ class SettingsActivity : Activity() {
     field("keyPassphrase", "私钥口令", draft.keyPassphrase, "私钥有口令才填", secret)
     into = form
     sshBox.addView(TextView(this).apply {
-      text = "配置（包括密码和私钥）加密保存在手机里。本地端口固定不变，网页的登录状态才能保留。"
+      text = "配置（包括密码和私钥）加密保存在手机里。每台服务器用自己固定的本地端口，网页的登录状态才能保留。"
       textSize = 12f
       alpha = 0.7f
       setPadding(0, dp(12), 0, dp(12))
     })
 
     val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-    buttons.addView(Button(this).apply { text = "保存并连接"; setOnClickListener { save() } }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+    buttons.addView(Button(this).apply { text = "保存"; setOnClickListener { save(false) } }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+    buttons.addView(Button(this).apply { text = "保存并连接"; setOnClickListener { save(true) } }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
     form.addView(buttons)
     sshBox.addView(Button(this).apply {
       text = "忘记主机密钥"
@@ -96,13 +109,6 @@ class SettingsActivity : Activity() {
         if (p.isDirect) return@setOnClickListener
         KnownHosts(this@SettingsActivity).forget(p.host, p.sshPort)
         Toast.makeText(this@SettingsActivity, "已忘记 ${p.host} 的主机密钥，下次连接时重新记录", Toast.LENGTH_SHORT).show()
-      }
-    })
-    form.addView(Button(this).apply {
-      text = "断开并退出"
-      setOnClickListener {
-        TunnelService.stop(this@SettingsActivity)
-        finishAffinity()
       }
     })
     form.addView(TextView(this).apply { text = "tmux-web ${BuildConfig.VERSION_NAME}"; textSize = 12f; alpha = 0.5f; setPadding(0, dp(16), 0, 0) })
@@ -128,15 +134,11 @@ class SettingsActivity : Activity() {
     return p
   }
 
-  private fun save() {
+  private fun save(connect: Boolean) {
     val p = collect() ?: return
     store.upsert(p)
-    TunnelService.stop(this)
-    // a moment for the old forward to let go of the port
-    window.decorView.postDelayed({
-      TunnelService.start(this)
-      finish()
-    }, 400)
+    setResult(RESULT_OK, Intent().putExtra("id", p.id).putExtra("connect", connect).putExtra("changed", original != p))
+    finish()
   }
 
   private fun pickKey() {

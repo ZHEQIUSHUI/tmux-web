@@ -1,21 +1,19 @@
 import AppKit
 import SwiftUI
 
-/// The server settings: filled in on first launch, changed from 服务器 → 编辑服务器….
+/// One server's settings, in a sheet over the window: new, edited or copied from the server list.
 struct SettingsView: View {
-  @ObservedObject var store = ProfileStore.shared
   @State var draft: Profile
-  @State private var password = ""
-  var onConnect: (Profile) -> Void
+  let isNew: Bool
+  @State var password: String
+  @State private var showPassword = false
+  /// the server, its password, and whether to connect now
+  var onDone: (Profile, String, Bool) -> Void
   var onCancel: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
-      if store.profiles.count > 1 {
-        Picker("服务器", selection: Binding(get: { draft.id }, set: { id in if let p = store.profiles.first(where: { $0.id == id }) { draft = p } })) {
-          ForEach(store.profiles) { p in Text(p.title).tag(p.id) }
-        }
-      }
+      Text(isNew ? "新建服务器" : "编辑服务器").font(.title3.weight(.semibold))
       Form {
         TextField("名称", text: $draft.name, prompt: Text("可选，比如「工作站」"))
         Picker("连接方式", selection: $draft.mode) {
@@ -34,37 +32,34 @@ struct SettingsView: View {
             TextField("SSH 私钥", text: $draft.keyPath, prompt: Text("可选，留空用 ~/.ssh/config 和默认密钥"))
             Button("选择…") { pickKey() }
           }
-          SecureField("SSH 密码", text: $password, prompt: Text("可选，存在钥匙串里；留空则需要时弹框输入"))
+          HStack(spacing: 6) {
+            if showPassword {
+              TextField("SSH 密码", text: $password, prompt: Text("可选，加密保存在本机；留空则需要时弹框输入"))
+            } else {
+              SecureField("SSH 密码", text: $password, prompt: Text("可选，加密保存在本机；留空则需要时弹框输入"))
+            }
+            Button { showPassword.toggle() } label: { Image(systemName: showPassword ? "eye.slash" : "eye").frame(width: 18) }
+              .buttonStyle(.borderless)
+              .help(showPassword ? "隐藏密码" : "显示密码")
+          }
           TextField("其他 ssh 参数", text: $draft.extraArgs, prompt: Text("可选，比如 -J 跳板机"))
         }
       }
       Text(draft.isDirect
         ? "已经能直接访问服务器时用（比如在 EasyTier、局域网里），不经过 SSH。"
-        : "选了公钥（.pub）也没关系，会自动用同名的私钥。填了密码就自动登录；验证码等其他提问会弹框输入。本地端口固定不变，网页的登录状态才能保留。")
+        : "选了公钥（.pub）也没关系，会自动用同名的私钥。填了密码就自动登录；验证码等其他提问会弹框输入。每台服务器用自己固定的本地端口，网页的登录状态才能保留。")
         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
       HStack {
-        Button("新建服务器") { draft = Profile() }
-        if store.profiles.contains(where: { $0.id == draft.id }) && store.profiles.count > 1 {
-          Button("删除") {
-            store.remove(draft.id)
-            draft = store.current ?? Profile()
-          }
-        }
         Spacer()
         Button("取消") { onCancel() }.keyboardShortcut(.cancelAction)
-        Button("保存并连接") {
-          store.upsert(draft)
-          Keychain.setPassword(password, for: draft.id)
-          onConnect(draft)
-        }
-        .keyboardShortcut(.defaultAction)
-        .disabled(!draft.isComplete)
+        Button("保存") { onDone(draft, password, false) }.disabled(!draft.isComplete)
+        Button("保存并连接") { onDone(draft, password, true) }
+          .keyboardShortcut(.defaultAction)
+          .disabled(!draft.isComplete)
       }
     }
     .padding(20)
     .frame(width: 520)
-    .onAppear { password = Keychain.password(for: draft.id) ?? "" }
-    .onChange(of: draft.id) { id in password = Keychain.password(for: id) ?? "" }
   }
 
   private func pickKey() {

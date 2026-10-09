@@ -5,29 +5,34 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
   private let tunnel = Tunnel()
   private var main: WebWindow!
-  private var settings: NSWindow?
+  private var editor: NSWindow?
   private let serverMenu = NSMenu(title: "服务器")
+  private var store: ProfileStore { .shared }
+  /// the server connected (or connecting) now
+  private var active: Profile? { main.status.activeID.flatMap { id in store.profiles.first { $0.id == id } } }
 
   func applicationDidFinishLaunching(_ n: Notification) {
     main = WebWindow()
-    main.status.retry = { [weak self] in self?.connect() }
-    main.status.edit = { [weak self] in self?.openSettings() }
+    main.status.retry = { [weak self] in self?.reconnect() }
+    main.status.edit = { [weak self] in self?.editCurrent() }
+    main.status.list = { [weak self] in self?.showList() }
+    main.status.actions = ServerActions(
+      connect: { [weak self] p in self?.connect(p) },
+      edit: { [weak self] p in self?.openEditor(p) },
+      duplicate: { [weak self] p in self?.duplicate(p) },
+      remove: { [weak self] p in self?.remove(p) }
+    )
     tunnel.onState = { [weak self] s in
       guard let self else { return }
       Log.write("state \(s)")
-      self.main.show(s, title: ProfileStore.shared.current?.title ?? "")
+      self.main.show(s, title: self.active?.title ?? "")
     }
     UNUserNotificationCenter.current().delegate = self
     buildMenu()
     main.window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
-
-    if let p = ProfileStore.shared.current, p.isComplete {
-      connect()
-    } else {
-      main.show(.failed("还没有设置服务器。"), title: "")
-      openSettings()
-    }
+    // the server list first; nothing there yet: the form for the first one
+    if store.profiles.isEmpty { openEditor(nil) }
   }
 
   func applicationWillTerminate(_ n: Notification) { tunnel.stop() }
@@ -43,18 +48,123 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
   func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
     let m = NSMenu()
     m.addItem(withTitle: "显示主窗口", action: #selector(showMain), keyEquivalent: "")
-    m.addItem(withTitle: "重新连接", action: #selector(reconnect), keyEquivalent: "")
-    m.addItem(withTitle: "服务器设置…", action: #selector(openSettings), keyEquivalent: "")
+    m.addItem(withTitle: "服务器列表", action: #selector(showListAction), keyEquivalent: "")
+    if active != nil { m.addItem(withTitle: "重新连接", action: #selector(reconnect), keyEquivalent: "") }
     return m
   }
 
-  private func connect() {
-    guard let p = ProfileStore.shared.current, p.isComplete else { return openSettings() }
+  // MARK: servers
+
+  /// Its page: the one already up is just shown again; another one replaces it.
+  private func connect(_ p: Profile) {
+    guard p.isComplete else { return openEditor(p) }
+    store.currentID = p.id
+    if main.status.activeID == p.id {
+      switch tunnel.state {
+      case .ready, .connecting, .reconnecting: return main.showList(false)
+      default: break
+      }
+    } else {
+      main.reset()
+    }
+    main.status.activeID = p.id
+    main.showList(false)
     main.show(.connecting, title: p.title)
     tunnel.start(p)
   }
 
-  @objc private func reconnect() { connect() }
+  @objc private func reconnect() {
+    guard let p = active else { return showList() }
+    main.showList(false)
+    main.show(.connecting, title: p.title)
+    tunnel.start(p)
+  }
+
+  /// the list; the connection stays (its card says so, a click goes back to its page)
+  private func showList() {
+    // still trying to connect: stop, the list is where you choose again
+    switch tunnel.state {
+    case .ready, .reconnecting: break
+    default: disconnect()
+    }
+    main.showList(true)
+    main.bringBack()
+  }
+
+  private func disconnect() {
+    tunnel.stop()
+    main.status.activeID = nil
+    main.reset()
+  }
+
+  @objc private func showListAction() { showList() }
+  @objc private func newServer() { openEditor(nil) }
+  @objc private func editCurrent() { openEditor(active ?? store.current) }
+
+  private func duplicate(_ p: Profile) {
+    var c = p
+    c.id = UUID()
+    c.name = "\(p.title) 副本"
+    if !c.isDirect { c.localPort = store.freeLocalPort() }
+    openEditor(c, password: Keychain.password(for: p.id))
+  }
+
+  private func remove(_ p: Profile) {
+    let a = NSAlert()
+    a.messageText = "删除「\(p.title)」？"
+    a.informativeText = "它的设置和保存的密码都会删掉。"
+    a.addButton(withTitle: "删除").hasDestructiveAction = true
+    a.addButton(withTitle: "取消")
+    a.beginSheetModal(for: main.window) { [weak self] r in
+      guard let self, r == .alertFirstButtonReturn else { return }
+      if self.main.status.activeID == p.id { self.disconnect() }
+      self.store.remove(p.id)
+    }
+  }
+
+  /// The form in a sheet: nil makes a new server.
+  private func openEditor(_ p: Profile?, password: String? = nil) {
+    main.bringBack()
+    if let e = editor { return e.makeKeyAndOrderFront(nil) }
+    var draft = p ?? Profile()
+    if p == nil { draft.localPort = store.freeLocalPort() }
+    let isNew = !store.profiles.contains { $0.id == draft.id }
+    let view = SettingsView(
+      draft: draft, isNew: isNew, password: password ?? Keychain.password(for: draft.id) ?? "",
+      onDone: { [weak self] p, pw, go in self?.saved(p, pw, connect: go) },
+      onCancel: { [weak self] in self?.closeEditor() }
+    )
+    let w = NSWindow(contentViewController: NSHostingController(rootView: view))
+    w.styleMask = [.titled]
+    w.isReleasedWhenClosed = false
+    editor = w
+    main.window.beginSheet(w)
+  }
+
+  private func closeEditor() {
+    if let e = editor { main.window.endSheet(e) }
+    editor = nil
+  }
+
+  private func saved(_ p: Profile, _ pw: String, connect go: Bool) {
+    let before = store.profiles.first { $0.id == p.id }
+    let pwBefore = Keychain.password(for: p.id) ?? ""
+    store.upsert(p)
+    Keychain.setPassword(pw, for: p.id)
+    closeEditor()
+    let changed = before != p || pwBefore != pw
+    if go {
+      // the one in use, changed: connect again with the new settings
+      if changed && main.status.activeID == p.id { main.status.activeID = nil; main.reset() }
+      connect(p)
+    } else if changed && main.status.activeID == p.id {
+      // the one in use, changed: connect again with the new settings, where you are (list or page)
+      main.reset()
+      main.show(.connecting, title: p.title)
+      tunnel.start(p)
+    }
+  }
+
   @objc private func checkUpdates() {
     guard let base = main.base else {
       let a = NSAlert()
@@ -67,34 +177,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
   @objc private func reloadPage() { main.reload() }
   @objc private func showMain() { main.bringBack() }
 
-  @objc func openSettings() {
-    if let s = settings {
-      s.makeKeyAndOrderFront(nil)
-      return
-    }
-    let view = SettingsView(
-      draft: ProfileStore.shared.current ?? Profile(),
-      onConnect: { [weak self] _ in
-        self?.settings?.close()
-        self?.connect()
-      },
-      onCancel: { [weak self] in self?.settings?.close() }
-    )
-    let w = NSWindow(contentViewController: NSHostingController(rootView: view))
-    w.title = "服务器设置"
-    w.styleMask = [.titled, .closable]
-    w.isReleasedWhenClosed = false
-    NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in self?.settings = nil }
-    settings = w
-    w.center()
-    w.makeKeyAndOrderFront(nil)
-    NSApp.activate(ignoringOtherApps: true)
-  }
-
   @objc private func pickServer(_ item: NSMenuItem) {
-    guard let id = item.representedObject as? UUID else { return }
-    ProfileStore.shared.currentID = id
-    connect()
+    guard let id = item.representedObject as? UUID, let p = store.profiles.first(where: { $0.id == id }) else { return }
+    main.bringBack()
+    connect(p)
   }
 
   // MARK: notifications
@@ -117,7 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     appMenu.addItem(withTitle: "关于 tmux-web", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
     appMenu.addItem(withTitle: "检查更新…", action: #selector(checkUpdates), keyEquivalent: "")
     appMenu.addItem(.separator())
-    appMenu.addItem(withTitle: "服务器设置…", action: #selector(openSettings), keyEquivalent: ",")
+    appMenu.addItem(withTitle: "服务器列表", action: #selector(showListAction), keyEquivalent: ",")
     appMenu.addItem(.separator())
     appMenu.addItem(withTitle: "隐藏 tmux-web", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
     appMenu.addItem(withTitle: "退出 tmux-web", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -158,19 +244,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     NSApp.mainMenu = bar
   }
 
-  /// 服务器: the list (one for now) with the current one checked, reconnect, edit.
+  /// 服务器: the list, the servers (the one in use checked), new, reconnect, edit.
   func menuNeedsUpdate(_ menu: NSMenu) {
     guard menu === serverMenu else { return }
     menu.removeAllItems()
-    let store = ProfileStore.shared
+    menu.addItem(withTitle: "服务器列表", action: #selector(showListAction), keyEquivalent: "l")
+    menu.addItem(withTitle: "新建服务器…", action: #selector(newServer), keyEquivalent: "n")
+    if !store.profiles.isEmpty { menu.addItem(.separator()) }
     for p in store.profiles {
       let item = NSMenuItem(title: p.title, action: #selector(pickServer(_:)), keyEquivalent: "")
       item.representedObject = p.id
-      item.state = p.id == store.current?.id ? .on : .off
+      item.state = p.id == main.status.activeID ? .on : .off
       menu.addItem(item)
     }
-    if !store.profiles.isEmpty { menu.addItem(.separator()) }
-    menu.addItem(withTitle: "重新连接", action: #selector(reconnect), keyEquivalent: "R")
-    menu.addItem(withTitle: "编辑服务器…", action: #selector(openSettings), keyEquivalent: "")
+    if active != nil {
+      menu.addItem(.separator())
+      menu.addItem(withTitle: "重新连接", action: #selector(reconnect), keyEquivalent: "R")
+      menu.addItem(withTitle: "编辑当前服务器…", action: #selector(editCurrent), keyEquivalent: "")
+    }
   }
 }

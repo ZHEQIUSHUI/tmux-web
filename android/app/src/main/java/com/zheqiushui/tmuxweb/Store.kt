@@ -37,6 +37,8 @@ data class Profile(
   val title get() = name.ifBlank { if (isDirect) directBase?.let { android.net.Uri.parse(it).host } ?: directUrl else target }
   val user get() = target.substringBefore('@', "")
   val host get() = target.substringAfter('@')
+  /** what the card shows under the name */
+  val address get() = if (isDirect) directBase ?: directUrl else "${target.trim()}${if (sshPort == 22) "" else ":$sshPort"} → $remotePort"
   val isComplete get() = if (isDirect) directBase != null else target.contains('@') && host.isNotBlank() && user.isNotBlank() && remotePort > 0 && localPort > 0
 
   /** The direct address as http(s)://host[:port] ("10.0.0.2:8080" gets http://), or null. */
@@ -66,7 +68,7 @@ data class Profile(
 }
 
 /**
- * The servers (one for now; the list is there for later), kept encrypted: AES-GCM with a key that
+ * The servers, and the one used last, kept encrypted: AES-GCM with a key that
  * lives in the Android keystore and never leaves it. Passwords and private keys are in there too.
  */
 class ProfileStore(context: Context) {
@@ -79,10 +81,19 @@ class ProfileStore(context: Context) {
 
   val current: Profile? get() = profiles.firstOrNull { it.id == currentId } ?: profiles.firstOrNull()
 
+  /** a changed one stays where it was in the list; a new one goes last */
   fun upsert(p: Profile) {
-    profiles = profiles.filter { it.id != p.id } + p
-    currentId = p.id
+    profiles = if (profiles.any { it.id == p.id }) profiles.map { if (it.id == p.id) p else it } else profiles + p
+    if (currentId == null) currentId = p.id
     save()
+  }
+
+  /** A local port no other SSH server here uses: each keeps its own page login (it belongs to the port). */
+  fun freeLocalPort(except: String? = null): Int {
+    val used = profiles.filter { !it.isDirect && it.id != except }.map { it.localPort }.toSet()
+    var port = 18080
+    while (port in used) port++
+    return port
   }
 
   fun remove(id: String) {

@@ -3,17 +3,31 @@ import SwiftUI
 import UserNotifications
 import WebKit
 
-/// What the overlay over the page shows while the forward isn't up.
+/// What the overlay over the page shows: the server list, or the connection while it isn't up.
 final class Status: ObservableObject {
   @Published var state: Tunnel.State = .idle
   @Published var title = ""
+  /// the server list in front of the page
+  @Published var showList = true
+  /// the server connected (or connecting) now
+  @Published var activeID: UUID?
+  var actions = ServerActions()
   var retry: () -> Void = {}
   var edit: () -> Void = {}
+  var list: () -> Void = {}
 }
 
 struct StatusView: View {
   @ObservedObject var status: Status
   var body: some View {
+    if status.showList {
+      ServerListView(status: status)
+    } else {
+      connection
+    }
+  }
+
+  @ViewBuilder private var connection: some View {
     switch status.state {
     case .ready:
       EmptyView()
@@ -22,6 +36,7 @@ struct StatusView: View {
         ProgressView().controlSize(.large)
         Text("正在连接 \(status.title)…").font(.headline)
         Text("需要验证码或密码时会弹出对话框").font(.callout).foregroundStyle(.secondary)
+        Button("取消") { status.list() }.keyboardShortcut(.cancelAction)
       }
     case .reconnecting(let msg):
       VStack {
@@ -40,6 +55,7 @@ struct StatusView: View {
         Text("连不上 \(status.title)").font(.headline)
         Text(msg).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).textSelection(.enabled).frame(maxWidth: 420)
         HStack {
+          Button("服务器列表") { status.list() }
           Button("编辑服务器…") { status.edit() }
           Button("重试") { status.retry() }.keyboardShortcut(.defaultAction)
         }
@@ -111,12 +127,65 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     window.toolbarStyle = .unifiedCompact
     if window.frame.origin == .zero { window.center() }
     fixSize()
+    // a double click on the title bar does what System Settings says, every time (the toolbar in
+    // the title bar let some double clicks through to nowhere)
+    NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] e in
+      guard let self, e.clickCount == 2, e.window === self.window, self.inTitleBar(e) else { return e }
+      self.titleBarDoubleClick()
+      return nil
+    }
+  }
+
+  /// on the title bar, not on one of its buttons
+  private func inTitleBar(_ e: NSEvent) -> Bool {
+    let p = e.locationInWindow
+    guard p.y > window.contentLayoutRect.maxY, let frame = window.contentView?.superview else { return false }
+    var v = frame.hitTest(frame.convert(p, from: nil))
+    while let x = v {
+      if let c = x as? NSControl, !(c is NSTextField) || (c as? NSTextField)?.isEditable == true { return false }
+      v = x.superview
+    }
+    return true
+  }
+
+  private var unzoomedFrame: NSRect?
+
+  private func titleBarDoubleClick() {
+    let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize"
+    switch action {
+    case "Minimize": window.miniaturize(nil)
+    case "None": break
+    default:
+      // fill the screen, or back to the size before
+      guard let screen = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
+      let filled = abs(window.frame.width - screen.width) < 4 && abs(window.frame.height - screen.height) < 4
+      if filled {
+        let back = unzoomedFrame ?? NSRect(x: 0, y: 0, width: min(1280, screen.width - 80), height: min(820, screen.height - 80))
+        window.setFrame(back, display: true, animate: true)
+        if unzoomedFrame == nil { window.center() }
+        unzoomedFrame = nil
+      } else {
+        unzoomedFrame = window.frame
+        window.setFrame(screen, display: true, animate: true)
+      }
+    }
   }
 
   private static let reloadItem = NSToolbarItem.Identifier("reload")
-  func toolbarDefaultItemIdentifiers(_ t: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace, Self.reloadItem] }
-  func toolbarAllowedItemIdentifiers(_ t: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace, Self.reloadItem] }
+  private static let listItem = NSToolbarItem.Identifier("servers")
+  func toolbarDefaultItemIdentifiers(_ t: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.listItem, .flexibleSpace, Self.reloadItem] }
+  func toolbarAllowedItemIdentifiers(_ t: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.listItem, .flexibleSpace, Self.reloadItem] }
   func toolbar(_ t: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar: Bool) -> NSToolbarItem? {
+    if id == Self.listItem {
+      let item = NSToolbarItem(itemIdentifier: id)
+      item.label = "服务器"
+      item.toolTip = "服务器列表（⌘L）"
+      item.image = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "服务器列表")
+      item.target = self
+      item.action = #selector(listAction)
+      item.isBordered = true
+      return item
+    }
     guard id == Self.reloadItem else { return nil }
     let item = NSToolbarItem(itemIdentifier: id)
     item.label = "刷新"
@@ -128,13 +197,34 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     return item
   }
   @objc private func reloadAction() { reload() }
+  /// the list, or back to the page of the server in use
+  @objc private func listAction() {
+    if status.showList, status.activeID != nil { showList(false) } else { status.list() }
+  }
+
+  func showList(_ on: Bool) {
+    status.showList = on
+    updateOverlay()
+    window.title = on || status.title.isEmpty ? "tmux-web" : "tmux-web · \(status.title)"
+  }
+
+  /// the page shows only while connected and the list is away
+  private func updateOverlay() {
+    if case .ready = status.state, !status.showList { overlay?.isHidden = true } else { overlay?.isHidden = false }
+  }
+
+  /// another server (or none): the old one's page goes, so it never shows under the new one's name
+  func reset() {
+    loadedBase = nil
+    web.load(URLRequest(url: URL(string: "about:blank")!))
+  }
 
   func show(_ s: Tunnel.State, title: String) {
     status.title = title
     status.state = s
     // connected: nothing to show over the page (and nothing to catch clicks)
-    if case .ready = s { overlay?.isHidden = true } else { overlay?.isHidden = false }
-    window.title = title.isEmpty ? "tmux-web" : "tmux-web · \(title)"
+    updateOverlay()
+    window.title = title.isEmpty || status.showList ? "tmux-web" : "tmux-web · \(title)"
     if case .ready(let base) = s {
       // the password / code dialog (another process) took the focus: come back to the front
       if loadedBase != base { bringBack() }
@@ -173,7 +263,7 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     // replaced by another load (a reload, a link) or turned into a download: not a failure
     if w !== web || ns.code == NSURLErrorCancelled || (ns.domain == "WebKitErrorDomain" && ns.code == 102) { return }
     status.state = .failed("网页加载失败：\(ns.localizedDescription)")
-    overlay?.isHidden = false
+    updateOverlay()
     loadedBase = nil
   }
 
@@ -215,6 +305,7 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
   }
 
   func open(session id: Int) {
+    if status.activeID != nil { showList(false) }
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
     web.evaluateJavaScript("location.hash = '#/s/\(id)'")

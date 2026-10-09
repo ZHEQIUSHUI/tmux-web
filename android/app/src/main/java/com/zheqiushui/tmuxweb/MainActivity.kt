@@ -35,10 +35,10 @@ import android.widget.TextView
 import android.widget.Toast
 
 /**
- * The window: tmux-web's page through the forward (127.0.0.1:<port>), a thin bar with the state,
- * 刷新 and 设置, and a card over the page while it isn't connected.
+ * The window: the server list first; then the server's page (through the forward, or directly)
+ * under a thin bar with the state, 刷新 and 设置, and a card over it while it isn't connected.
  */
-class MainActivity : Activity() {
+class MainActivity : Activity(), ServerList.Actions {
   private lateinit var web: WebView
   private lateinit var dot: View
   private lateinit var title: TextView
@@ -46,14 +46,22 @@ class MainActivity : Activity() {
   private lateinit var cardSpinner: ProgressBar
   private lateinit var cardText: TextView
   private lateinit var cardButtons: LinearLayout
+  private lateinit var page: LinearLayout
+  private lateinit var list: ServerList
+  private lateinit var store: ProfileStore
+  private var listShown = true
+  /** a new server's page: its history starts there (back never goes to the one before) */
+  private var freshPage = false
   private var loadedBase: String? = null
+  private val pageBg get() = if (dark) Color.parseColor("#16181d") else Color.WHITE
   private var fileCallback: ValueCallback<Array<Uri>>? = null
   private var pendingSession: Int? = null
   private val dark get() = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-  private val onState: (TunnelState) -> Unit = { show(it) }
+  private val onState: (TunnelState) -> Unit = { show(it); if (listShown) renderList() }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    store = ProfileStore(this)
     buildViews()
     if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
       requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
@@ -61,16 +69,14 @@ class MainActivity : Activity() {
     pendingSession = intent.getIntExtra("sessionId", -1).takeIf { it >= 0 }
     // debug builds only, for automated tests: a profile handed in as base64 JSON
     if (BuildConfig.DEBUG) intent.getStringExtra("testProfile")?.let {
-      ProfileStore(this).upsert(Profile.fromJson(org.json.JSONObject(String(android.util.Base64.decode(it, android.util.Base64.DEFAULT)))))
+      store.upsert(Profile.fromJson(org.json.JSONObject(String(android.util.Base64.decode(it, android.util.Base64.DEFAULT)))))
     }
+    // the list first, unless a server is still connected (the app came back) or an alert was tapped
+    val live = Hub.activeId != null && Hub.state !is TunnelState.Idle
+    showList(!live)
     Hub.listen(onState)
     Hub.onQuestion = { askDialog(it) }
-    val p = ProfileStore(this).current
-    if (p == null || !p.isComplete) {
-      startActivity(Intent(this, SettingsActivity::class.java))
-    } else {
-      TunnelService.ensure(this)
-    }
+    if (store.profiles.isEmpty()) edit(null)
   }
 
   override fun onDestroy() {
@@ -83,8 +89,8 @@ class MainActivity : Activity() {
     super.onResume()
     Hub.foreground = true
     Hub.question?.let { askDialog(it) }
-    // settings were saved: (re)connect with them
-    if (Hub.state is TunnelState.Idle) ProfileStore(this).current?.takeIf { it.isComplete }?.let { TunnelService.ensure(this) }
+    // the page is up but the forward went away (the system stopped the service): bring it back
+    if (!listShown && Hub.activeId != null && Hub.state is TunnelState.Idle) TunnelService.ensure(this)
   }
 
   override fun onPause() {
@@ -99,12 +105,104 @@ class MainActivity : Activity() {
   }
 
   private fun openSession(id: Int) {
+    if (Hub.activeId != null) showList(false)
     if (loadedBase != null) web.evaluateJavascript("location.hash = '#/s/$id'", null) else pendingSession = id
   }
 
   @Deprecated("Deprecated in Java")
   override fun onBackPressed() {
-    if (web.canGoBack()) web.goBack() else moveTaskToBack(true) // keep the forward and the alerts
+    when {
+      listShown -> moveTaskToBack(true) // keep the forward and the alerts
+      web.canGoBack() -> web.goBack()
+      else -> showList(true)
+    }
+  }
+
+  override fun onConfigurationChanged(c: Configuration) {
+    super.onConfigurationChanged(c)
+    if (listShown) renderList() // columns follow the width
+  }
+
+  // ---- servers ----
+
+  private fun showList(on: Boolean) {
+    listShown = on
+    list.view.visibility = if (on) View.VISIBLE else View.GONE
+    page.visibility = if (on) View.GONE else View.VISIBLE
+    window.statusBarColor = if (on) list.bg else pageBg
+    window.navigationBarColor = window.statusBarColor
+    if (on) renderList()
+  }
+
+  private fun renderList() {
+    store = ProfileStore(this)
+    list.render(store.profiles, Hub.activeId, Hub.state)
+  }
+
+  /** Its page: the one already up is just shown again; another one replaces it. */
+  override fun connect(p: Profile) = connect(p, false)
+
+  private fun connect(p: Profile, again: Boolean) {
+    if (!p.isComplete) return edit(p)
+    val s = Hub.state
+    if (!again && Hub.activeId == p.id && (s is TunnelState.Ready || s is TunnelState.Connecting || s is TunnelState.Reconnecting)) return showList(false)
+    if (Hub.activeId != p.id || again) resetPage()
+    store.select(p.id)
+    Hub.activeId = p.id
+    Hub.profileTitle = p.title
+    showList(false)
+    TunnelService.start(this)
+  }
+
+  override fun edit(p: Profile?) {
+    startActivityForResult(Intent(this, SettingsActivity::class.java).apply { p?.let { putExtra("id", it.id) } }, EDIT)
+  }
+
+  override fun duplicate(p: Profile) {
+    startActivityForResult(Intent(this, SettingsActivity::class.java).putExtra("copy", p.id), EDIT)
+  }
+
+  override fun remove(p: Profile) {
+    AlertDialog.Builder(this)
+      .setTitle("删除「${p.title}」？")
+      .setMessage("它的设置和保存的密码、私钥都会删掉。")
+      .setPositiveButton("删除") { _, _ ->
+        if (Hub.activeId == p.id) disconnect()
+        store.remove(p.id)
+        renderList()
+      }
+      .setNegativeButton("取消", null)
+      .show()
+  }
+
+  override fun disconnect() {
+    TunnelService.stop(this)
+    Hub.activeId = null
+    resetPage()
+    showList(true)
+  }
+
+  /** the old server's page goes, so it never shows under another one's name */
+  private fun resetPage() {
+    loadedBase = null
+    web.loadUrl("about:blank")
+  }
+
+  /** back from the settings: connect, or reconnect the one in use when it changed */
+  private fun edited(data: Intent) {
+    store = ProfileStore(this)
+    val p = store.profiles.firstOrNull { it.id == data.getStringExtra("id") } ?: return renderList()
+    val changed = data.getBooleanExtra("changed", false)
+    when {
+      data.getBooleanExtra("connect", false) -> connect(p, changed && Hub.activeId == p.id)
+      changed && Hub.activeId == p.id -> {
+        resetPage()
+        Hub.profileTitle = p.title
+        TunnelService.start(this)
+        renderList()
+      }
+      else -> renderList()
+    }
   }
 
   // ---- state ----
@@ -122,6 +220,7 @@ class MainActivity : Activity() {
         card.visibility = View.GONE
         if (loadedBase != s.base || web.url == null) {
           loadedBase = s.base
+          freshPage = true
           web.loadUrl("${s.base}/" + (pendingSession?.let { "#/s/$it" } ?: ""))
           pendingSession = null
           Updater.checkSoon(this, s.base)
@@ -131,25 +230,32 @@ class MainActivity : Activity() {
         // the page stays; it reconnects its own streams once the forward is back
         card.visibility = if (loadedBase != null) View.GONE else View.VISIBLE
         title.text = s.message
-        cardState(true, s.message, false)
+        cardState(true, s.message, listOf("取消" to { disconnect() }))
       }
       is TunnelState.Connecting, TunnelState.Idle -> {
         card.visibility = View.VISIBLE
-        cardState(true, "正在连接 ${Hub.profileTitle}…\n需要验证码或密码时会弹框", false)
+        cardState(true, "正在连接 ${Hub.profileTitle}…\n需要验证码或密码时会弹框", listOf("取消" to { disconnect() }))
       }
       is TunnelState.Failed -> {
         card.visibility = View.VISIBLE
         loadedBase = null
-        cardState(false, "连不上 ${Hub.profileTitle}\n\n${s.message}", true)
+        cardState(false, "连不上 ${Hub.profileTitle}\n\n${s.message}", listOf(
+          "服务器列表" to { disconnect() },
+          "设置" to { activeProfile()?.let { edit(it) } },
+          "重试" to { TunnelService.start(this) },
+        ))
       }
     }
   }
 
-  private fun cardState(spinning: Boolean, text: String, buttons: Boolean) {
+  private fun cardState(spinning: Boolean, text: String, buttons: List<Pair<String, () -> Unit>>) {
     cardSpinner.visibility = if (spinning) View.VISIBLE else View.GONE
     cardText.text = text
-    cardButtons.visibility = if (buttons) View.VISIBLE else View.GONE
+    cardButtons.removeAllViews()
+    buttons.forEach { (label, action) -> cardButtons.addView(Button(this).apply { this.text = label; setOnClickListener { action() } }) }
   }
+
+  private fun activeProfile() = store.profiles.firstOrNull { it.id == Hub.activeId }
 
   private fun askDialog(q: Hub.Question) {
     if (isFinishing) return
@@ -157,7 +263,7 @@ class MainActivity : Activity() {
       inputType = if (q.secret) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD else InputType.TYPE_CLASS_TEXT
       setSingleLine()
     }
-    val box = FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(input) }
+    val box = FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(if (q.secret) withEye(this@MainActivity, input) else input) }
     AlertDialog.Builder(this)
       .setTitle("SSH 验证")
       .setMessage(q.prompt)
@@ -179,21 +285,23 @@ class MainActivity : Activity() {
     window.navigationBarColor = bg
     if (!dark) window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
 
-    val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(bg) }
+    page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(bg) }
+    val root = page
 
-    // thin bar: ● name … ⟳ ⚙
+    // thin bar: ‹ ● name … ⟳ ⚙ (‹: the server list)
     val bar = LinearLayout(this).apply {
       orientation = LinearLayout.HORIZONTAL
       gravity = Gravity.CENTER_VERTICAL
-      setPadding(dp(12), 0, dp(4), 0)
+      setPadding(0, 0, dp(4), 0)
       setBackgroundColor(bg)
     }
+    bar.addView(barButton("‹", fg) { showList(true) }.apply { textSize = 24f; contentDescription = "服务器列表" })
     dot = View(this).apply { background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.GRAY) } }
     bar.addView(dot, LinearLayout.LayoutParams(dp(8), dp(8)))
     title = TextView(this).apply { textSize = 13f; setTextColor(fg); setPadding(dp(8), 0, 0, 0); isSingleLine = true }
     bar.addView(title, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
     bar.addView(barButton("⟳", fg) { web.clearCache(false); web.reload() })
-    bar.addView(barButton("⚙", fg) { startActivity(Intent(this, SettingsActivity::class.java)) })
+    bar.addView(barButton("⚙", fg) { activeProfile()?.let { edit(it) } })
     root.addView(bar, LinearLayout.LayoutParams(MATCH_PARENT, dp(38)))
 
     val stack = FrameLayout(this)
@@ -217,6 +325,10 @@ class MainActivity : Activity() {
         return false
       }
       override fun onPageFinished(view: WebView, url: String?) {
+        if (freshPage && url != null && url.startsWith(loadedBase ?: "-")) {
+          freshPage = false
+          view.clearHistory()
+        }
         CookieManager.getInstance().flush()
       }
     }
@@ -258,13 +370,16 @@ class MainActivity : Activity() {
     cardText = TextView(this).apply { textSize = 15f; setTextColor(fg); gravity = Gravity.CENTER; setPadding(0, dp(16), 0, dp(16)) }
     card.addView(cardText)
     cardButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-    cardButtons.addView(Button(this).apply { text = "设置"; setOnClickListener { startActivity(Intent(this@MainActivity, SettingsActivity::class.java)) } })
-    cardButtons.addView(Button(this).apply { text = "重试"; setOnClickListener { TunnelService.start(this@MainActivity) } })
     card.addView(cardButtons)
     stack.addView(card, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
 
     root.addView(stack, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-    setContentView(root)
+    list = ServerList(this, dark, this)
+    setContentView(FrameLayout(this).apply {
+      setBackgroundColor(bg)
+      addView(page, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+      addView(list.view, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+    })
   }
 
   private fun barButton(label: String, color: Int, onClick: () -> Unit) = TextView(this).apply {
@@ -279,6 +394,7 @@ class MainActivity : Activity() {
   @Deprecated("Deprecated in Java")
   override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
     super.onActivityResult(requestCode, resultCode, data)
+    if (requestCode == EDIT && resultCode == RESULT_OK && data != null) edited(data)
     if (requestCode == 7) {
       fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data) ?: data?.clipData?.let { c -> Array(c.itemCount) { c.getItemAt(it).uri } })
       fileCallback = null
@@ -286,4 +402,8 @@ class MainActivity : Activity() {
   }
 
   private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+  companion object {
+    private const val EDIT = 9
+  }
 }

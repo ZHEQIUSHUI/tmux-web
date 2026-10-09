@@ -29,6 +29,8 @@ object Hub {
   /** the window is in front (alerts are shown by the page then) */
   @Volatile var foreground = false
   var profileTitle = ""
+  /** the server connected (or connecting) now; null: none */
+  @Volatile var activeId: String? = null
 
   fun publish(s: TunnelState) {
     state = s
@@ -100,6 +102,7 @@ class TunnelService : Service() {
     val p = ProfileStore(this).current
     if (p == null || !p.isComplete) return Hub.publish(TunnelState.Failed("还没有设置服务器。"))
     Hub.profileTitle = p.title
+    Hub.activeId = p.id
     tunnel.start(p)
   }
 
