@@ -749,6 +749,23 @@ label select {
 .msg.user.show-actions .msg-actions {
   display: block;
 }
+/* with a mouse the line is always there, only faded out: showing it on hover moved the whole
+   conversation below it */
+@media (hover: hover) {
+  .msg-actions {
+    display: block;
+    line-height: 18px;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.12s, visibility 0.12s;
+  }
+  .msg.user:hover .msg-actions,
+  .msg.user.show-actions .msg-actions,
+  .msg-actions:has(.ok) {
+    opacity: 1;
+    visibility: visible;
+  }
+}
 .msg.pending .msg-actions {
   display: none;
 }
