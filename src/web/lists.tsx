@@ -265,6 +265,16 @@ export function FolderHeader(props: { group: SessionGroup; open: boolean; onTogg
 
 export const moveToFolder = (sessionId: number, folderId: number | null) => api('PUT', `/_tw/api/sessions/${sessionId}/folder`, { folderId }).catch((e) => alert(e.message));
 
+/** The agent's letter on its color, the status dot on its corner: the same on phones and computers. */
+function AgentBadge({ s, small }: { s: SessionInfo; small?: boolean }) {
+  return (
+    <span class={`m-badge ${s.agent} ${small ? 's-badge' : ''}`} title={`${AGENT_LABEL[s.agent]} · ${STATUS_LABEL[s.status]}`}>
+      {AGENT_LABEL[s.agent].slice(0, 1)}
+      <span class={`m-dot dot ${s.status}`} />
+    </span>
+  );
+}
+
 export function Sidebar(props: {
   me: Me;
   hostBanner: boolean;
@@ -343,7 +353,7 @@ export function Sidebar(props: {
       onDragStart={(e) => e.dataTransfer?.setData('text/tw-session', String(s.id))}
       title={s.title || undefined}
     >
-      <span class={`dot ${s.status}`} title={STATUS_LABEL[s.status]} />
+      <AgentBadge s={s} small />
       <span class="s-main">
         <span class="s-name">
           {s.name}
@@ -369,7 +379,7 @@ export function Sidebar(props: {
       onDragStart={(e) => e.dataTransfer?.setData('text/tw-session', String(s.id))}
       title={s.note || undefined}
     >
-      <span class={`dot ${s.status}`} title={STATUS_LABEL[s.status]} />
+      <AgentBadge s={s} small />
       <span class="s-main">
         <span class="s-name">
           {s.name}
@@ -481,10 +491,7 @@ export function MobileHome(props: {
   const recent = q ? [] : recentSessions(sessions || [], recentMin);
   const recentRow = (s: SessionInfo) => (
     <button key={`r${s.id}`} class={`m-row ${s.status}`} onPointerDown={() => prefetchChat(s)} onClick={() => props.onPick(s.id)}>
-      <span class={`m-badge ${s.agent}`}>
-        {AGENT_LABEL[s.agent].slice(0, 1)}
-        <span class={`m-dot dot ${s.status}`} />
-      </span>
+      <AgentBadge s={s} />
       <span class="m-main">
         <span class="m-name">
           {s.name}
@@ -515,10 +522,7 @@ export function MobileHome(props: {
   }, [activityKey]);
   const row = (s: SessionInfo) => (
     <button key={s.id} class={`m-row ${s.status}`} onPointerDown={() => prefetchChat(s)} onClick={() => props.onPick(s.id)}>
-      <span class={`m-badge ${s.agent}`}>
-        {AGENT_LABEL[s.agent].slice(0, 1)}
-        <span class={`m-dot dot ${s.status}`} />
-      </span>
+      <AgentBadge s={s} />
       <span class="m-main">
         <span class="m-name">
           {s.name}

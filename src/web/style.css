@@ -1678,6 +1678,24 @@ a.btn {
   border: 2.5px solid var(--panel);
   box-sizing: content-box;
 }
+/* the same badge, smaller, in the computer's sidebar */
+.s-badge {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.s-badge .m-dot {
+  width: 9px;
+  height: 9px;
+  border-width: 2px;
+  border-color: var(--side);
+  right: -3px;
+  bottom: -3px;
+}
+.session-item.active .s-badge .m-dot {
+  border-color: var(--panel);
+}
 .m-main {
   flex: 1;
   min-width: 0;
