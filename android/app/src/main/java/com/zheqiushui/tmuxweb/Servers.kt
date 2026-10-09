@@ -6,10 +6,12 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
+import android.os.Build
 import android.text.method.PasswordTransformationMethod
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
+import android.view.WindowInsets
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.EditText
@@ -17,6 +19,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.ScrollView
+import android.widget.Space
 import android.widget.TextView
 
 /**
@@ -69,7 +72,8 @@ class ServerList(private val a: Activity, private val dark: Boolean, private val
     cards.chunked(n).forEach { rowCards ->
       val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
       for (i in 0 until n) {
-        val c = rowCards.getOrNull(i) ?: View(a)
+        // an empty cell: a Space (a plain View would take all the height there is)
+        val c = rowCards.getOrNull(i) ?: Space(a)
         row.addView(c, LinearLayout.LayoutParams(0, MATCH_PARENT, 1f).apply { setMargins(if (i == 0) 0 else dp(6), 0, if (i == n - 1) 0 else dp(6), dp(12)) })
       }
       col.addView(row, MATCH_PARENT, WRAP_CONTENT)
@@ -165,6 +169,32 @@ class ServerList(private val a: Activity, private val dark: Boolean, private val
   }
 
   private fun dp(v: Int) = (v * a.resources.displayMetrics.density).toInt()
+}
+
+/**
+ * Android 15 draws an app under the status and navigation bars (edge to edge), and the keyboard no
+ * longer shrinks the window: the content keeps out of the bars and above the keyboard by itself.
+ * From Android 11 on it's done this way everywhere, so every version looks the same.
+ */
+fun keepClearOfBars(a: Activity, root: View) {
+  if (Build.VERSION.SDK_INT < 30) return
+  a.window.setDecorFitsSystemWindows(false)
+  root.setOnApplyWindowInsetsListener { v, insets ->
+    val b = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout() or WindowInsets.Type.ime())
+    v.setPadding(b.left, b.top, b.right, b.bottom)
+    WindowInsets.CONSUMED
+  }
+  root.requestApplyInsets()
+}
+
+/** Under an action bar (it keeps clear of the status bar itself): the sides, the bottom bar, the keyboard. */
+fun keepClearOfBottom(root: View) {
+  if (Build.VERSION.SDK_INT < 30) return
+  root.setOnApplyWindowInsetsListener { v, insets ->
+    val b = insets.getInsets(WindowInsets.Type.navigationBars() or WindowInsets.Type.displayCutout() or WindowInsets.Type.ime())
+    v.setPadding(b.left, 0, b.right, b.bottom)
+    insets
+  }
 }
 
 /**

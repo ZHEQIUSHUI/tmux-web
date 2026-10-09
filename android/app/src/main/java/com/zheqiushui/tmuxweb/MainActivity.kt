@@ -47,6 +47,8 @@ class MainActivity : Activity(), ServerList.Actions {
   private lateinit var cardText: TextView
   private lateinit var cardButtons: LinearLayout
   private lateinit var page: LinearLayout
+  /** everything, inside the system bars; its background shows behind them */
+  private lateinit var frame: FrameLayout
   private lateinit var list: ServerList
   private lateinit var store: ProfileStore
   private var listShown = true
@@ -129,6 +131,7 @@ class MainActivity : Activity(), ServerList.Actions {
     listShown = on
     list.view.visibility = if (on) View.VISIBLE else View.GONE
     page.visibility = if (on) View.GONE else View.VISIBLE
+    frame.setBackgroundColor(if (on) list.bg else pageBg)
     window.statusBarColor = if (on) list.bg else pageBg
     window.navigationBarColor = window.statusBarColor
     if (on) renderList()
@@ -375,11 +378,18 @@ class MainActivity : Activity(), ServerList.Actions {
 
     root.addView(stack, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
     list = ServerList(this, dark, this)
-    setContentView(FrameLayout(this).apply {
+    frame = FrameLayout(this).apply {
       setBackgroundColor(bg)
       addView(page, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
       addView(list.view, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-    })
+    }
+    setContentView(frame)
+    keepClearOfBars(this, frame)
+    // dark icons on the light bars (Android 15 draws the bars see-through, over our background)
+    if (!dark && Build.VERSION.SDK_INT >= 30) {
+      val light = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+      window.insetsController?.setSystemBarsAppearance(light, light)
+    }
   }
 
   private fun barButton(label: String, color: Int, onClick: () -> Unit) = TextView(this).apply {

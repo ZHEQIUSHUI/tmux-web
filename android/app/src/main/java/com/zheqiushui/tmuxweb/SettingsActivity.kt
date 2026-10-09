@@ -112,7 +112,7 @@ class SettingsActivity : Activity() {
       }
     })
     form.addView(TextView(this).apply { text = "tmux-web ${BuildConfig.VERSION_NAME}"; textSize = 12f; alpha = 0.5f; setPadding(0, dp(16), 0, 0) })
-    setContentView(ScrollView(this).apply { addView(form) })
+    setContentView(ScrollView(this).apply { addView(form); keepClearOfBottom(this) })
   }
 
   private fun collect(): Profile? {
