@@ -32,6 +32,8 @@ data class Profile(
   val keyPassphrase: String = "",
   /** empty = asked for when the server wants it */
   val password: String = "",
+  /** when it was last connected to (ms), 0 = never: the home screen lists the recent ones first */
+  val lastUsed: Long = 0,
 ) {
   val isDirect get() = mode == "direct"
   val title get() = name.ifBlank { if (isDirect) directBase?.let { android.net.Uri.parse(it).host } ?: directUrl else target }
@@ -54,7 +56,7 @@ data class Profile(
   fun toJson() = JSONObject().apply {
     put("id", id); put("name", name); put("mode", mode); put("directUrl", directUrl); put("target", target); put("sshPort", sshPort)
     put("remoteHost", remoteHost); put("remotePort", remotePort); put("localPort", localPort)
-    put("privateKey", privateKey); put("keyPassphrase", keyPassphrase); put("password", password)
+    put("privateKey", privateKey); put("keyPassphrase", keyPassphrase); put("password", password); put("lastUsed", lastUsed)
   }
 
   companion object {
@@ -62,7 +64,7 @@ data class Profile(
       id = o.optString("id", UUID.randomUUID().toString()), name = o.optString("name"), mode = o.optString("mode", "ssh"), directUrl = o.optString("directUrl"), target = o.optString("target"),
       sshPort = o.optInt("sshPort", 22), remoteHost = o.optString("remoteHost", "127.0.0.1"), remotePort = o.optInt("remotePort", 8080),
       localPort = o.optInt("localPort", 18080), privateKey = o.optString("privateKey"), keyPassphrase = o.optString("keyPassphrase"),
-      password = o.optString("password"),
+      password = o.optString("password"), lastUsed = o.optLong("lastUsed", 0),
     )
   }
 }
@@ -102,8 +104,10 @@ class ProfileStore(context: Context) {
     save()
   }
 
+  /** connecting to it: it's the current one, and the most recently used */
   fun select(id: String) {
     currentId = id
+    profiles = profiles.map { if (it.id == id) it.copy(lastUsed = System.currentTimeMillis()) else it }
     save()
   }
 

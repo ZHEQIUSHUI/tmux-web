@@ -69,11 +69,12 @@ enum Updater {
   static var current: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
 
   /// Look for a new version (at most every 6 hours unless asked); `quiet` = say nothing if none.
-  static func check(base: String, window: NSWindow, asked: Bool = false) {
+  /// `base`: a connected server's address (nil: the mirrors only)
+  static func check(base: String?, window: NSWindow, asked: Bool = false) {
     let d = UserDefaults.standard
     if !asked, Date().timeIntervalSince1970 - d.double(forKey: "updateChecked") < every { return }
     Task {
-      var found = await json("\(base)/_tw/api/app/version.json")
+      var found = base == nil ? nil : await json("\(base!)/_tw/api/app/version.json")
       // the mirror that answered first is likely the quickest for the download too
       var quickest: Int?
       if found == nil, let (info, i) = await raceVersion() {
@@ -107,7 +108,7 @@ enum Updater {
     }
   }
 
-  private static func install(base: String, mac: [String: Any], window: NSWindow, quickest: Int?) async {
+  private static func install(base: String?, mac: [String: Any], window: NSWindow, quickest: Int?) async {
     let app = Bundle.main.bundlePath
     // started from Downloads without moving it: macOS runs a read-only copy we can't replace
     if app.contains("/AppTranslocation/") || !FileManager.default.isWritableFile(atPath: (app as NSString).deletingLastPathComponent) {
@@ -121,7 +122,8 @@ enum Updater {
     // our server (it fetches from the quickest mirror itself), then the mirrors, the quick one first
     var order = Array(mirrors.indices)
     if let q = quickest { order = [q] + order.filter { $0 != q } }
-    var tries: [() async -> URLRequest?] = [{ URLRequest(url: URL(string: "\(base)/_tw/api/app/download/\(name)")!, timeoutInterval: 300) }]
+    var tries: [() async -> URLRequest?] = []
+    if let base { tries.append { URLRequest(url: URL(string: "\(base)/_tw/api/app/download/\(name)")!, timeoutInterval: 300) } }
     tries += order.map { i in { await mirrors[i].file(name, sha) } }
     for next in tries {
       guard let req = await next() else { continue }

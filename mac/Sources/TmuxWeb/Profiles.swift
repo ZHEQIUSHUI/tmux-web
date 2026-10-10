@@ -20,6 +20,8 @@ struct Profile: Codable, Identifiable, Equatable, Hashable {
   var keyPath = ""
   /// more ssh options, e.g. "-J jump-host"
   var extraArgs = ""
+  /// when it was last connected (the home screen puts the recent ones first)
+  var lastUsed: Date?
 
   var isDirect: Bool { mode == "direct" }
   var title: String {
@@ -62,6 +64,7 @@ struct Profile: Codable, Identifiable, Equatable, Hashable {
     localPort = try c.decodeIfPresent(Int.self, forKey: .localPort) ?? 18080
     keyPath = try c.decodeIfPresent(String.self, forKey: .keyPath) ?? ""
     extraArgs = try c.decodeIfPresent(String.self, forKey: .extraArgs) ?? ""
+    lastUsed = try c.decodeIfPresent(Date.self, forKey: .lastUsed)
   }
 
   /// The private key to use, if any.
@@ -109,6 +112,24 @@ final class ProfileStore: ObservableObject {
   }
 
   var current: Profile? { profiles.first { $0.id == currentID } ?? profiles.first }
+
+  /// the most recently used first, then by name
+  var sorted: [Profile] {
+    profiles.sorted { a, b in
+      switch (a.lastUsed, b.lastUsed) {
+      case let (x?, y?): return x > y
+      case (.some, nil): return true
+      case (nil, .some): return false
+      default: return a.title.localizedStandardCompare(b.title) == .orderedAscending
+      }
+    }
+  }
+
+  func touch(_ id: UUID) {
+    guard let i = profiles.firstIndex(where: { $0.id == id }) else { return }
+    profiles[i].lastUsed = Date()
+    currentID = id
+  }
 
   func upsert(_ p: Profile) {
     if let i = profiles.firstIndex(where: { $0.id == p.id }) { profiles[i] = p } else { profiles.append(p) }

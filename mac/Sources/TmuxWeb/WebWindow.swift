@@ -3,114 +3,73 @@ import SwiftUI
 import UserNotifications
 import WebKit
 
-/// What the overlay over the page shows: the server list, or the connection while it isn't up.
-final class Status: ObservableObject {
-  @Published var state: Tunnel.State = .idle
-  @Published var title = ""
-  /// the server list in front of the page
-  @Published var showList = true
-  /// the server connected (or connecting) now
-  @Published var activeID: UUID?
-  var actions = ServerActions()
-  var retry: () -> Void = {}
-  var edit: () -> Void = {}
-  var list: () -> Void = {}
-}
+/// What covers the page: home, or the connecting screen of the server in front (nothing once its
+/// page is up).
+struct RootView: View {
+  @ObservedObject var model: AppModel
+  @ObservedObject var store = ProfileStore.shared
 
-struct StatusView: View {
-  @ObservedObject var status: Status
   var body: some View {
-    if status.showList {
-      ServerListView(status: status)
+    if model.showHome {
+      HomeView(model: model)
+    } else if let id = model.activeID, let p = store.profiles.first(where: { $0.id == id }), let info = model.conns[id], !info.live {
+      ConnectingView(profile: p, info: info, actions: model.actions)
     } else {
-      connection
-    }
-  }
-
-  @ViewBuilder private var connection: some View {
-    switch status.state {
-    case .ready:
-      EmptyView()
-    case .idle, .connecting:
-      card {
-        ProgressView().controlSize(.large)
-        Text("正在连接 \(status.title)…").font(.headline)
-        Text("需要验证码或密码时会弹出对话框").font(.callout).foregroundStyle(.secondary)
-        Button("取消") { status.list() }.keyboardShortcut(.cancelAction)
-      }
-    case .reconnecting(let msg):
-      VStack {
-        HStack(spacing: 8) {
-          ProgressView().controlSize(.small)
-          Text(msg).font(.callout)
-        }
-        .padding(.horizontal, 14).padding(.vertical, 8)
-        .background(.regularMaterial, in: Capsule())
-        .padding(.top, 10)
-        Spacer()
-      }
-    case .failed(let msg):
-      card {
-        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 34)).foregroundStyle(.orange)
-        Text("连不上 \(status.title)").font(.headline)
-        Text(msg).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).textSelection(.enabled).frame(maxWidth: 420)
-        HStack {
-          Button("服务器列表") { status.list() }
-          Button("编辑服务器…") { status.edit() }
-          Button("重试") { status.retry() }.keyboardShortcut(.defaultAction)
-        }
-      }
-    }
-  }
-
-  private func card<C: View>(@ViewBuilder _ c: () -> C) -> some View {
-    ZStack {
-      Rectangle().fill(.background)
-      VStack(spacing: 14, content: c).padding(30)
+      Color.clear
     }
   }
 }
 
-/// The main window: the page in a web view, the status on top of it.
-final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate, NSWindowDelegate, NSToolbarDelegate {
+/// The note over a page whose connection is coming back.
+struct BannerView: View {
+  @ObservedObject var model: AppModel
+  var body: some View {
+    if !model.showHome, case .reconnecting(let text)? = model.active?.state {
+      ReconnectingBanner(text: text)
+    }
+  }
+}
+
+/// What happened to a page.
+enum PageEvent {
+  case loaded
+  case failed(String)
+  case crashed
+}
+
+/// The main window: the pages of the servers in use (one shows), home and the connecting screens
+/// over them, a toolbar to switch.
+final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate, NSWindowDelegate, NSToolbarDelegate, NSMenuDelegate {
   let window: NSWindow
-  let web: WKWebView
-  let status = Status()
-  private var loadedBase: String?
-  /// the page's address while connected
-  var base: String? { loadedBase }
+  let model: AppModel
+  private let pages = NSView()
+  private var overlay: NSView!
   private var popups: [NSWindow] = []
-  private var overlay: NSView?
 
-  override init() {
-    let config = WKWebViewConfiguration()
-    config.websiteDataStore = .default() // logins and settings persist
-    let user = WKUserContentController()
-    config.userContentController = user
-    config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-    web = WKWebView(frame: .zero, configuration: config)
-    web.allowsBackForwardNavigationGestures = false
-    web.setValue(false, forKey: "drawsBackground")
+  // the app's side of things
+  var connection: (WKWebView) -> Connection? = { _ in nil }
+  var pageEvent: (Connection, PageEvent) -> Void = { _, _ in }
+  var switcherMenu: () -> NSMenu = { NSMenu() }
+  var moreMenu: () -> NSMenu = { NSMenu() }
 
+  init(model: AppModel) {
+    self.model = model
     window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
     window.title = "tmux-web"
     window.setFrameAutosaveName("main")
     window.isReleasedWhenClosed = false
-    window.minSize = NSSize(width: 480, height: 400)
-
+    window.minSize = NSSize(width: 560, height: 420)
     super.init()
-    // the page tells us about its alerts (waiting / done …) → system notifications
-    user.add(self, name: "twNotify")
-    web.navigationDelegate = self
-    web.uiDelegate = self
     window.delegate = self
 
-    let overlay = NSHostingView(rootView: StatusView(status: status))
+    let overlay = NSHostingView(rootView: RootView(model: model))
     // the overlay must not size the window: empty once connected, it shrank it to nothing
     overlay.sizingOptions = []
     self.overlay = overlay
+    let banner = NSHostingView(rootView: BannerView(model: model))
+    banner.sizingOptions = []
     let box = NSView()
-    for v in [web, overlay] as [NSView] {
+    for v in [pages, overlay] as [NSView] {
       v.translatesAutoresizingMaskIntoConstraints = false
       box.addSubview(v)
       NSLayoutConstraint.activate([
@@ -118,13 +77,22 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
         v.topAnchor.constraint(equalTo: box.topAnchor), v.bottomAnchor.constraint(equalTo: box.bottomAnchor),
       ])
     }
+    // the banner: a strip at the top, so the page under the rest of it still takes clicks
+    banner.translatesAutoresizingMaskIntoConstraints = false
+    box.addSubview(banner)
+    NSLayoutConstraint.activate([
+      banner.centerXAnchor.constraint(equalTo: box.centerXAnchor), banner.topAnchor.constraint(equalTo: box.topAnchor),
+      banner.widthAnchor.constraint(equalToConstant: 360), banner.heightAnchor.constraint(equalToConstant: 60),
+    ])
     window.contentView = box
-    // ⟳ in the title bar: the page again, fresh from the server (after tmux-web was updated)
-    let bar = NSToolbar(identifier: "main")
+
+    let bar = NSToolbar(identifier: "main2")
     bar.delegate = self
     bar.displayMode = .iconOnly
+    bar.allowsUserCustomization = false
     window.toolbar = bar
-    window.toolbarStyle = .unifiedCompact
+    window.toolbarStyle = .unified
+    window.titleVisibility = .hidden
     if window.frame.origin == .zero { window.center() }
     fixSize()
     // a double click on the title bar does what System Settings says, every time (the toolbar in
@@ -134,7 +102,167 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
       self.titleBarDoubleClick()
       return nil
     }
+    refresh()
   }
+
+  /// A page for a server: logins and settings persist, the page's alerts reach us.
+  func makeWebView() -> WKWebView {
+    let config = WKWebViewConfiguration()
+    config.websiteDataStore = .default()
+    config.userContentController.add(self, name: "twNotify")
+    config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+    let web = WKWebView(frame: .zero, configuration: config)
+    web.allowsBackForwardNavigationGestures = false
+    web.setValue(false, forKey: "drawsBackground")
+    web.navigationDelegate = self
+    web.uiDelegate = self
+    web.isHidden = true
+    web.translatesAutoresizingMaskIntoConstraints = false
+    pages.addSubview(web)
+    NSLayoutConstraint.activate([
+      web.leadingAnchor.constraint(equalTo: pages.leadingAnchor), web.trailingAnchor.constraint(equalTo: pages.trailingAnchor),
+      web.topAnchor.constraint(equalTo: pages.topAnchor), web.bottomAnchor.constraint(equalTo: pages.bottomAnchor),
+    ])
+    return web
+  }
+
+  func dropWebView(_ web: WKWebView) {
+    web.configuration.userContentController.removeScriptMessageHandler(forName: "twNotify")
+    web.removeFromSuperview()
+  }
+
+  /// the page in front: the active server's
+  var front: WKWebView? { model.showHome ? nil : pages.subviews.first { !$0.isHidden } as? WKWebView }
+
+  /// After any change of the model: which page shows, the overlay, the toolbar.
+  func refresh(page: WKWebView? = nil) {
+    if let page { for v in pages.subviews { v.isHidden = v !== page } }
+    let live = !model.showHome && (model.active?.live ?? false)
+    overlay.isHidden = live
+    if model.showHome { for v in pages.subviews { v.isHidden = true } }
+    let p = model.activeID.flatMap { id in ProfileStore.shared.profiles.first { $0.id == id } }
+    window.title = model.showHome || p == nil ? "tmux-web" : "tmux-web · \(p!.title)"
+    updateSwitcher(p)
+    reloadItem?.isEnabled = live
+  }
+
+  // MARK: toolbar: 首页, the server switcher … ⟳ ⋯
+
+  private static let homeID = NSToolbarItem.Identifier("home")
+  private static let switcherID = NSToolbarItem.Identifier("switcher")
+  private static let reloadID = NSToolbarItem.Identifier("reload")
+  private static let moreID = NSToolbarItem.Identifier("more")
+  private weak var reloadItem: NSToolbarItem?
+  private let switcher = NSButton(title: "", target: nil, action: nil)
+
+  func toolbarDefaultItemIdentifiers(_ t: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.homeID, Self.switcherID, .flexibleSpace, Self.reloadID, Self.moreID] }
+  func toolbarAllowedItemIdentifiers(_ t: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(t) }
+
+  func toolbar(_ t: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar: Bool) -> NSToolbarItem? {
+    switch id {
+    case Self.homeID:
+      let item = NSToolbarItem(itemIdentifier: id)
+      item.label = "首页"
+      item.toolTip = "全部服务器（⌘L）"
+      item.image = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "首页")
+      item.target = self
+      item.action = #selector(homeAction)
+      item.isBordered = true
+      return item
+    case Self.switcherID:
+      let item = NSToolbarItem(itemIdentifier: id)
+      item.label = "服务器"
+      switcher.bezelStyle = .texturedRounded
+      switcher.imagePosition = .imageLeading
+      switcher.target = self
+      switcher.action = #selector(switcherAction)
+      switcher.toolTip = "切换服务器"
+      item.view = switcher
+      return item
+    case Self.reloadID:
+      let item = NSToolbarItem(itemIdentifier: id)
+      item.label = "刷新"
+      item.toolTip = "重新载入网页（⌘R）"
+      item.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "刷新")
+      item.target = self
+      item.action = #selector(reloadAction)
+      item.isBordered = true
+      item.autovalidates = false
+      reloadItem = item
+      return item
+    case Self.moreID:
+      let item = NSMenuToolbarItem(itemIdentifier: id)
+      item.label = "更多"
+      item.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "更多")
+      item.showsIndicator = false
+      let menu = NSMenu()
+      menu.delegate = self
+      item.menu = menu
+      return item
+    default:
+      return nil
+    }
+  }
+
+  var homeTapped: () -> Void = {}
+  @objc private func homeAction() { homeTapped() }
+  @objc private func reloadAction() { reload() }
+  @objc private func switcherAction() {
+    let menu = switcherMenu()
+    menu.popUp(positioning: nil, at: NSPoint(x: 0, y: switcher.bounds.height + 4), in: switcher)
+  }
+
+  /// the ⋯ menu, made fresh as it opens
+  func menuNeedsUpdate(_ menu: NSMenu) {
+    menu.removeAllItems()
+    let fresh = moreMenu()
+    let items = fresh.items
+    fresh.removeAllItems()
+    items.forEach(menu.addItem)
+  }
+
+  private func updateSwitcher(_ p: Profile?) {
+    let title = model.showHome || p == nil ? "选择服务器" : p!.title
+    // the state's dot as colored text: a toolbar button grays its image out
+    let t = NSMutableAttributedString(string: "● ", attributes: [.foregroundColor: Self.color(model.showHome ? nil : model.active), .font: NSFont.systemFont(ofSize: 10)])
+    t.append(NSAttributedString(string: title + "  ▾", attributes: [.foregroundColor: NSColor.labelColor, .font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .medium)]))
+    switcher.attributedTitle = t
+    switcher.image = nil
+    switcher.sizeToFit()
+  }
+
+  /// the colored dot of a connection's state (gray: none)
+  static func color(_ info: ConnInfo?) -> NSColor {
+    guard let info else { return .tertiaryLabelColor }
+    switch info.state {
+    case .ready: return info.pageLoaded ? .systemGreen : .systemOrange
+    case .reconnecting, .connecting, .idle: return .systemOrange
+    case .failed: return .systemRed
+    }
+  }
+
+  static func dot(_ info: ConnInfo?) -> NSImage {
+    let color = Self.color(info)
+    let image = NSImage(size: NSSize(width: 9, height: 9), flipped: false) { r in
+      color.setFill()
+      NSBezierPath(ovalIn: r.insetBy(dx: 0.5, dy: 0.5)).fill()
+      return true
+    }
+    image.isTemplate = false
+    return image
+  }
+
+  /// ⟳ / ⌘R: the page in front again, fresh from the server
+  func reload() {
+    guard let web = front, let c = connection(web), let base = c.loadedBase else { return }
+    if web.url == nil || web.url?.absoluteString == "about:blank" || (!web.isLoading && web.title?.isEmpty != false) {
+      web.load(URLRequest(url: URL(string: base + "/")!, cachePolicy: .reloadIgnoringLocalCacheData))
+    } else {
+      web.reloadFromOrigin()
+    }
+  }
+
+  // MARK: the window itself
 
   /// on the title bar, not on one of its buttons
   private func inTitleBar(_ e: NSEvent) -> Bool {
@@ -171,111 +299,6 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     }
   }
 
-  private static let reloadItem = NSToolbarItem.Identifier("reload")
-  private static let listItem = NSToolbarItem.Identifier("servers")
-  func toolbarDefaultItemIdentifiers(_ t: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.listItem, .flexibleSpace, Self.reloadItem] }
-  func toolbarAllowedItemIdentifiers(_ t: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.listItem, .flexibleSpace, Self.reloadItem] }
-  func toolbar(_ t: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar: Bool) -> NSToolbarItem? {
-    if id == Self.listItem {
-      let item = NSToolbarItem(itemIdentifier: id)
-      item.label = "服务器"
-      item.toolTip = "服务器列表（⌘L）"
-      item.image = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "服务器列表")
-      item.target = self
-      item.action = #selector(listAction)
-      item.isBordered = true
-      return item
-    }
-    guard id == Self.reloadItem else { return nil }
-    let item = NSToolbarItem(itemIdentifier: id)
-    item.label = "刷新"
-    item.toolTip = "重新载入网页（⌘R）"
-    item.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "刷新")
-    item.target = self
-    item.action = #selector(reloadAction)
-    item.isBordered = true
-    return item
-  }
-  @objc private func reloadAction() { reload() }
-  /// the list, or back to the page of the server in use
-  @objc private func listAction() {
-    if status.showList, status.activeID != nil { showList(false) } else { status.list() }
-  }
-
-  func showList(_ on: Bool) {
-    status.showList = on
-    updateOverlay()
-    window.title = on || status.title.isEmpty ? "tmux-web" : "tmux-web · \(status.title)"
-  }
-
-  /// the page shows only while connected and the list is away
-  private func updateOverlay() {
-    if case .ready = status.state, !status.showList { overlay?.isHidden = true } else { overlay?.isHidden = false }
-  }
-
-  /// another server (or none): the old one's page goes, so it never shows under the new one's name
-  func reset() {
-    loadedBase = nil
-    web.load(URLRequest(url: URL(string: "about:blank")!))
-  }
-
-  func show(_ s: Tunnel.State, title: String) {
-    status.title = title
-    status.state = s
-    // connected: nothing to show over the page (and nothing to catch clicks)
-    updateOverlay()
-    window.title = title.isEmpty || status.showList ? "tmux-web" : "tmux-web · \(title)"
-    if case .ready(let base) = s {
-      // the password / code dialog (another process) took the focus: come back to the front
-      if loadedBase != base { bringBack() }
-      // after a reconnect the page reconnects its own streams: only load when it isn't there yet
-      if loadedBase != base || web.url == nil {
-        loadedBase = base
-        web.load(URLRequest(url: URL(string: base + "/")!))
-        Updater.check(base: base, window: window)
-      }
-    }
-    if case .failed = s { loadedBase = nil }
-  }
-
-  /// ⟳ / ⌘R: the page again, fresh from the server (and if it never came up, load it anew)
-  func reload() {
-    guard let base = loadedBase else { return }
-    if web.url == nil || web.isLoading == false && web.title?.isEmpty != false {
-      web.load(URLRequest(url: URL(string: base + "/")!, cachePolicy: .reloadIgnoringLocalCacheData))
-    } else {
-      web.reloadFromOrigin()
-    }
-  }
-
-  // MARK: the page's own troubles: a blank window is never left behind
-
-  func webView(_ w: WKWebView, didFinish n: WKNavigation!) {
-    if w === web { Log.write("page loaded \(w.url?.absoluteString ?? "")") }
-  }
-
-  func webView(_ w: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) { pageFailed(w, e) }
-  func webView(_ w: WKWebView, didFail n: WKNavigation!, withError e: Error) { pageFailed(w, e) }
-
-  private func pageFailed(_ w: WKWebView, _ e: Error) {
-    let ns = e as NSError
-    Log.write("page failed \(ns.domain) \(ns.code) \(ns.localizedDescription)")
-    // replaced by another load (a reload, a link) or turned into a download: not a failure
-    if w !== web || ns.code == NSURLErrorCancelled || (ns.domain == "WebKitErrorDomain" && ns.code == 102) { return }
-    status.state = .failed("网页加载失败：\(ns.localizedDescription)")
-    updateOverlay()
-    loadedBase = nil
-  }
-
-  /// WebKit's page process died (memory, a crash): it would stay blank — load the page again
-  func webViewWebContentProcessDidTerminate(_ w: WKWebView) {
-    Log.write("web content process terminated")
-    guard w === web, let base = loadedBase else { return }
-    web.load(URLRequest(url: URL(string: base + "/")!))
-  }
-
-  /// The window in front, whatever happened to it: closed (ordered out), minimized, under other
-  /// windows, or off every screen (a display that is gone).
   /// A window too small to use (a size saved by an older version that shrank it): normal size, centered.
   private func fixSize() {
     if window.frame.width >= window.minSize.width && window.frame.height >= window.minSize.height { return }
@@ -284,6 +307,8 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     window.center()
   }
 
+  /// The window in front, whatever happened to it: closed (ordered out), minimized, under other
+  /// windows, or off every screen (a display that is gone).
   func bringBack() {
     if window.isMiniaturized { window.deminiaturize(nil) }
     fixSize()
@@ -297,31 +322,54 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     window.makeKeyAndOrderFront(nil)
     window.orderFrontRegardless()
     NSApp.activate(ignoringOtherApps: true)
-    Log.write("bringBack \(describe())")
   }
 
   func describe() -> String {
     "visible=\(window.isVisible) mini=\(window.isMiniaturized) key=\(window.isKeyWindow) frame=\(NSStringFromRect(window.frame)) screens=\(NSScreen.screens.map { NSStringFromRect($0.frame) })"
   }
 
-  func open(session id: Int) {
-    if status.activeID != nil { showList(false) }
-    window.makeKeyAndOrderFront(nil)
-    NSApp.activate(ignoringOtherApps: true)
-    web.evaluateJavaScript("location.hash = '#/s/\(id)'")
+  // MARK: the pages' troubles: a blank window is never left behind
+
+  func webView(_ w: WKWebView, didFinish n: WKNavigation!) {
+    guard let c = connection(w), let base = c.loadedBase, w.url?.absoluteString.hasPrefix(base) == true else { return }
+    Log.write("page loaded \(w.url?.absoluteString ?? "")")
+    pageEvent(c, .loaded)
+  }
+
+  func webView(_ w: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) { pageFailed(w, e) }
+  func webView(_ w: WKWebView, didFail n: WKNavigation!, withError e: Error) { pageFailed(w, e) }
+
+  private func pageFailed(_ w: WKWebView, _ e: Error) {
+    let ns = e as NSError
+    Log.write("page failed \(ns.domain) \(ns.code) \(ns.localizedDescription)")
+    // replaced by another load (a reload, a link) or turned into a download: not a failure
+    if ns.code == NSURLErrorCancelled || (ns.domain == "WebKitErrorDomain" && ns.code == 102) { return }
+    guard let c = connection(w), c.loadedBase != nil else { return }
+    pageEvent(c, .failed("网页加载失败：\(ns.localizedDescription)"))
+  }
+
+  /// WebKit's page process died (memory, a crash): it would stay blank — load the page again
+  func webViewWebContentProcessDidTerminate(_ w: WKWebView) {
+    Log.write("web content process terminated")
+    if let c = connection(w) { pageEvent(c, .crashed) }
   }
 
   // MARK: page → notifications
 
-  func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
-    guard m.name == "twNotify", let n = m.body as? [String: Any] else { return }
-    // only when you aren't looking at the window (the page shows its own alert then)
-    if NSApp.isActive && window.isKeyWindow && !window.isMiniaturized { return }
+  func userContentController(_ uc: WKUserContentController, didReceive m: WKScriptMessage) {
+    guard m.name == "twNotify", let n = m.body as? [String: Any], let web = m.webView, let c = connection(web) else { return }
+    // only when you aren't looking at that page (it shows its own alert then)
+    if NSApp.isActive && window.isKeyWindow && !window.isMiniaturized && front === web { return }
     let content = UNMutableNotificationContent()
     content.title = (n["title"] as? String) ?? "tmux-web"
     content.body = (n["text"] as? String) ?? ""
-    if let s = n["session"] as? String, !s.isEmpty { content.subtitle = s }
-    if let id = n["sessionId"] as? Int { content.userInfo = ["sessionId": id] }
+    let session = (n["session"] as? String) ?? ""
+    // with several servers, which one it's from
+    let several = model.conns.count > 1
+    content.subtitle = [several ? c.profile.title : "", session].filter { !$0.isEmpty }.joined(separator: " · ")
+    var info: [String: Any] = ["server": c.profile.id.uuidString]
+    if let id = n["sessionId"] as? Int { info["sessionId"] = id }
+    content.userInfo = info
     content.sound = (n["kind"] as? String) == "waiting" ? .default : nil
     let center = UNUserNotificationCenter.current()
     center.requestAuthorization(options: [.alert, .sound, .badge]) { ok, _ in
@@ -335,7 +383,8 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
   func webView(_ w: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
     if a.shouldPerformDownload { return decisionHandler(.download) }
     // other sites open in the browser
-    if let url = a.request.url, let host = url.host, host != "127.0.0.1", host != loadedBase.flatMap({ URL(string: $0)?.host }), ["http", "https"].contains(url.scheme ?? "") {
+    let own = connection(w)?.loadedBase.flatMap { URL(string: $0)?.host }
+    if let url = a.request.url, let host = url.host, host != "127.0.0.1", host != own, ["http", "https"].contains(url.scheme ?? "") {
       NSWorkspace.shared.open(url)
       return decisionHandler(.cancel)
     }
@@ -391,7 +440,7 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
   func webView(_ w: WKWebView, runJavaScriptAlertPanelWithMessage m: String, initiatedByFrame f: WKFrameInfo, completionHandler: @escaping () -> Void) {
     let a = NSAlert()
     a.messageText = m
-    a.beginSheetModal(for: window) { _ in completionHandler() }
+    a.beginSheetModal(for: w.window ?? window) { _ in completionHandler() }
   }
 
   func webView(_ w: WKWebView, runJavaScriptConfirmPanelWithMessage m: String, initiatedByFrame f: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
@@ -399,7 +448,7 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     a.messageText = m
     a.addButton(withTitle: "确定")
     a.addButton(withTitle: "取消")
-    a.beginSheetModal(for: window) { r in completionHandler(r == .alertFirstButtonReturn) }
+    a.beginSheetModal(for: w.window ?? window) { r in completionHandler(r == .alertFirstButtonReturn) }
   }
 
   func webView(_ w: WKWebView, runJavaScriptTextInputPanelWithPrompt p: String, defaultText: String?, initiatedByFrame f: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
@@ -411,7 +460,7 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     a.addButton(withTitle: "确定")
     a.addButton(withTitle: "取消")
     a.window.initialFirstResponder = field
-    a.beginSheetModal(for: window) { r in completionHandler(r == .alertFirstButtonReturn ? field.stringValue : nil) }
+    a.beginSheetModal(for: w.window ?? window) { r in completionHandler(r == .alertFirstButtonReturn ? field.stringValue : nil) }
   }
 
   /// <input type=file> (attachments, uploads)
@@ -420,10 +469,10 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     panel.allowsMultipleSelection = p.allowsMultipleSelection
     panel.canChooseDirectories = false
     panel.canChooseFiles = true
-    panel.beginSheetModal(for: window) { r in completionHandler(r == .OK ? panel.urls : nil) }
+    panel.beginSheetModal(for: w.window ?? window) { r in completionHandler(r == .OK ? panel.urls : nil) }
   }
 
-  // closing the window keeps the app (and its forward, and notifications) running; the Dock icon brings it back
+  // closing the window keeps the app (and its connections, and notifications) running; the Dock icon brings it back
   func windowShouldClose(_ sender: NSWindow) -> Bool {
     sender.orderOut(nil)
     return false

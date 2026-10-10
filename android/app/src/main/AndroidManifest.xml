@@ -27,8 +27,6 @@
       </intent-filter>
     </activity>
 
-    <activity android:name=".SettingsActivity" android:exported="false" android:label="服务器设置" />
-
     <service
       android:name=".TunnelService"
       android:exported="false"

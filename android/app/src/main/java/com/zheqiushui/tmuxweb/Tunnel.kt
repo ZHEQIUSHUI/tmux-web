@@ -24,7 +24,8 @@ import java.security.Security
 /** Where the forward is; observed by the window and the notification. */
 sealed class TunnelState {
   object Idle : TunnelState()
-  object Connecting : TunnelState()
+  /** `step`: 0 = reaching the server (SSH: and logging in), 1 = the port forward (SSH only) */
+  data class Connecting(val step: Int = 0) : TunnelState()
   /** the page's address: the forward (http://127.0.0.1:<port>) or the direct one */
   data class Ready(val base: String) : TunnelState()
   /** gone after it worked: trying again on its own */
@@ -87,7 +88,7 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
   /** No SSH: the address is reachable as it is. One look whether tmux-web answers there. */
   private fun direct(p: Profile, gen: Int) {
     val base = p.directBase ?: return report(gen, TunnelState.Failed("地址不对：${p.directUrl}"))
-    report(gen, TunnelState.Connecting)
+    report(gen, TunnelState.Connecting(0))
     try {
       val c = java.net.URL("$base/_tw/api/me").openConnection() as java.net.HttpURLConnection
       c.connectTimeout = 10_000
@@ -104,9 +105,9 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
     var everReady = false
     var retry = 0
     while (wanted && gen == generation) {
-      report(gen, if (everReady) TunnelState.Reconnecting("正在重新连接…") else TunnelState.Connecting)
+      report(gen, if (everReady) TunnelState.Reconnecting("正在重新连接…") else TunnelState.Connecting(0))
       try {
-        connect(p, gen) { everReady = true; retry = 0 }
+        connect(p, gen, !everReady) { everReady = true; retry = 0 }
       } catch (e: Exception) {
         if (!wanted || gen != generation) return
         android.util.Log.w("tmux-web", "tunnel", e)
@@ -128,7 +129,7 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
   }
 
   /** Connects, logs in, forwards until the connection breaks (then throws). */
-  private fun connect(p: Profile, gen: Int, onReady: () -> Unit) {
+  private fun connect(p: Profile, gen: Int, first: Boolean, onReady: () -> Unit) {
     if (portInUse(p.localPort)) throw IllegalStateException("本地端口 ${p.localPort} 已被占用，换一个本地端口试试。")
     val ssh = SSHClient(DefaultConfig())
     client = ssh
@@ -164,6 +165,8 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
       override fun shouldRetry(resource: Resource<*>?) = false
     })
     ssh.auth(p.user, methods)
+    // logged in: the forward next (a reconnect stays "reconnecting")
+    if (first) report(gen, TunnelState.Connecting(1))
 
     val ss = ServerSocket()
     ss.reuseAddress = true

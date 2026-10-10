@@ -2,85 +2,125 @@ package com.zheqiushui.tmuxweb
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.Activity
-import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.res.Configuration
-import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.text.InputType
-import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup.LayoutParams.MATCH_PARENT
-import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.webkit.CookieManager
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Button
-import android.widget.EditText
-import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+
+/** Where the window is. The page stays loaded behind the others while its server is connected. */
+sealed interface Screen {
+  object Home : Screen
+  object Page : Screen
+  /** a server's settings: `id` an existing one, `copyOf` a copy, else a new one (in `mode`) */
+  data class Editor(val id: String? = null, val copyOf: String? = null, val mode: String? = null) : Screen
+}
+
+/** the server's page in the web view */
+sealed interface PageLoad {
+  object None : PageLoad
+  object Loading : PageLoad
+  object Loaded : PageLoad
+  data class Failed(val message: String) : PageLoad
+}
+
+/** What the screens show; changed only on the main thread. */
+class AppModel {
+  var screen by mutableStateOf<Screen>(Screen.Home)
+  /** the screen an editor goes back to */
+  var beforeEditor: Screen = Screen.Home
+  var profiles by mutableStateOf(emptyList<Profile>())
+  var activeId by mutableStateOf<String?>(null)
+  var tunnel by mutableStateOf<TunnelState>(TunnelState.Idle)
+  /** the furthest step reached on the way up: where it stopped, if it fails */
+  var step by mutableIntStateOf(0)
+  var page by mutableStateOf<PageLoad>(PageLoad.None)
+  var startedAt by mutableLongStateOf(0L)
+  var question by mutableStateOf<Hub.Question?>(null)
+  val probes = mutableStateMapOf<String, Probe.Result>()
+  var probing by mutableIntStateOf(0)
+  var resumed by mutableStateOf(false)
+  val active: Profile? get() = profiles.firstOrNull { it.id == activeId }
+}
+
+/** What the screens can ask for. */
+interface Actions {
+  fun connect(p: Profile)
+  fun edit(e: Screen.Editor)
+  fun closeEditor()
+  fun save(p: Profile, connect: Boolean, original: Profile?)
+  fun remove(p: Profile)
+  fun forgetHostKey(p: Profile)
+  /** back to the servers; the connection stays */
+  fun home()
+  fun disconnect()
+  fun retry()
+  fun reload()
+  fun checkUpdates()
+  fun probeAll()
+  fun answer(q: Hub.Question, text: String?)
+  fun openUrl(url: String)
+}
 
 /**
- * The window: the server list first; then the server's page (through the forward, or directly)
- * under a thin bar with the state, 刷新 and 设置, and a card over it while it isn't connected.
+ * The window: the servers first; then a server's page (through the forward, or directly) under
+ * a compact bar, with a connecting screen over it until the page is there.
  */
-class MainActivity : Activity(), ServerList.Actions {
-  private lateinit var web: WebView
-  private lateinit var dot: View
-  private lateinit var title: TextView
-  private lateinit var card: LinearLayout
-  private lateinit var cardSpinner: ProgressBar
-  private lateinit var cardText: TextView
-  private lateinit var cardButtons: LinearLayout
-  private lateinit var page: LinearLayout
-  /** everything, inside the system bars; its background shows behind them */
-  private lateinit var frame: FrameLayout
-  private lateinit var list: ServerList
+class MainActivity : ComponentActivity(), Actions {
+  val model = AppModel()
   private lateinit var store: ProfileStore
-  private var listShown = true
+  /** one web view for the window's whole life: switching screens never reloads the page */
+  lateinit var web: WebView
   /** a new server's page: its history starts there (back never goes to the one before) */
   private var freshPage = false
   private var loadedBase: String? = null
-  private val pageBg get() = if (dark) Color.parseColor("#16181d") else Color.WHITE
   private var fileCallback: ValueCallback<Array<Uri>>? = null
   private var pendingSession: Int? = null
-  private val dark get() = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-  private val onState: (TunnelState) -> Unit = { show(it); if (listShown) renderList() }
+  private val onState: (TunnelState) -> Unit = { show(it) }
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     store = ProfileStore(this)
-    buildViews()
+    web = buildWeb()
     if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
       requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
     }
     pendingSession = intent.getIntExtra("sessionId", -1).takeIf { it >= 0 }
-    // debug builds only, for automated tests: a profile handed in as base64 JSON
-    // debug builds only, for automated tests: a login cookie for the page
+    // debug builds only, for automated tests: a login cookie for the page, a profile as base64 JSON
     if (BuildConfig.DEBUG) intent.getStringExtra("testCookie")?.let { CookieManager.getInstance().setCookie(intent.getStringExtra("testCookieUrl"), it) }
     if (BuildConfig.DEBUG) intent.getStringExtra("testProfile")?.let {
       store.upsert(Profile.fromJson(org.json.JSONObject(String(android.util.Base64.decode(it, android.util.Base64.DEFAULT)))))
     }
-    // the list first, unless a server is still connected (the app came back) or an alert was tapped
-    val live = Hub.activeId != null && Hub.state !is TunnelState.Idle
-    showList(!live)
+    reloadProfiles()
+    // always the servers first; one still connected (the app came back) shows as such on its card
+    model.activeId = Hub.activeId.takeIf { Hub.state !is TunnelState.Idle }
     Hub.listen(onState)
-    Hub.onQuestion = { askDialog(it) }
-    if (store.profiles.isEmpty()) edit(null)
+    Hub.onQuestion = { model.question = it }
+    // an alert tapped while connected: straight to its session
+    if (pendingSession != null && model.activeId != null) model.screen = Screen.Page
+    setContent { TmuxTheme { AppScreen(model, this, web) } }
   }
 
   override fun onDestroy() {
@@ -92,13 +132,15 @@ class MainActivity : Activity(), ServerList.Actions {
   override fun onResume() {
     super.onResume()
     Hub.foreground = true
-    Hub.question?.let { askDialog(it) }
+    model.resumed = true
+    model.question = Hub.question
     // the page is up but the forward went away (the system stopped the service): bring it back
-    if (!listShown && Hub.activeId != null && Hub.state is TunnelState.Idle) TunnelService.ensure(this)
+    if (model.screen == Screen.Page && Hub.activeId != null && Hub.state is TunnelState.Idle) TunnelService.ensure(this)
   }
 
   override fun onPause() {
     Hub.foreground = false
+    model.resumed = false
     super.onPause()
   }
 
@@ -109,212 +151,179 @@ class MainActivity : Activity(), ServerList.Actions {
   }
 
   private fun openSession(id: Int) {
-    if (Hub.activeId != null) showList(false)
+    if (model.activeId != null) model.screen = Screen.Page
     if (loadedBase != null) web.evaluateJavascript("location.hash = '#/s/$id'", null) else pendingSession = id
   }
 
-  @Deprecated("Deprecated in Java")
-  override fun onBackPressed() {
-    when {
-      listShown -> moveTaskToBack(true) // keep the forward and the alerts
-      web.canGoBack() -> web.goBack()
-      else -> showList(true)
-    }
-  }
-
-  override fun onConfigurationChanged(c: Configuration) {
-    super.onConfigurationChanged(c)
-    if (listShown) renderList() // columns follow the width
-  }
-
-  // ---- servers ----
-
-  private fun showList(on: Boolean) {
-    listShown = on
-    list.view.visibility = if (on) View.VISIBLE else View.GONE
-    page.visibility = if (on) View.GONE else View.VISIBLE
-    frame.setBackgroundColor(if (on) list.bg else pageBg)
-    window.statusBarColor = if (on) list.bg else pageBg
-    window.navigationBarColor = window.statusBarColor
-    if (on) renderList()
-  }
-
-  private fun renderList() {
+  private fun reloadProfiles() {
     store = ProfileStore(this)
-    list.render(store.profiles, Hub.activeId, Hub.state)
+    model.profiles = store.profiles
+  }
+
+  // ---- connection ----
+
+  private fun show(s: TunnelState) {
+    // a state of a connection given up on (disconnected meanwhile)
+    if (model.activeId == null && s !is TunnelState.Idle) return
+    model.tunnel = s
+    when (s) {
+      is TunnelState.Connecting -> model.step = s.step
+      is TunnelState.Ready -> {
+        model.step = if (model.active?.isDirect == true) 1 else 2
+        if (loadedBase != s.base || web.url == null || web.url == "about:blank") {
+          loadedBase = s.base
+          freshPage = true
+          model.page = PageLoad.Loading
+          web.loadUrl("${s.base}/" + (pendingSession?.let { "#/s/$it" } ?: ""))
+          pendingSession = null
+          Updater.checkSoon(this, s.base)
+        }
+      }
+      is TunnelState.Failed -> {
+        loadedBase = null
+        model.page = PageLoad.None
+      }
+      else -> {}
+    }
   }
 
   /** Its page: the one already up is just shown again; another one replaces it. */
   override fun connect(p: Profile) = connect(p, false)
 
   private fun connect(p: Profile, again: Boolean) {
-    if (!p.isComplete) return edit(p)
+    if (!p.isComplete) return edit(Screen.Editor(id = p.id))
     val s = Hub.state
-    if (!again && Hub.activeId == p.id && (s is TunnelState.Ready || s is TunnelState.Connecting || s is TunnelState.Reconnecting)) return showList(false)
-    if (Hub.activeId != p.id || again) resetPage()
+    if (!again && model.activeId == p.id && (s is TunnelState.Ready || s is TunnelState.Connecting || s is TunnelState.Reconnecting)) {
+      model.screen = Screen.Page
+      return
+    }
+    resetPage()
     store.select(p.id)
+    reloadProfiles()
     Hub.activeId = p.id
     Hub.profileTitle = p.title
-    showList(false)
+    model.activeId = p.id
+    model.step = 0
+    model.startedAt = System.currentTimeMillis()
+    model.tunnel = TunnelState.Connecting(0)
+    model.screen = Screen.Page
     TunnelService.start(this)
   }
 
-  override fun edit(p: Profile?) {
-    startActivityForResult(Intent(this, SettingsActivity::class.java).apply { p?.let { putExtra("id", it.id) } }, EDIT)
+  override fun retry() {
+    val p = model.active ?: return home()
+    // the forward is up, only the page failed: just the page again
+    val s = Hub.state
+    if (s is TunnelState.Ready && model.page is PageLoad.Failed) {
+      model.page = PageLoad.Loading
+      model.startedAt = System.currentTimeMillis()
+      freshPage = true
+      web.loadUrl("${s.base}/")
+    } else connect(p, true)
   }
-
-  override fun duplicate(p: Profile) {
-    startActivityForResult(Intent(this, SettingsActivity::class.java).putExtra("copy", p.id), EDIT)
-  }
-
-  override fun remove(p: Profile) {
-    AlertDialog.Builder(this)
-      .setTitle("删除「${p.title}」？")
-      .setMessage("它的设置和保存的密码、私钥都会删掉。")
-      .setPositiveButton("删除") { _, _ ->
-        if (Hub.activeId == p.id) disconnect()
-        store.remove(p.id)
-        renderList()
-      }
-      .setNegativeButton("取消", null)
-      .show()
-  }
-
-  /** through our server while connected, else the mirrors */
-  override fun checkUpdates() = Updater.checkSoon(this, loadedBase.takeIf { Hub.state is TunnelState.Ready }, asked = true)
 
   override fun disconnect() {
     TunnelService.stop(this)
     Hub.activeId = null
+    model.activeId = null
+    model.tunnel = TunnelState.Idle
     resetPage()
-    showList(true)
+    model.screen = Screen.Home
+  }
+
+  override fun home() {
+    model.screen = Screen.Home
   }
 
   /** the old server's page goes, so it never shows under another one's name */
   private fun resetPage() {
     loadedBase = null
+    model.page = PageLoad.None
     web.loadUrl("about:blank")
   }
 
-  /** back from the settings: connect, or reconnect the one in use when it changed */
-  private fun edited(data: Intent) {
-    store = ProfileStore(this)
-    val p = store.profiles.firstOrNull { it.id == data.getStringExtra("id") } ?: return renderList()
-    val changed = data.getBooleanExtra("changed", false)
+  override fun reload() {
+    web.clearCache(false)
+    web.reload()
+  }
+
+  // ---- servers ----
+
+  override fun edit(e: Screen.Editor) {
+    if (model.screen !is Screen.Editor) model.beforeEditor = model.screen
+    model.screen = e
+  }
+
+  override fun closeEditor() {
+    model.screen = model.beforeEditor
+  }
+
+  override fun save(p: Profile, connect: Boolean, original: Profile?) {
+    store.upsert(p)
+    reloadProfiles()
+    val changed = original != p
+    val inUse = model.activeId == p.id
     when {
-      data.getBooleanExtra("connect", false) -> connect(p, changed && Hub.activeId == p.id)
-      changed && Hub.activeId == p.id -> {
-        resetPage()
-        Hub.profileTitle = p.title
-        TunnelService.start(this)
-        renderList()
+      connect -> connect(p, changed && inUse)
+      // the one in use, changed: connected again with the new settings, back where you were
+      changed && inUse -> {
+        val back = model.beforeEditor
+        connect(p, true)
+        model.screen = back
       }
-      else -> renderList()
+      else -> closeEditor()
     }
   }
 
-  // ---- state ----
+  override fun remove(p: Profile) {
+    if (model.activeId == p.id) disconnect()
+    store.remove(p.id)
+    reloadProfiles()
+    model.probes.remove(p.id)
+    model.screen = Screen.Home
+  }
 
-  private fun show(s: TunnelState) {
-    val color = when (s) {
-      is TunnelState.Ready -> Color.parseColor("#2f9e5b")
-      is TunnelState.Failed -> Color.parseColor("#e0503a")
-      else -> Color.parseColor("#d99a17")
-    }
-    (dot.background as GradientDrawable).setColor(color)
-    title.text = Hub.profileTitle.ifBlank { "tmux-web" }
-    when (s) {
-      is TunnelState.Ready -> {
-        card.visibility = View.GONE
-        if (loadedBase != s.base || web.url == null) {
-          loadedBase = s.base
-          freshPage = true
-          web.loadUrl("${s.base}/" + (pendingSession?.let { "#/s/$it" } ?: ""))
-          pendingSession = null
-          Updater.checkSoon(this, s.base)
+  override fun forgetHostKey(p: Profile) {
+    KnownHosts(this).forget(p.host, p.sshPort)
+    Toast.makeText(this, "已忘记 ${p.host} 的主机密钥，下次连接时重新记录", Toast.LENGTH_SHORT).show()
+  }
+
+  /** every server's reachability, for the cards (the results come in one by one) */
+  override fun probeAll() {
+    val list = model.profiles
+    if (list.isEmpty() || model.probing > 0) return
+    model.probing = list.size
+    for (p in list) {
+      if (model.probes[p.id] == null) model.probes[p.id] = Probe.Result.Checking
+      Probe.check(p) { r ->
+        runOnUiThread {
+          model.probes[p.id] = r
+          model.probing = (model.probing - 1).coerceAtLeast(0)
         }
       }
-      is TunnelState.Reconnecting -> {
-        // the page stays; it reconnects its own streams once the forward is back
-        card.visibility = if (loadedBase != null) View.GONE else View.VISIBLE
-        title.text = s.message
-        cardState(true, s.message, listOf("取消" to { disconnect() }))
-      }
-      is TunnelState.Connecting, TunnelState.Idle -> {
-        card.visibility = View.VISIBLE
-        cardState(true, "正在连接 ${Hub.profileTitle}…\n需要验证码或密码时会弹框", listOf("取消" to { disconnect() }))
-      }
-      is TunnelState.Failed -> {
-        card.visibility = View.VISIBLE
-        loadedBase = null
-        cardState(false, "连不上 ${Hub.profileTitle}\n\n${s.message}", listOf(
-          "服务器列表" to { disconnect() },
-          "设置" to { activeProfile()?.let { edit(it) } },
-          "重试" to { TunnelService.start(this) },
-        ))
-      }
     }
   }
 
-  private fun cardState(spinning: Boolean, text: String, buttons: List<Pair<String, () -> Unit>>) {
-    cardSpinner.visibility = if (spinning) View.VISIBLE else View.GONE
-    cardText.text = text
-    cardButtons.removeAllViews()
-    buttons.forEach { (label, action) -> cardButtons.addView(Button(this).apply { this.text = label; setOnClickListener { action() } }) }
+  /** through our server while connected, else the mirrors */
+  override fun checkUpdates() = Updater.checkSoon(this, loadedBase.takeIf { Hub.state is TunnelState.Ready }, asked = true)
+
+  override fun answer(q: Hub.Question, text: String?) {
+    Hub.answer(q, text)
+    model.question = null
   }
 
-  private fun activeProfile() = store.profiles.firstOrNull { it.id == Hub.activeId }
-
-  private fun askDialog(q: Hub.Question) {
-    if (isFinishing) return
-    val input = EditText(this).apply {
-      inputType = if (q.secret) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD else InputType.TYPE_CLASS_TEXT
-      setSingleLine()
-    }
-    val box = FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(if (q.secret) withEye(this@MainActivity, input) else input) }
-    AlertDialog.Builder(this)
-      .setTitle("SSH 验证")
-      .setMessage(q.prompt)
-      .setView(box)
-      .setCancelable(false)
-      .setPositiveButton("确定") { _, _ -> Hub.answer(q, input.text.toString()) }
-      .setNegativeButton("取消") { _, _ -> Hub.answer(q, null) }
-      .show()
-    input.requestFocus()
+  override fun openUrl(url: String) {
+    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
   }
 
-  // ---- views ----
+  // ---- the web view ----
 
   @SuppressLint("SetJavaScriptEnabled")
-  private fun buildViews() {
-    val bg = if (dark) Color.parseColor("#16181d") else Color.WHITE
-    val fg = if (dark) Color.parseColor("#d8dce3") else Color.parseColor("#1f2328")
-    window.statusBarColor = bg
-    window.navigationBarColor = bg
-    if (!dark) window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-
-    page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(bg) }
-    val root = page
-
-    // thin bar: ‹ ● name … ⟳ ⚙ (‹: the server list)
-    val bar = LinearLayout(this).apply {
-      orientation = LinearLayout.HORIZONTAL
-      gravity = Gravity.CENTER_VERTICAL
-      setPadding(0, 0, dp(4), 0)
-      setBackgroundColor(bg)
-    }
-    bar.addView(barButton("‹", fg) { showList(true) }.apply { textSize = 24f; contentDescription = "服务器列表" })
-    dot = View(this).apply { background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.GRAY) } }
-    bar.addView(dot, LinearLayout.LayoutParams(dp(8), dp(8)))
-    title = TextView(this).apply { textSize = 13f; setTextColor(fg); setPadding(dp(8), 0, 0, 0); isSingleLine = true }
-    bar.addView(title, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-    bar.addView(barButton("⟳", fg) { web.clearCache(false); web.reload() })
-    bar.addView(barButton("⚙", fg) { activeProfile()?.let { edit(it) } })
-    root.addView(bar, LinearLayout.LayoutParams(MATCH_PARENT, dp(38)))
-
-    val stack = FrameLayout(this)
-    web = WebView(this)
-    web.settings.apply {
+  private fun buildWeb(): WebView {
+    // debug builds: chrome://inspect works (automated tests read the page through it)
+    if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
+    val w = WebView(this)
+    w.settings.apply {
       javaScriptEnabled = true
       domStorageEnabled = true
       databaseEnabled = true
@@ -326,7 +335,7 @@ class MainActivity : Activity(), ServerList.Actions {
       loadWithOverviewMode = true
     }
     CookieManager.getInstance().setAcceptCookie(true)
-    web.webViewClient = object : WebViewClient() {
+    w.webViewClient = object : WebViewClient() {
       override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
         val u = req.url
         // other sites open in the browser
@@ -336,20 +345,31 @@ class MainActivity : Activity(), ServerList.Actions {
         }
         return false
       }
+      override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+        if (url != null && loadedBase != null && url.startsWith(loadedBase!!) && model.page !is PageLoad.Loaded) model.page = PageLoad.Loading
+      }
+      override fun onReceivedError(view: WebView, req: WebResourceRequest, err: WebResourceError) {
+        // the forward is up but tmux-web doesn't answer behind it (or the address is wrong)
+        if (req.isForMainFrame && loadedBase != null && req.url.toString().startsWith(loadedBase!!)) model.page = PageLoad.Failed("${err.description}（${err.errorCode}）")
+      }
       override fun onPageFinished(view: WebView, url: String?) {
-        if (freshPage && url != null && url.startsWith(loadedBase ?: "-")) {
-          freshPage = false
-          view.clearHistory()
+        if (url != null && loadedBase != null && url.startsWith(loadedBase!!)) {
+          if (model.page !is PageLoad.Failed) model.page = PageLoad.Loaded
+          if (freshPage) {
+            freshPage = false
+            view.clearHistory()
+          }
         }
         CookieManager.getInstance().flush()
       }
     }
-    web.webChromeClient = object : WebChromeClient() {
+    w.webChromeClient = object : WebChromeClient() {
       override fun onShowFileChooser(v: WebView, cb: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
         fileCallback?.onReceiveValue(null)
         fileCallback = cb
         return try {
-          startActivityForResult(params.createIntent().putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.mode == FileChooserParams.MODE_OPEN_MULTIPLE), 7)
+          @Suppress("DEPRECATION")
+          startActivityForResult(params.createIntent().putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.mode == FileChooserParams.MODE_OPEN_MULTIPLE), FILES)
           true
         } catch (e: Exception) {
           fileCallback = null
@@ -357,7 +377,7 @@ class MainActivity : Activity(), ServerList.Actions {
         }
       }
     }
-    web.setDownloadListener { url, ua, disposition, mime, _ ->
+    w.setDownloadListener { url, ua, disposition, mime, _ ->
       val name = URLUtil.guessFileName(url, disposition, mime)
       val req = DownloadManager.Request(Uri.parse(url))
         .addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url))
@@ -368,61 +388,20 @@ class MainActivity : Activity(), ServerList.Actions {
       getSystemService(DownloadManager::class.java).enqueue(req)
       Toast.makeText(this, "开始下载 $name", Toast.LENGTH_SHORT).show()
     }
-    stack.addView(web, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-
-    // the card over the page: connecting… / can't connect (retry, settings)
-    card = LinearLayout(this).apply {
-      orientation = LinearLayout.VERTICAL
-      gravity = Gravity.CENTER
-      setBackgroundColor(bg)
-      setPadding(dp(32), dp(32), dp(32), dp(32))
-    }
-    cardSpinner = ProgressBar(this)
-    card.addView(cardSpinner)
-    cardText = TextView(this).apply { textSize = 15f; setTextColor(fg); gravity = Gravity.CENTER; setPadding(0, dp(16), 0, dp(16)) }
-    card.addView(cardText)
-    cardButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-    card.addView(cardButtons)
-    stack.addView(card, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-
-    root.addView(stack, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-    list = ServerList(this, dark, this)
-    frame = FrameLayout(this).apply {
-      setBackgroundColor(bg)
-      addView(page, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-      addView(list.view, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-    }
-    setContentView(frame)
-    keepClearOfBars(this, frame)
-    // dark icons on the light bars (Android 15 draws the bars see-through, over our background)
-    if (!dark && Build.VERSION.SDK_INT >= 30) {
-      val light = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-      window.insetsController?.setSystemBarsAppearance(light, light)
-    }
-  }
-
-  private fun barButton(label: String, color: Int, onClick: () -> Unit) = TextView(this).apply {
-    text = label
-    textSize = 18f
-    setTextColor(color)
-    gravity = Gravity.CENTER
-    layoutParams = LinearLayout.LayoutParams(dp(40), MATCH_PARENT)
-    setOnClickListener { onClick() }
+    return w
   }
 
   @Deprecated("Deprecated in Java")
   override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    @Suppress("DEPRECATION")
     super.onActivityResult(requestCode, resultCode, data)
-    if (requestCode == EDIT && resultCode == RESULT_OK && data != null) edited(data)
-    if (requestCode == 7) {
+    if (requestCode == FILES) {
       fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data) ?: data?.clipData?.let { c -> Array(c.itemCount) { c.getItemAt(it).uri } })
       fileCallback = null
     }
   }
 
-  private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-
   companion object {
-    private const val EDIT = 9
+    private const val FILES = 7
   }
 }
