@@ -3,9 +3,68 @@ import CryptoKit
 import Foundation
 
 /// Updates: version.json of the latest release, through our own server (the forward is there, and
-/// GitHub may be slow) or else from GitHub; then the new app replaces this one and starts.
+/// GitHub may be slow) or else from the mirrors; then the new app replaces this one and starts.
 enum Updater {
   private static let github = "https://github.com/ZHEQIUSHUI/tmux-web/releases/latest/download/"
+  // Besides our server: GitHub, GitHub's download proxies in mainland China, and the release in
+  // GHCR (CI puts it there too) through Nanjing University's mirror. Whoever serves a file, it's
+  // checked against version.json's SHA-256.
+  private static let proxies = ["https://ghfast.top/", "https://gh-proxy.com/", "https://gh.llkk.cc/", "https://ghproxy.net/"]
+  private static let image = "zheqiushui/tmux-web-app"
+
+  /// A place the release can be had: its version.json, and how to ask it for a file.
+  private struct Mirror {
+    let version: () async -> [String: Any]?
+    let file: (_ name: String, _ sha: String) async -> URLRequest?
+  }
+
+  /// in the order they're tried for a file when none is known to be quicker
+  private static let mirrors: [Mirror] = {
+    func ghcr(_ host: String) -> Mirror {
+      Mirror(version: { await ghcrVersion(host) }, file: { _, sha in await ghcrBlob(host, sha) })
+    }
+    func web(_ prefix: String) -> Mirror {
+      Mirror(version: { await json(prefix + github + "version.json") }, file: { name, _ in URLRequest(url: URL(string: prefix + github + name)!, timeoutInterval: 30) })
+    }
+    return [ghcr("ghcr.nju.edu.cn")] + proxies.map(web) + [web(""), ghcr("ghcr.io")]
+  }()
+
+  /// version.json from every mirror at once: the first answer, and which mirror gave it
+  private static func raceVersion() async -> ([String: Any], Int)? {
+    await withTaskGroup(of: (Int, [String: Any]?).self) { g in
+      for (i, m) in mirrors.enumerated() { g.addTask { (i, await m.version()) } }
+      for await (i, info) in g where info?["version"] is String {
+        g.cancelAll()
+        return (info!, i)
+      }
+      return nil
+    }
+  }
+
+  private static func ghcrToken() async -> String? {
+    guard let d = await fetch("https://ghcr.io/token?service=ghcr.io&scope=repository:\(image):pull", timeout: 10) else { return nil }
+    return ((try? JSONSerialization.jsonObject(with: d)) as? [String: Any])?["token"] as? String
+  }
+
+  /// CI keeps version.json in the manifest's annotations
+  private static func ghcrVersion(_ host: String) async -> [String: Any]? {
+    guard let t = await ghcrToken() else { return nil }
+    var req = URLRequest(url: URL(string: "https://\(host)/v2/\(image)/manifests/latest")!, timeoutInterval: 15)
+    req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+    req.setValue("application/vnd.oci.image.manifest.v1+json", forHTTPHeaderField: "Accept")
+    guard let d = await fetch(req), let m = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+      let v = (m["annotations"] as? [String: Any])?["tw.version"] as? String
+    else { return nil }
+    return (try? JSONSerialization.jsonObject(with: Data(v.utf8))) as? [String: Any]
+  }
+
+  /// each file is a blob named by its SHA-256
+  private static func ghcrBlob(_ host: String, _ sha: String) async -> URLRequest? {
+    guard !sha.isEmpty, let t = await ghcrToken() else { return nil }
+    var req = URLRequest(url: URL(string: "https://\(host)/v2/\(image)/blobs/sha256:\(sha)")!, timeoutInterval: 30)
+    req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+    return req
+  }
   private static let every: TimeInterval = 6 * 3600
   static var current: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
 
@@ -15,9 +74,14 @@ enum Updater {
     if !asked, Date().timeIntervalSince1970 - d.double(forKey: "updateChecked") < every { return }
     Task {
       var found = await json("\(base)/_tw/api/app/version.json")
-      if found == nil { found = await json(github + "version.json") }
+      // the mirror that answered first is likely the quickest for the download too
+      var quickest: Int?
+      if found == nil, let (info, i) = await raceVersion() {
+        found = info
+        quickest = i
+      }
       guard let info = found else {
-        if asked { await alert(window, "检查更新失败", "服务器和 GitHub 都没取到版本信息，稍后再试。") }
+        if asked { await alert(window, "检查更新失败", "服务器、GitHub 和镜像都没取到版本信息，稍后再试。") }
         return
       }
       d.set(Date().timeIntervalSince1970, forKey: "updateChecked")
@@ -27,6 +91,7 @@ enum Updater {
         return
       }
       if !asked, d.string(forKey: "updateSkipped") == version { return }
+      let quick = quickest
       await MainActor.run {
         let a = NSAlert()
         a.messageText = "发现新版本 \(version)"
@@ -35,14 +100,14 @@ enum Updater {
         a.addButton(withTitle: "以后")
         a.addButton(withTitle: "跳过这个版本")
         a.beginSheetModal(for: window) { r in
-          if r == .alertFirstButtonReturn { Task { await install(base: base, mac: mac, window: window) } }
+          if r == .alertFirstButtonReturn { Task { await install(base: base, mac: mac, window: window, quickest: quick) } }
           if r == .alertThirdButtonReturn { UserDefaults.standard.set(version, forKey: "updateSkipped") }
         }
       }
     }
   }
 
-  private static func install(base: String, mac: [String: Any], window: NSWindow) async {
+  private static func install(base: String, mac: [String: Any], window: NSWindow, quickest: Int?) async {
     let app = Bundle.main.bundlePath
     // started from Downloads without moving it: macOS runs a read-only copy we can't replace
     if app.contains("/AppTranslocation/") || !FileManager.default.isWritableFile(atPath: (app as NSString).deletingLastPathComponent) {
@@ -53,8 +118,14 @@ enum Updater {
     let sha = (mac["sha256"] as? String ?? "").lowercased()
     await MainActor.run { window.title = "tmux-web · 正在下载更新…" }
     var data: Data?
-    for url in ["\(base)/_tw/api/app/download/\(name)", github + name] {
-      if let d = await fetch(url), sha.isEmpty || SHA256.hash(data: d).map({ String(format: "%02x", $0) }).joined() == sha {
+    // our server (it fetches from the quickest mirror itself), then the mirrors, the quick one first
+    var order = Array(mirrors.indices)
+    if let q = quickest { order = [q] + order.filter { $0 != q } }
+    var tries: [() async -> URLRequest?] = [{ URLRequest(url: URL(string: "\(base)/_tw/api/app/download/\(name)")!, timeoutInterval: 300) }]
+    tries += order.map { i in { await mirrors[i].file(name, sha) } }
+    for next in tries {
+      guard let req = await next() else { continue }
+      if let d = await fetch(req), sha.isEmpty || SHA256.hash(data: d).map({ String(format: "%02x", $0) }).joined() == sha {
         data = d
         break
       }
@@ -106,8 +177,10 @@ enum Updater {
 
   private static func fetch(_ url: String, timeout: TimeInterval = 300) async -> Data? {
     guard let u = URL(string: url) else { return nil }
-    var req = URLRequest(url: u)
-    req.timeoutInterval = timeout
+    return await fetch(URLRequest(url: u, timeoutInterval: timeout))
+  }
+
+  private static func fetch(_ req: URLRequest) async -> Data? {
     guard let (d, r) = try? await URLSession.shared.data(for: req), (r as? HTTPURLResponse)?.statusCode == 200 else { return nil }
     return d
   }

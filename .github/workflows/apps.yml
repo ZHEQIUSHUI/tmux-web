@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: write
+  packages: write # the same files in GHCR (mirrored in mainland China)
   actions: write # to delete the build artifacts once released
 
 concurrency:
@@ -125,6 +126,31 @@ jobs:
           done
           gh release create latest out/tmux-web-mac.zip out/tmux-web-android.apk out/version.json \
             --target "$GITHUB_SHA" --title "tmux-web App（最新版）" --notes-file out/body.md --latest
+      # the same release as an OCI artifact in GHCR: Nanjing University mirrors GHCR
+      # (ghcr.nju.edu.cn), which mainland China reaches far better than GitHub's downloads.
+      # version.json goes into the manifest; each file is a blob named by its SHA-256.
+      - uses: oras-project/setup-oras@v1
+      - name: GHCR
+        continue-on-error: true # the release above is what counts; this is the mirror
+        run: |
+          echo "$GH_TOKEN" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+          python3 - > out/annotations.json <<'PY'
+          import json
+          v = json.load(open("out/version.json"))
+          print(json.dumps({"$manifest": {
+            "tw.version": json.dumps(v, ensure_ascii=False, separators=(",", ":")),
+            "org.opencontainers.image.source": "https://github.com/${{ github.repository }}",
+            "org.opencontainers.image.description": "tmux-web App " + v["version"],
+          }}, ensure_ascii=False))
+          PY
+          cd out
+          oras push ghcr.io/zheqiushui/tmux-web-app:latest --artifact-type application/vnd.tmuxweb.app \
+            --annotation-file annotations.json \
+            tmux-web-mac.zip:application/zip tmux-web-android.apk:application/vnd.android.package-archive version.json:application/json
+      # only the newest stays (the others would just pile up)
+      - uses: actions/delete-package-versions@v5
+        continue-on-error: true
+        with: { package-name: tmux-web-app, package-type: container, min-versions-to-keep: 1 }
       # the builds only pass through artifacts on the way to the release: don't keep them, this run's
       # or older runs' (storage is limited)
       - name: 删除临时构件
