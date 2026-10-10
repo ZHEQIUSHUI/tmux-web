@@ -59,17 +59,25 @@ object Updater {
     return null
   }
 
-  fun checkSoon(a: Activity, base: String, force: Boolean = false) {
+  /**
+   * At most every 6 hours on its own; `asked` (检查更新): now, saying what came of it, and a skipped
+   * version is offered again. `base`: our server's address while connected (null: the mirrors only).
+   */
+  fun checkSoon(a: Activity, base: String?, asked: Boolean = false) {
     val prefs = a.getSharedPreferences("updates", Context.MODE_PRIVATE)
-    if (!force && System.currentTimeMillis() - prefs.getLong("checked", 0) < EVERY_MS) return
+    if (!asked && System.currentTimeMillis() - prefs.getLong("checked", 0) < EVERY_MS) return
+    val say = { text: String -> if (asked) a.runOnUiThread { Toast.makeText(a, text, Toast.LENGTH_SHORT).show() } }
+    say("正在检查更新…")
     Thread {
       // the mirror that answered first is likely the quickest for the download too
       var quickest: Int? = null
-      val info = fetchJson("$base/_tw/api/app/version.json") ?: raceVersion()?.let { (j, i) -> quickest = i; j } ?: return@Thread
+      val info = base?.let { fetchJson("$it/_tw/api/app/version.json") } ?: raceVersion()?.let { (j, i) -> quickest = i; j }
+      if (info == null) return@Thread say("检查更新失败：服务器、GitHub 和镜像都没取到版本信息")
       prefs.edit().putLong("checked", System.currentTimeMillis()).apply()
-      val android = info.optJSONObject("android") ?: return@Thread
+      val android = info.optJSONObject("android") ?: return@Thread say("检查更新失败")
       val code = android.optInt("versionCode")
-      if (code <= BuildConfig.VERSION_CODE || prefs.getInt("skipped", 0) == code) return@Thread
+      if (code <= BuildConfig.VERSION_CODE) return@Thread say("已是最新版本 ${BuildConfig.VERSION_NAME}")
+      if (!asked && prefs.getInt("skipped", 0) == code) return@Thread
       a.runOnUiThread {
         if (a.isFinishing) return@runOnUiThread
         AlertDialog.Builder(a)
@@ -83,7 +91,7 @@ object Updater {
     }.start()
   }
 
-  private fun download(a: Activity, base: String, android: JSONObject, quickest: Int?) {
+  private fun download(a: Activity, base: String?, android: JSONObject, quickest: Int?) {
     val name = android.optString("file", "tmux-web-android.apk")
     val sha = android.optString("sha256")
     Toast.makeText(a, "正在下载更新…", Toast.LENGTH_SHORT).show()
@@ -92,7 +100,7 @@ object Updater {
       val apk = File(dir, "tmux-web.apk")
       // our server (it fetches from the quickest mirror itself), then the mirrors, the quick one first
       val order = MIRRORS.indices.sortedBy { if (it == quickest) -1 else it }
-      val tries = listOf { "$base/_tw/api/app/download/$name" to emptyMap<String, String>() } + order.map { i -> { MIRRORS[i].file(name, sha) } }
+      val tries = listOfNotNull(base?.let { b -> { "$b/_tw/api/app/download/$name" to emptyMap<String, String>() } }) + order.map { i -> { MIRRORS[i].file(name, sha) } }
       val ok = tries.any { next ->
         val (url, headers) = next() ?: return@any false
         fetchFile(url, apk, headers) && (sha.isEmpty() || sha256(apk).equals(sha, ignoreCase = true))

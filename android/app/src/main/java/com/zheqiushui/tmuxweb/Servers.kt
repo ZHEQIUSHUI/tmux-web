@@ -34,6 +34,7 @@ class ServerList(private val a: Activity, private val dark: Boolean, private val
     fun duplicate(p: Profile)
     fun remove(p: Profile)
     fun disconnect()
+    fun checkUpdates()
   }
 
   val bg = if (dark) Color.parseColor("#16181d") else Color.parseColor("#f3f4f6")
@@ -56,12 +57,24 @@ class ServerList(private val a: Activity, private val dark: Boolean, private val
     head.addView(link("＋ 新建") { actions.edit(null) })
     col.addView(head)
 
+    // the app's version, and 检查更新, under the cards
+    val foot = {
+      col.addView(LinearLayout(a).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(4), dp(12), 0, 0)
+        addView(TextView(a).apply { text = "tmux-web ${BuildConfig.VERSION_NAME}"; textSize = 13f; setTextColor(dim) })
+        addView(link("检查更新") { actions.checkUpdates() })
+      })
+    }
+
     if (profiles.isEmpty()) {
       col.addView(TextView(a).apply {
         text = "还没有服务器\n\n添加一台运行 tmux-web 的服务器：能直接访问（EasyTier、局域网）就填网址，否则通过 SSH 转发。"
         textSize = 14f; setTextColor(dim); gravity = Gravity.CENTER; setPadding(dp(24), dp(60), dp(24), dp(20))
       })
       col.addView(addCard())
+      foot()
       return
     }
 
@@ -78,6 +91,7 @@ class ServerList(private val a: Activity, private val dark: Boolean, private val
       }
       col.addView(row, MATCH_PARENT, WRAP_CONTENT)
     }
+    foot()
   }
 
   private fun card(p: Profile, state: TunnelState?): View {

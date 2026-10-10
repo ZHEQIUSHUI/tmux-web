@@ -180,6 +180,9 @@ class MainActivity : Activity(), ServerList.Actions {
       .show()
   }
 
+  /** through our server while connected, else the mirrors */
+  override fun checkUpdates() = Updater.checkSoon(this, loadedBase.takeIf { Hub.state is TunnelState.Ready }, asked = true)
+
   override fun disconnect() {
     TunnelService.stop(this)
     Hub.activeId = null
