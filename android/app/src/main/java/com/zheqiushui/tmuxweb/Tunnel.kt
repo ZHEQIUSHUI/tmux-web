@@ -1,6 +1,8 @@
 package com.zheqiushui.tmuxweb
 
 import android.content.Context
+import net.schmizz.keepalive.KeepAliveProvider
+import net.schmizz.keepalive.KeepAliveRunner
 import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.common.SecurityUtils
@@ -20,6 +22,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.security.PublicKey
 import java.security.Security
+import java.util.concurrent.TimeUnit
 
 /** Where the forward is; observed by the window and the notification. */
 sealed class TunnelState {
@@ -50,6 +53,10 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
   @Volatile private var client: SSHClient? = null
   @Volatile private var server: ServerSocket? = null
   private var thread: Thread? = null
+  /** the wait before the next reconnect; nudge() cuts it short */
+  private val pause = Object()
+  @Volatile private var nudged = false
+  @Volatile private var checking = false
   @Volatile var state: TunnelState = TunnelState.Idle
     private set
 
@@ -120,7 +127,12 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
         retry++
         val wait = minOf(30, 1 shl minOf(retry, 5))
         report(gen, TunnelState.Reconnecting("连接断开，$wait 秒后重连…"))
-        try { Thread.sleep(wait * 1000L) } catch (_: InterruptedException) { return }
+        try {
+          synchronized(pause) {
+            if (!nudged) pause.wait(wait * 1000L)
+            nudged = false
+          }
+        } catch (_: InterruptedException) { return }
       } finally {
         try { server?.close() } catch (_: Exception) {}
         try { client?.disconnect() } catch (_: Exception) {}
@@ -131,12 +143,17 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
   /** Connects, logs in, forwards until the connection breaks (then throws). */
   private fun connect(p: Profile, gen: Int, first: Boolean, onReady: () -> Unit) {
     if (portInUse(p.localPort)) throw IllegalStateException("本地端口 ${p.localPort} 已被占用，换一个本地端口试试。")
-    val ssh = SSHClient(DefaultConfig())
+    // keep-alives that expect an answer: a connection that died without a word (network switched,
+    // the phone slept, a NAT forgot it) is noticed within ~40 s and replaced. The default kind only
+    // sends and never notices; and it has to be on before connect() or it never starts.
+    val ssh = SSHClient(DefaultConfig().apply { keepAliveProvider = KeepAliveProvider.KEEP_ALIVE })
     client = ssh
+    ssh.connection.keepAlive.keepAliveInterval = 10
+    (ssh.connection.keepAlive as? KeepAliveRunner)?.maxAliveCount = 3
     ssh.addHostKeyVerifier(Verifier(KnownHosts(context)))
     ssh.connectTimeout = 15000
+    ssh.timeout = 30000
     ssh.connect(p.host, p.sshPort)
-    ssh.connection.keepAlive.keepAliveInterval = 15
 
     // a key and/or a password, and whatever the server asks (verification codes): ssh lets a
     // server want several in turn (key first, then a code)
@@ -176,16 +193,56 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
     onReady()
     // blocks while the forward runs; a broken connection ends it
     val fwd = ssh.newLocalPortForwarder(Parameters("127.0.0.1", p.localPort, p.remoteHost, p.remotePort), ss)
+    // the connection gone: end listen() with the forwarder's close(), which also interrupts it.
+    // Closing just the socket isn't enough: sshj's listen() then spins on accept() forever, the
+    // forward looks up but nothing gets through (and the phone runs hot).
     val watcher = Thread {
-      while (wanted && ssh.isConnected) try { Thread.sleep(2000) } catch (_: InterruptedException) { break }
-      try { ss.close() } catch (_: Exception) {}
+      while (wanted && ssh.isConnected) try { Thread.sleep(1000) } catch (_: InterruptedException) { break }
+      try { fwd.close() } catch (_: Exception) {}
     }.apply { isDaemon = true; start() }
     try {
       fwd.listen()
     } finally {
       watcher.interrupt()
+      try { ss.close() } catch (_: Exception) {}
+      // close() interrupted this thread: clear it, or the wait before reconnecting would end the loop
+      if (wanted) Thread.interrupted()
     }
     if (wanted) throw IllegalStateException("连接断开")
+  }
+
+  /** Waiting to reconnect: do it now (the network is back, the app was opened). */
+  fun nudge() {
+    synchronized(pause) {
+      nudged = true
+      pause.notifyAll()
+    }
+  }
+
+  /**
+   * Something suggests the connection may be gone (the network changed, the app came back, the page
+   * didn't load): ask the server right away instead of waiting for the keep-alives, and replace the
+   * connection if it doesn't answer within a few seconds.
+   */
+  fun check() {
+    if (state is TunnelState.Reconnecting) return nudge()
+    val ssh = client
+    if (state !is TunnelState.Ready || ssh == null || checking) return
+    checking = true
+    Thread({
+      try {
+        ssh.connection.sendGlobalRequest("keepalive@openssh.com", true, ByteArray(0)).retrieve(5, TimeUnit.SECONDS)
+      } catch (e: Exception) {
+        // any reply counts (most servers say "unknown request"); only silence or a broken socket don't
+        val answered = e.message?.let { it.startsWith("Global request") && it.endsWith("failed") } == true
+        if (!answered) {
+          android.util.Log.w("tmux-web", "check: no answer, reconnecting", e)
+          if (client === ssh) try { ssh.disconnect() } catch (_: Exception) {}
+        }
+      } finally {
+        checking = false
+      }
+    }, "check").apply { isDaemon = true; start() }
   }
 
   private fun portInUse(port: Int) = try {

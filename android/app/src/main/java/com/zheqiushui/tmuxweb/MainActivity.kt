@@ -95,6 +95,8 @@ class MainActivity : ComponentActivity(), Actions {
   /** a new server's page: its history starts there (back never goes to the one before) */
   private var freshPage = false
   private var loadedBase: String? = null
+  /** a load went out while the connection may have been dead: do it again once it's back */
+  private var reloadWhenBack = false
   private var fileCallback: ValueCallback<Array<Uri>>? = null
   private var pendingSession: Int? = null
   private val onState: (TunnelState) -> Unit = { show(it) }
@@ -136,6 +138,8 @@ class MainActivity : ComponentActivity(), Actions {
     model.question = Hub.question
     // the page is up but the forward went away (the system stopped the service): bring it back
     if (model.screen == Screen.Page && Hub.activeId != null && Hub.state is TunnelState.Idle) TunnelService.ensure(this)
+    // back after a while: the connection may have died meanwhile (sleep, another network)
+    else if (Hub.activeId != null && Hub.state !is TunnelState.Idle && Hub.state !is TunnelState.Failed && model.active?.isDirect == false) TunnelService.check(this)
   }
 
   override fun onPause() {
@@ -170,13 +174,20 @@ class MainActivity : ComponentActivity(), Actions {
       is TunnelState.Connecting -> model.step = s.step
       is TunnelState.Ready -> {
         model.step = if (model.active?.isDirect == true) 1 else 2
-        if (loadedBase != s.base || web.url == null || web.url == "about:blank") {
+        // a new address, or the page failed while the connection was down: load it (again)
+        if (loadedBase != s.base || web.url == null || web.url == "about:blank" || model.page is PageLoad.Failed) {
           loadedBase = s.base
           freshPage = true
           model.page = PageLoad.Loading
           web.loadUrl("${s.base}/" + (pendingSession?.let { "#/s/$it" } ?: ""))
           pendingSession = null
           Updater.checkSoon(this, s.base)
+        } else if (reloadWhenBack) {
+          reloadWhenBack = false
+          web.reload()
+        } else {
+          // the same page, after a reconnect: its terminal and live updates reconnect now, not after their wait
+          web.evaluateJavascript("dispatchEvent(new Event('online'))", null)
         }
       }
       is TunnelState.Failed -> {
@@ -238,11 +249,16 @@ class MainActivity : ComponentActivity(), Actions {
   /** the old server's page goes, so it never shows under another one's name */
   private fun resetPage() {
     loadedBase = null
+    reloadWhenBack = false
     model.page = PageLoad.None
     web.loadUrl("about:blank")
   }
 
   override fun reload() {
+    if (model.active?.isDirect == false) {
+      reloadWhenBack = true
+      TunnelService.check(this)
+    }
     web.clearCache(false)
     web.reload()
   }
@@ -350,11 +366,21 @@ class MainActivity : ComponentActivity(), Actions {
       }
       override fun onReceivedError(view: WebView, req: WebResourceRequest, err: WebResourceError) {
         // the forward is up but tmux-web doesn't answer behind it (or the address is wrong)
-        if (req.isForMainFrame && loadedBase != null && req.url.toString().startsWith(loadedBase!!)) model.page = PageLoad.Failed("${err.description}（${err.errorCode}）")
+        if (req.isForMainFrame && loadedBase != null && req.url.toString().startsWith(loadedBase!!)) {
+          model.page = PageLoad.Failed("${err.description}（${err.errorCode}）")
+          // maybe it's the connection: check it (replaced if dead; the page loads again once it's back)
+          if (model.active?.isDirect == false) {
+            reloadWhenBack = true
+            TunnelService.check(this@MainActivity)
+          }
+        }
       }
       override fun onPageFinished(view: WebView, url: String?) {
         if (url != null && loadedBase != null && url.startsWith(loadedBase!!)) {
-          if (model.page !is PageLoad.Failed) model.page = PageLoad.Loaded
+          if (model.page !is PageLoad.Failed) {
+            model.page = PageLoad.Loaded
+            reloadWhenBack = false
+          }
           if (freshPage) {
             freshPage = false
             view.clearHistory()

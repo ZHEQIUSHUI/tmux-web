@@ -8,6 +8,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -70,6 +73,19 @@ object Hub {
 class TunnelService : Service() {
   private lateinit var tunnel: Tunnel
   @Volatile private var alertsThread: Thread? = null
+  /** the network in use: another one (Wi-Fi ↔ mobile data) means the old connection is likely dead */
+  @Volatile private var network: Network? = null
+  private val networks = object : ConnectivityManager.NetworkCallback() {
+    override fun onAvailable(n: Network) {
+      val before = network
+      network = n
+      if (before != null && before != n) tunnel.check()
+    }
+    override fun onCapabilitiesChanged(n: Network, caps: NetworkCapabilities) {
+      // back online after none: reconnect now instead of after the wait
+      if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) tunnel.nudge()
+    }
+  }
 
   override fun onCreate() {
     super.onCreate()
@@ -79,6 +95,7 @@ class TunnelService : Service() {
       updateNotification(s)
       if (s is TunnelState.Ready) followAlerts(s.base)
     }
+    getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networks)
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -92,6 +109,8 @@ class TunnelService : Service() {
       }
       // "make sure it's up": nothing to do while it is connecting or connected
       ACTION_ENSURE -> if (tunnel.state is TunnelState.Idle || tunnel.state is TunnelState.Failed) connect()
+      // "it may be gone": ask the server now
+      ACTION_CHECK -> if (tunnel.state is TunnelState.Idle) connect() else tunnel.check()
       // new settings, or 重试: start over
       else -> connect()
     }
@@ -107,6 +126,7 @@ class TunnelService : Service() {
   }
 
   override fun onDestroy() {
+    try { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networks) } catch (_: Exception) {}
     tunnel.stop()
     alertsThread?.interrupt()
     super.onDestroy()
@@ -166,10 +186,13 @@ class TunnelService : Service() {
   companion object {
     const val ACTION_STOP = "stop"
     const val ACTION_ENSURE = "ensure"
+    const val ACTION_CHECK = "check"
     /** (re)connect with the current settings */
     fun start(context: Context) = send(context, null)
     /** connect unless already connecting / connected */
     fun ensure(context: Context) = send(context, ACTION_ENSURE)
+    /** make sure the connection still works (replaced if the server doesn't answer) */
+    fun check(context: Context) = send(context, ACTION_CHECK)
     private fun send(context: Context, action: String?) {
       val i = Intent(context, TunnelService::class.java).setAction(action)
       if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(i) else context.startService(i)
