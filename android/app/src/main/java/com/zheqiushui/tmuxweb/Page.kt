@@ -16,6 +16,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,7 +24,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -101,6 +102,7 @@ fun AppScreen(m: AppModel, a: Actions, web: WebView) {
         when (s) {
           Screen.Home -> HomeScreen(m, a)
           is Screen.Editor -> EditorScreen(m, a, s)
+          Screen.Keys -> KeysScreen(m, a)
           else -> {}
         }
       }
@@ -111,7 +113,7 @@ fun AppScreen(m: AppModel, a: Actions, web: WebView) {
 
 // ---- the page ----
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun PageScreen(m: AppModel, a: Actions, web: WebView, visible: Boolean) {
   val p = m.active
@@ -163,7 +165,9 @@ fun PageScreen(m: AppModel, a: Actions, web: WebView, visible: Boolean) {
         }
       }
     }
-    Box(Modifier.weight(1f).fillMaxWidth().windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))) {
+    // the keyboard's final height, at once: following its animation frame by frame made the page
+    // lay itself out again on every frame, and the keyboard crawled up in slow motion
+    Box(Modifier.weight(1f).fillMaxWidth().windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.imeAnimationTarget))) {
       // never hidden, only covered (the page keeps running); MATCH_PARENT matters: a web view
       // left wrap_content (AndroidView's default) sizes to its content and gets 0 for 100vh
       AndroidView(
