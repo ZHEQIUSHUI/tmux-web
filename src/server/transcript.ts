@@ -387,6 +387,20 @@ export interface ClaudeState {
   permissionMode: string;
 }
 
+/**
+ * The model a /model switch names: "Set model to `Opus 5.5 (1M context) (default)` and saved as …",
+ * "Kept model as Fable 5.1", "Set model to claude-fable-5[1m]" (bold escapes in older versions).
+ * Shown at once, before any reply has used it.
+ */
+export function switchedModel(stdout: string): { model: string; oneM: boolean } | null {
+  const m = /(?:Set model to|Kept model as) ([^\n<]*)/.exec(stdout.replace(/(?:\\x1b|\x1b)\[\d+m/g, ''));
+  if (!m) return null;
+  const raw = m[1].replace(/ and saved as .*| with \w+ effort.*/, '').replace(/[`\\]/g, '').trim();
+  const oneM = /\(1M context\)|\[1m\]/i.test(raw);
+  const model = raw.replace(/\((?:1M context|default)\)|\[1m\]/gi, '').trim();
+  return model ? { model, oneM } : null;
+}
+
 /** Read the end of the log for the latest model and token usage. */
 export async function claudeState(host: Host, file: string): Promise<ClaudeState> {
   const { data, size } = await host.readTail(file, 1024 * 1024);
@@ -395,9 +409,23 @@ export async function claudeState(host: Host, file: string): Promise<ClaudeState
   const lines = text.split('\n').slice(data.length < size ? 1 : 0);
   const st: ClaudeState = { model: '', contextTokens: 0, contextWindow: 200_000, permissionMode: '' };
   let oneM = /\(1M context\)|\[1m\]/i.test(text);
+  /** the window the last /model switch chose (it outranks the guess from the whole log) */
+  let switched: boolean | undefined;
   for (const line of lines) {
     if (!line) continue;
-    if (line.includes('"permission-mode"')) {
+    if (line.includes('<local-command-stdout>') && /Set model to|Kept model as/.test(line)) {
+      try {
+        const o = JSON.parse(line);
+        const c = o.message?.content;
+        const sw = typeof c === 'string' && !o.isSidechain ? switchedModel(c) : null;
+        if (sw) {
+          st.model = sw.model;
+          switched = sw.oneM;
+        }
+      } catch {
+        /* partial */
+      }
+    } else if (line.includes('"permission-mode"')) {
       try {
         st.permissionMode = JSON.parse(line).permissionMode ?? st.permissionMode;
       } catch {
@@ -426,6 +454,7 @@ export async function claudeState(host: Host, file: string): Promise<ClaudeState
       }
     }
   }
+  if (switched !== undefined) oneM = switched;
   if (st.contextTokens > 200_000) oneM = true;
   if (oneM) st.contextWindow = 1_000_000;
   return st;

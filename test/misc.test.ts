@@ -68,3 +68,21 @@ test('app downloads race their sources: the quick one wins, a wrong file never d
   }
   assert.ok(newer('2026.10.9.12', '2026.10.9.9') && !newer('2026.10.9.9', '2026.10.9.9'));
 });
+
+test('a /model switch shows before any reply uses it', async () => {
+  const { switchedModel } = await import('../src/server/transcript.js');
+  const cases: [string, string, boolean][] = [
+    ['<local-command-stdout>Set model to `Opus 5.5 (1M context) (default)` and saved as your default for new sessions</local-command-stdout>', 'Opus 5.5', true],
+    ['<local-command-stdout>Set model to `Fable 5.1` and saved as your default for new sessions</local-command-stdout>', 'Fable 5.1', false],
+    ['<local-command-stdout>Set model to \x1b[1mFable 5\x1b[22m and saved as your default for new sessions</local-command-stdout>', 'Fable 5', false],
+    ['<local-command-stdout>Set model to claude-fable-5[1m]</local-command-stdout>', 'claude-fable-5', true],
+    ['<local-command-stdout>Set model to Opus 4.7 (1M context) (default) with max effort</local-command-stdout>', 'Opus 4.7', true],
+    ['<local-command-stdout>Kept model as `Fable 5.1`</local-command-stdout>', 'Fable 5.1', false],
+  ];
+  for (const [text, name, oneM] of cases) {
+    const sw = switchedModel(text)!;
+    assert.equal(sw.model, name, text);
+    assert.equal(sw.oneM, oneM, text);
+  }
+  assert.equal(switchedModel('<local-command-stdout>Compacted</local-command-stdout>'), null);
+});
