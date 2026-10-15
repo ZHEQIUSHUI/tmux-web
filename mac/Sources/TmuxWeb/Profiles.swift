@@ -16,7 +16,9 @@ struct Profile: Codable, Identifiable, Equatable, Hashable {
   var remotePort = 8080
   /// fixed, so the page keeps its login and settings (they belong to http://127.0.0.1:<port>)
   var localPort = 18080
-  /// a private key; a .pub picked by mistake means the key next to it. Empty: ~/.ssh/config decides
+  /// the private key it logs in with, one of the key list's (`SSHKey`); nil: ~/.ssh/config decides
+  var keyID: UUID?
+  /// older versions kept the key file here: moved to the key list when read
   var keyPath = ""
   /// more ssh options, e.g. "-J jump-host"
   var extraArgs = ""
@@ -62,20 +64,40 @@ struct Profile: Codable, Identifiable, Equatable, Hashable {
     remoteHost = try c.decodeIfPresent(String.self, forKey: .remoteHost) ?? "127.0.0.1"
     remotePort = try c.decodeIfPresent(Int.self, forKey: .remotePort) ?? 8080
     localPort = try c.decodeIfPresent(Int.self, forKey: .localPort) ?? 18080
+    keyID = try c.decodeIfPresent(UUID.self, forKey: .keyID)
     keyPath = try c.decodeIfPresent(String.self, forKey: .keyPath) ?? ""
     extraArgs = try c.decodeIfPresent(String.self, forKey: .extraArgs) ?? ""
     lastUsed = try c.decodeIfPresent(Date.self, forKey: .lastUsed)
   }
 
-  /// The private key to use, if any.
-  var privateKey: String? {
-    var p = (keyPath.trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
-    if p.isEmpty { return nil }
+  /// The private key file to use, if any.
+  var privateKey: String? { ProfileStore.shared.key(keyID)?.file }
+}
+
+/// A private key file, kept once in a list of its own: any number of servers log in with it.
+struct SSHKey: Codable, Identifiable, Equatable, Hashable {
+  var id = UUID()
+  var name = ""
+  /// as picked (~ for the home folder); a .pub picked by mistake means the key next to it
+  var path = ""
+
+  /// the file to hand ssh
+  var file: String {
+    let p = (path.trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
     if p.hasSuffix(".pub") {
       let priv = String(p.dropLast(4))
-      if FileManager.default.fileExists(atPath: priv) { p = priv }
+      if FileManager.default.fileExists(atPath: priv) { return priv }
     }
     return p
+  }
+
+  var exists: Bool { FileManager.default.fileExists(atPath: file) }
+
+  /// a new entry for a picked file, named after it
+  static func of(_ path: String) -> SSHKey {
+    var name = (path as NSString).lastPathComponent
+    if name.hasSuffix(".pub") { name.removeLast(4) }
+    return SSHKey(name: name, path: (path as NSString).abbreviatingWithTildeInPath)
   }
 }
 
@@ -86,6 +108,7 @@ final class ProfileStore: ObservableObject {
 
   @Published var profiles: [Profile] { didSet { save() } }
   @Published var currentID: UUID? { didSet { save() } }
+  @Published var keys: [SSHKey] { didSet { save() } }
 
   private init() {
     // the settings file holds them encrypted (the key is in a file of our own, see LocalKey); an older version's
@@ -105,6 +128,31 @@ final class ProfileStore: ObservableObject {
       profiles = []
     }
     currentID = defaults.string(forKey: "current").flatMap(UUID.init(uuidString:))
+    if let enc = defaults.data(forKey: "keys.v1"), let data = Sealed.open(enc), let list = try? JSONDecoder().decode([SSHKey].self, from: data) {
+      keys = list
+    } else {
+      keys = []
+    }
+    // older versions kept each server's key file with it: into the key list, the same file only once
+    if profiles.contains(where: { !$0.keyPath.trimmingCharacters(in: .whitespaces).isEmpty }) {
+      var list = keys
+      profiles = profiles.map { p in
+        var p = p
+        let path = p.keyPath.trimmingCharacters(in: .whitespaces)
+        p.keyPath = ""
+        if path.isEmpty || (p.keyID != nil && list.contains { $0.id == p.keyID }) { return p }
+        let k = SSHKey.of((path as NSString).expandingTildeInPath)
+        if let same = list.first(where: { $0.file == k.file }) {
+          p.keyID = same.id
+        } else {
+          list.append(k)
+          p.keyID = k.id
+        }
+        return p
+      }
+      keys = list
+      migrate = true
+    }
     if migrate {
       save()
       defaults.removeObject(forKey: "profiles.enc")
@@ -144,6 +192,29 @@ final class ProfileStore: ObservableObject {
     return port
   }
 
+  func key(_ id: UUID?) -> SSHKey? { id.flatMap { id in keys.first { $0.id == id } } }
+
+  /// the servers that log in with it
+  func users(of keyID: UUID) -> [Profile] { sorted.filter { !$0.isDirect && $0.keyID == keyID } }
+
+  /// The entry for a picked file: the one there is for it, or a new one.
+  func addKey(_ path: String) -> SSHKey {
+    let k = SSHKey.of(path)
+    if let same = keys.first(where: { $0.file == k.file }) { return same }
+    keys.append(k)
+    return k
+  }
+
+  func upsertKey(_ k: SSHKey) {
+    if let i = keys.firstIndex(where: { $0.id == k.id }) { keys[i] = k } else { keys.append(k) }
+  }
+
+  /// gone from the list; the servers that used it go back to ~/.ssh/config
+  func removeKey(_ id: UUID) {
+    for i in profiles.indices where profiles[i].keyID == id { profiles[i].keyID = nil }
+    keys.removeAll { $0.id == id }
+  }
+
   func remove(_ id: UUID) {
     Keychain.setPassword(nil, for: id)
     profiles.removeAll { $0.id == id }
@@ -156,6 +227,7 @@ final class ProfileStore: ObservableObject {
       defaults.set(enc, forKey: "profiles.v2")
       defaults.removeObject(forKey: "profiles")
     }
+    if let kd = try? JSONEncoder().encode(keys), let enc = Sealed.seal(kd) { defaults.set(enc, forKey: "keys.v1") }
     defaults.set(currentID?.uuidString, forKey: "current")
   }
 }

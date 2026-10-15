@@ -24,6 +24,15 @@ import java.security.PublicKey
 import java.security.Security
 import java.util.concurrent.TimeUnit
 
+/** Android's built-in "BC" is a cut-down one: sshj needs the full BouncyCastle. */
+object Bc {
+  private val done by lazy {
+    Security.removeProvider("BC")
+    Security.insertProviderAt(BouncyCastleProvider(), 1)
+  }
+  fun install() = done
+}
+
 /** Where the forward is; observed by the window and the notification. */
 sealed class TunnelState {
   object Idle : TunnelState()
@@ -67,11 +76,7 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
   }
 
   companion object {
-    init {
-      // Android's built-in "BC" is a cut-down one: sshj needs the full BouncyCastle
-      Security.removeProvider("BC")
-      Security.insertProviderAt(BouncyCastleProvider(), 1)
-    }
+    init { Bc.install() }
   }
 
   fun start(p: Profile) {

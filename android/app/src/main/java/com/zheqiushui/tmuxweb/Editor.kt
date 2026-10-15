@@ -97,18 +97,17 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
   var remoteHost by remember(e) { mutableStateOf(start.remoteHost) }
   var localPort by remember(e) { mutableStateOf(start.localPort.toString()) }
   var password by remember(e) { mutableStateOf(start.password) }
-  var key by remember(e) { mutableStateOf(start.privateKey) }
-  var passphrase by remember(e) { mutableStateOf(start.keyPassphrase) }
+  var keyId by remember(e) { mutableStateOf(start.keyId) }
+  var addingKey by remember(e) { mutableStateOf(false) }
   var advanced by remember(e) { mutableStateOf(false) }
   var deleting by remember { mutableStateOf(false) }
   var test by remember(e) { mutableStateOf<Probe.Result?>(null) }
-  var keyNote by remember { mutableStateOf<String?>(null) }
   val scope = rememberCoroutineScope()
 
   val draft = start.copy(
     mode = mode, name = name.trim(), directUrl = url.trim(), target = target.trim(),
     sshPort = sshPort.toIntOrNull() ?: 0, remotePort = remotePort.toIntOrNull() ?: 0, remoteHost = remoteHost.trim().ifEmpty { "127.0.0.1" },
-    localPort = localPort.toIntOrNull() ?: 0, password = password, privateKey = key.trim(), keyPassphrase = passphrase,
+    localPort = localPort.toIntOrNull() ?: 0, password = password, keyId = keyId.takeIf { id -> m.keys.any { it.id == id } } ?: "",
   )
   LaunchedEffect(mode, url, target, sshPort) { test = null }
 
@@ -123,23 +122,8 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
   }
   val taken = m.profiles.firstOrNull { !it.isDirect && it.id != draft.id && it.localPort == draft.localPort }
   val localError = portError(localPort) ?: taken?.let { "「${it.title}」也用这个端口，换一个" }
-  val keyError = if (key.trimStart().let { it.startsWith("ssh-") || it.startsWith("ecdsa-") || it.startsWith("sk-") }) "这是公钥。登录要用私钥：以 -----BEGIN … PRIVATE KEY----- 开头的那个文件" else null
   val valid = if (mode == "direct") draft.directBase != null else
-    targetError == null && draft.isComplete && listOf(sshPort, remotePort).all { portError(it) == null } && localError == null && keyError == null
-
-  val importKey = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-    if (uri == null) return@rememberLauncherForActivityResult
-    val text = try {
-      ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().take(64 * 1024).toByteArray().toString(Charsets.UTF_8) } ?: ""
-    } catch (_: Exception) {
-      ""
-    }
-    when {
-      text.trimStart().startsWith("-----BEGIN") -> { key = text.trim(); keyNote = "已导入" }
-      text.startsWith("ssh-") -> keyNote = "选的是公钥。登录要用对应的私钥（通常是同名、没有 .pub 的那个文件）。"
-      else -> keyNote = "这个文件看起来不是 SSH 私钥。"
-    }
-  }
+    targetError == null && draft.isComplete && listOf(sshPort, remotePort).all { portError(it) == null } && localError == null
 
   BackHandler { a.closeEditor() }
   Scaffold(
@@ -194,24 +178,7 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
 
           Section("登录")
           SecretField(password, { password = it }, "SSH 密码", supporting = "可选。不填的话需要时弹框输入")
-          OutlinedTextField(
-            key, { key = it; keyNote = null }, Modifier.fillMaxWidth(), label = { Text("私钥") },
-            placeholder = { Text("-----BEGIN OPENSSH PRIVATE KEY-----") },
-            leadingIcon = { Icon(KeyIcon, null) },
-            isError = keyError != null,
-            supportingText = { Text(keyError ?: keyNote ?: "可选。粘贴私钥内容，或从文件导入") },
-            minLines = 2, maxLines = 6,
-            textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp),
-          )
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = { importKey.launch(arrayOf("*/*")) }) {
-              Icon(UploadFileIcon, null, Modifier.size(18.dp)); Spacer(Modifier.size(8.dp)); Text("从文件导入")
-            }
-            if (key.isNotEmpty()) TextButton(onClick = { key = ""; passphrase = ""; keyNote = null }) { Text("清除") }
-          }
-          AnimatedVisibility(key.isNotBlank()) {
-            SecretField(passphrase, { passphrase = it }, "私钥口令", supporting = "私钥有口令才填")
-          }
+          KeyPicker(m.keys, draft.keyId, onSelect = { keyId = it }, onAdd = { addingKey = true })
 
           // the rarely needed ones, folded away
           Row(
@@ -284,6 +251,8 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
       }
     }
   }
+  // a new key on the spot: saved to the key list at once, and this server's from then on
+  if (addingKey) KeyEditor(null, m.keys, onDismiss = { addingKey = false }) { k -> a.saveKey(k); keyId = k.id; addingKey = false }
   if (deleting && original != null) ConfirmDelete(original, { deleting = false }) { deleting = false; a.remove(original) }
 }
 

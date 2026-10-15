@@ -265,17 +265,23 @@ enum KeyFile {
   struct Problem: Error { let message: String }
   static let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("TmuxWeb/keys")
 
-  static func usable(_ path: String, for id: UUID) -> Result<String, Problem> {
-    let fm = FileManager.default
-    guard let data = fm.contents(atPath: path) else {
-      return .failure(Problem(message: "读不到密钥文件：\(path)"))
-    }
+  /// What's wrong with it as a private key, if anything (its content decides, not its name).
+  static func problem(_ path: String) -> String? {
+    guard let data = FileManager.default.contents(atPath: path) else { return "读不到密钥文件：\(path)" }
     let head = String(decoding: data.prefix(200), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     if head.hasPrefix("ssh-") || head.hasPrefix("ecdsa-") || head.hasPrefix("sk-") {
-      return .failure(Problem(message: "选的是公钥（\((path as NSString).lastPathComponent)），登录需要对应的私钥：内容以「-----BEGIN … PRIVATE KEY-----」开头的那个文件，通常和公钥同名、没有 .pub。"))
+      return "选的是公钥（\((path as NSString).lastPathComponent)），登录需要对应的私钥：内容以「-----BEGIN … PRIVATE KEY-----」开头的那个文件，通常和公钥同名、没有 .pub。"
     }
-    if !head.hasPrefix("-----BEGIN") {
-      return .failure(Problem(message: "这个文件看起来不是 SSH 私钥：\(path)"))
+    if head.hasPrefix("PuTTY-User-Key-File") { return "这是 PuTTY 格式（.ppk）的私钥，先用 PuTTYgen 导出为 OpenSSH 格式：\(path)" }
+    if !head.hasPrefix("-----BEGIN") { return "这个文件看起来不是 SSH 私钥：\(path)" }
+    return nil
+  }
+
+  static func usable(_ path: String, for id: UUID) -> Result<String, Problem> {
+    let fm = FileManager.default
+    if let p = problem(path) { return .failure(Problem(message: p)) }
+    guard let data = fm.contents(atPath: path) else {
+      return .failure(Problem(message: "读不到密钥文件：\(path)"))
     }
     let mode = ((try? fm.attributesOfItem(atPath: path))?[.posixPermissions] as? NSNumber)?.intValue ?? 0o600
     if mode & 0o077 == 0 { return .success(path) }

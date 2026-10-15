@@ -67,6 +67,8 @@ struct ServerActions {
   var editActive: () -> Void = {}
   var home: () -> Void = {}
   var checkUpdates: () -> Void = {}
+  /// the key list
+  var keys: () -> Void = {}
 }
 
 /// Everything the window shows: home or a server, every connection's state, the servers' probes.

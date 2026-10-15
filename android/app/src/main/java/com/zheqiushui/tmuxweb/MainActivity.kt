@@ -33,6 +33,8 @@ import androidx.compose.runtime.setValue
 sealed interface Screen {
   object Home : Screen
   object Page : Screen
+  /** the private keys, kept once for any number of servers */
+  object Keys : Screen
   /** a server's settings: `id` an existing one, `copyOf` a copy, else a new one (in `mode`) */
   data class Editor(val id: String? = null, val copyOf: String? = null, val mode: String? = null) : Screen
 }
@@ -51,6 +53,7 @@ class AppModel {
   /** the screen an editor goes back to */
   var beforeEditor: Screen = Screen.Home
   var profiles by mutableStateOf(emptyList<Profile>())
+  var keys by mutableStateOf(emptyList<SshKey>())
   var activeId by mutableStateOf<String?>(null)
   var tunnel by mutableStateOf<TunnelState>(TunnelState.Idle)
   /** the furthest step reached on the way up: where it stopped, if it fails */
@@ -72,6 +75,10 @@ interface Actions {
   fun save(p: Profile, connect: Boolean, original: Profile?)
   fun remove(p: Profile)
   fun forgetHostKey(p: Profile)
+  /** the key list */
+  fun keys()
+  fun saveKey(k: SshKey)
+  fun removeKey(k: SshKey)
   /** back to the servers; the connection stays */
   fun home()
   fun disconnect()
@@ -162,6 +169,7 @@ class MainActivity : ComponentActivity(), Actions {
   private fun reloadProfiles() {
     store = ProfileStore(this)
     model.profiles = store.profiles
+    model.keys = store.keys
   }
 
   // ---- connection ----
@@ -297,6 +305,20 @@ class MainActivity : ComponentActivity(), Actions {
     reloadProfiles()
     model.probes.remove(p.id)
     model.screen = Screen.Home
+  }
+
+  override fun keys() {
+    model.screen = Screen.Keys
+  }
+
+  override fun saveKey(k: SshKey) {
+    store.upsertKey(k)
+    reloadProfiles()
+  }
+
+  override fun removeKey(k: SshKey) {
+    store.removeKey(k.id)
+    reloadProfiles()
   }
 
   override fun forgetHostKey(p: Profile) {

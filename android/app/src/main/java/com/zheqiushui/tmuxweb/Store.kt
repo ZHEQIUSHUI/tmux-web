@@ -27,7 +27,10 @@ data class Profile(
   val remotePort: Int = 8080,
   /** fixed, so the page keeps its login and settings (they belong to http://127.0.0.1:<port>) */
   val localPort: Int = 18080,
-  /** the private key itself (pasted or imported from a file); empty = none */
+  /** the private key it logs in with, one of the key list's ([SshKey]); empty = none */
+  val keyId: String = "",
+  /** that key's text, filled in only for connecting ([ProfileStore.resolved]); never saved
+   * here (older versions did: moved to the key list when read) */
   val privateKey: String = "",
   val keyPassphrase: String = "",
   /** empty = asked for when the server wants it */
@@ -56,35 +59,66 @@ data class Profile(
   fun toJson() = JSONObject().apply {
     put("id", id); put("name", name); put("mode", mode); put("directUrl", directUrl); put("target", target); put("sshPort", sshPort)
     put("remoteHost", remoteHost); put("remotePort", remotePort); put("localPort", localPort)
-    put("privateKey", privateKey); put("keyPassphrase", keyPassphrase); put("password", password); put("lastUsed", lastUsed)
+    put("keyId", keyId); put("password", password); put("lastUsed", lastUsed)
   }
 
   companion object {
     fun fromJson(o: JSONObject) = Profile(
       id = o.optString("id", UUID.randomUUID().toString()), name = o.optString("name"), mode = o.optString("mode", "ssh"), directUrl = o.optString("directUrl"), target = o.optString("target"),
       sshPort = o.optInt("sshPort", 22), remoteHost = o.optString("remoteHost", "127.0.0.1"), remotePort = o.optInt("remotePort", 8080),
-      localPort = o.optInt("localPort", 18080), privateKey = o.optString("privateKey"), keyPassphrase = o.optString("keyPassphrase"),
+      localPort = o.optInt("localPort", 18080), keyId = o.optString("keyId"), privateKey = o.optString("privateKey"), keyPassphrase = o.optString("keyPassphrase"),
       password = o.optString("password"), lastUsed = o.optLong("lastUsed", 0),
     )
   }
 }
 
+/** A private key, kept once: any number of servers log in with it. */
+data class SshKey(
+  val id: String = UUID.randomUUID().toString(),
+  val name: String = "",
+  val privateKey: String = "",
+  val passphrase: String = "",
+  val added: Long = System.currentTimeMillis(),
+) {
+  fun toJson() = JSONObject().apply {
+    put("id", id); put("name", name); put("privateKey", privateKey); put("passphrase", passphrase); put("added", added)
+  }
+
+  companion object {
+    fun fromJson(o: JSONObject) = SshKey(
+      id = o.optString("id", UUID.randomUUID().toString()), name = o.optString("name"), privateKey = o.optString("privateKey"),
+      passphrase = o.optString("passphrase"), added = o.optLong("added", 0),
+    )
+  }
+}
+
 /**
- * The servers, and the one used last, kept encrypted: AES-GCM with a key that
+ * The servers, the one used last, and the private keys, kept encrypted: AES-GCM with a key that
  * lives in the Android keystore and never leaves it. Passwords and private keys are in there too.
  */
 class ProfileStore(context: Context) {
   private val prefs = context.getSharedPreferences("config", Context.MODE_PRIVATE)
 
+  var keys: List<SshKey> = loadKeys()
+    private set
   var profiles: List<Profile> = load()
     private set
   var currentId: String? = prefs.getString("current", null)
     private set
 
+  init {
+    // older versions kept each server's key with it
+    if (profiles.any { it.privateKey.isNotBlank() }) {
+      profiles = profiles.map(::adopt)
+      save()
+    }
+  }
+
   val current: Profile? get() = profiles.firstOrNull { it.id == currentId } ?: profiles.firstOrNull()
 
   /** a changed one stays where it was in the list; a new one goes last */
-  fun upsert(p: Profile) {
+  fun upsert(server: Profile) {
+    val p = adopt(server)
     profiles = if (profiles.any { it.id == p.id }) profiles.map { if (it.id == p.id) p else it } else profiles + p
     if (currentId == null) currentId = p.id
     save()
@@ -111,6 +145,46 @@ class ProfileStore(context: Context) {
     save()
   }
 
+  fun key(id: String): SshKey? = if (id.isEmpty()) null else keys.firstOrNull { it.id == id }
+
+  /** the servers that log in with it */
+  fun usersOf(keyId: String) = profiles.filter { !it.isDirect && it.keyId == keyId }
+
+  /** The server as the connection needs it: with its key's text. */
+  fun resolved(p: Profile): Profile = key(p.keyId)?.let { p.copy(privateKey = it.privateKey, keyPassphrase = it.passphrase) } ?: p.copy(privateKey = "", keyPassphrase = "")
+
+  /** a changed one stays where it was; a new one goes last */
+  fun upsertKey(k: SshKey) {
+    keys = if (keys.any { it.id == k.id }) keys.map { if (it.id == k.id) k else it } else keys + k
+    save()
+  }
+
+  /** gone from the list; the servers that used it log in without a key from now on */
+  fun removeKey(id: String) {
+    keys = keys.filter { it.id != id }
+    profiles = profiles.map { if (it.keyId == id) it.copy(keyId = "") else it }
+    save()
+  }
+
+  /** A key that came with the server (an older version's, a test's) goes into the key list; the same key only once. */
+  private fun adopt(p: Profile): Profile {
+    val text = p.privateKey.trim()
+    if (text.isEmpty() || key(p.keyId) != null) return p.copy(privateKey = "", keyPassphrase = "")
+    val k = keys.firstOrNull { it.privateKey.trim() == text }
+      ?: SshKey(name = "${p.title} 的私钥", privateKey = text, passphrase = p.keyPassphrase).also { keys = keys + it }
+    return p.copy(keyId = k.id, privateKey = "", keyPassphrase = "")
+  }
+
+  private fun loadKeys(): List<SshKey> {
+    val enc = prefs.getString("keys", null) ?: return emptyList()
+    return try {
+      val arr = JSONArray(Crypto.open(enc))
+      (0 until arr.length()).map { SshKey.fromJson(arr.getJSONObject(it)) }
+    } catch (e: Exception) {
+      emptyList()
+    }
+  }
+
   private fun load(): List<Profile> {
     val enc = prefs.getString("profiles", null) ?: return emptyList()
     return try {
@@ -123,7 +197,9 @@ class ProfileStore(context: Context) {
 
   private fun save() {
     val arr = JSONArray().apply { profiles.forEach { put(it.toJson()) } }
-    prefs.edit().putString("profiles", Crypto.seal(arr.toString())).putString("current", currentId).apply()
+    val ks = JSONArray().apply { keys.forEach { put(it.toJson()) } }
+    // commit, not apply: the keys and the servers that point at them must land together
+    prefs.edit().putString("keys", Crypto.seal(ks.toString())).putString("profiles", Crypto.seal(arr.toString())).putString("current", currentId).commit()
   }
 }
 

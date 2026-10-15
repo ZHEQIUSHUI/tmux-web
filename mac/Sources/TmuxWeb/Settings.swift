@@ -13,6 +13,9 @@ struct SettingsView: View {
   var onCancel: () -> Void
   var onDelete: (() -> Void)?
 
+  @ObservedObject private var store = ProfileStore.shared
+  /// what 添加… did, shown while that key stays picked
+  @State private var keyMessage: (id: UUID, text: String)?
   @State private var showPassword = false
   @State private var advanced = false
   @State private var test: Probe?
@@ -58,13 +61,15 @@ struct SettingsView: View {
           }
           if !draft.isDirect {
             Card("登录") {
-              Row("私钥", note: draft.keyPath.isEmpty ? "不选就用 ~/.ssh/config 和默认密钥；选了 .pub 也行" : nil, error: keyError) {
+              Row("私钥", note: keyNote, error: keyError) {
                 HStack(spacing: 6) {
-                  TextField("", text: $draft.keyPath, prompt: Text("可选"))
-                  if !draft.keyPath.isEmpty {
-                    Button { draft.keyPath = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary) }.buttonStyle(.plain).help("不用私钥")
+                  Picker("", selection: $draft.keyID) {
+                    Text("不指定（用 ~/.ssh/config 和默认密钥）").tag(UUID?.none)
+                    if !store.keys.isEmpty { Divider() }
+                    ForEach(store.keys) { k in Text(k.name).tag(UUID?.some(k.id)) }
                   }
-                  Button("选择…") { pickKey() }.controlSize(.small)
+                  .labelsHidden()
+                  Button("添加…") { addKey() }.controlSize(.small).help("登记一个私钥文件，并给这台服务器用")
                 }
               }
               Divider()
@@ -171,9 +176,15 @@ struct SettingsView: View {
     guard !draft.isDirect, let other = takenPorts[draft.localPort] else { return nil }
     return "「\(other)」也用这个本地端口，换一个"
   }
+  private var key: SSHKey? { store.key(draft.keyID) }
+  private var keyNote: String? {
+    if let m = keyMessage, m.id == draft.keyID { return m.text }
+    guard let key else { return "私钥统一登记在「私钥」里，多台服务器可以共用" }
+    return "\(key.path) · 在「私钥」里统一管理"
+  }
   private var keyError: String? {
-    let path = (draft.keyPath.trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
-    return path.isEmpty || FileManager.default.fileExists(atPath: path) ? nil : "找不到这个文件"
+    guard let key, !key.exists else { return nil }
+    return "找不到私钥文件 \(key.path)，在「私钥」里更换"
   }
   private var canSave: Bool {
     guard draft.isComplete else { return false }
@@ -181,15 +192,21 @@ struct SettingsView: View {
     return targetError == nil && keyError == nil && portTaken == nil && [draft.sshPort, draft.remotePort, draft.localPort].allSatisfy { portError($0) == nil }
   }
 
-  private func pickKey() {
-    let panel = NSOpenPanel()
-    panel.directoryURL = URL(fileURLWithPath: ("~/.ssh" as NSString).expandingTildeInPath)
-    panel.showsHiddenFiles = true
-    panel.canChooseDirectories = false
-    panel.message = "选择 SSH 私钥（选公钥 .pub 也可以）"
-    if panel.runModal() == .OK, let url = panel.url {
-      draft.keyPath = (url.path as NSString).abbreviatingWithTildeInPath
+  /// a key file picked here: into the key list (the one there is, if it's there already), and this server's
+  private func addKey() {
+    guard let path = pickKeyFile() else { return }
+    if let p = KeyFile.problem(SSHKey.of(path).file) {
+      keyMessage = nil
+      let a = NSAlert()
+      a.messageText = "不能用这个文件"
+      a.informativeText = p
+      a.runModal()
+      return
     }
+    let known = store.keys.count
+    let k = store.addKey(path)
+    draft.keyID = k.id
+    keyMessage = (k.id, store.keys.count == known ? "这个文件已经登记过，选的是「\(k.name)」" : "已登记为「\(k.name)」，别的服务器也可以选它")
   }
 }
 

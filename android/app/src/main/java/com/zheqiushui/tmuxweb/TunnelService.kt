@@ -118,7 +118,8 @@ class TunnelService : Service() {
   }
 
   private fun connect() {
-    val p = ProfileStore(this).current
+    val store = ProfileStore(this)
+    val p = store.current?.let(store::resolved)
     if (p == null || !p.isComplete) return Hub.publish(TunnelState.Failed("还没有设置服务器。"))
     Hub.profileTitle = p.title
     Hub.activeId = p.id

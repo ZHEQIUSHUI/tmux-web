@@ -141,6 +141,7 @@ fun HomeScreen(m: AppModel, a: Actions) {
               var menu by remember { mutableStateOf(false) }
               IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "更多") }
               DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(text = { Text("私钥") }, leadingIcon = { Icon(KeyIcon, null) }, onClick = { menu = false; a.keys() })
                 DropdownMenuItem(text = { Text("检查更新") }, leadingIcon = { Icon(UpdateIcon, null) }, onClick = { menu = false; a.checkUpdates() })
                 DropdownMenuItem(text = { Text("关于") }, leadingIcon = { Icon(Icons.Filled.Info, null) }, onClick = { menu = false; about = true })
               }
@@ -294,7 +295,7 @@ fun ConfirmDelete(p: Profile, onDismiss: () -> Unit, onConfirm: () -> Unit) {
     onDismissRequest = onDismiss,
     icon = { Icon(Icons.Filled.Delete, null) },
     title = { Text("删除「${p.title}」？") },
-    text = { Text("它的设置和保存的密码、私钥都会删掉，不能恢复。") },
+    text = { Text(if (p.keyId.isEmpty()) "它的设置和保存的密码都会删掉，不能恢复。" else "它的设置和保存的密码都会删掉，不能恢复。用的私钥还留在「私钥」里。") },
     confirmButton = { TextButton(onClick = onConfirm) { Text("删除", color = MaterialTheme.colorScheme.error) } },
     dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
   )

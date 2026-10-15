@@ -55,6 +55,8 @@ struct HomeView: View {
       }
       .padding(.horizontal, 10).padding(.vertical, 6)
       .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+      Button { model.actions.keys() } label: { Label("私钥", systemImage: "key") }
+        .controlSize(.large).help("私钥统一登记在这里，多台服务器可以共用")
       Button { model.actions.edit(nil, nil) } label: { Label("新建服务器", systemImage: "plus") }
         .buttonStyle(.borderedProminent).controlSize(.large)
     }

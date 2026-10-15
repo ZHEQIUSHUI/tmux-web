@@ -30,7 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
       retry: { [weak self] in self?.reconnect() },
       editActive: { [weak self] in self?.editCurrent() },
       home: { [weak self] in self?.goHome() },
-      checkUpdates: { [weak self] in self?.checkUpdates() }
+      checkUpdates: { [weak self] in self?.checkUpdates() },
+      keys: { [weak self] in self?.openKeys() }
     )
     UNUserNotificationCenter.current().delegate = self
     buildMenu()
@@ -260,6 +261,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     main.window.beginSheet(w)
   }
 
+  /// The key list in a sheet.
+  @objc private func openKeys() {
+    main.bringBack()
+    if let e = editor { return e.makeKeyAndOrderFront(nil) }
+    let w = NSWindow(contentViewController: NSHostingController(rootView: KeysView(onClose: { [weak self] in self?.closeEditor() })))
+    w.styleMask = [.titled]
+    w.isReleasedWhenClosed = false
+    editor = w
+    main.window.beginSheet(w)
+  }
+
   private func closeEditor() {
     if let e = editor { main.window.endSheet(e) }
     editor = nil
@@ -360,6 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     m.addItem(item("断开此服务器", #selector(disconnectCurrent), enabled: onServer))
     if conns.count > 1 { m.addItem(item("断开全部（\(conns.count) 台）", #selector(disconnectAll))) }
     m.addItem(.separator())
+    m.addItem(item("私钥…", #selector(openKeys)))
     m.addItem(item("检查更新…", #selector(checkUpdates)))
     return m
   }
@@ -434,6 +447,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     menu.autoenablesItems = false
     menu.addItem(item("全部服务器", #selector(homeAction), "l"))
     menu.addItem(item("新建服务器…", #selector(newServer), "n"))
+    menu.addItem(item("私钥…", #selector(openKeys)))
     if !store.profiles.isEmpty { menu.addItem(.separator()) }
     store.sorted.forEach { menu.addItem(serverItem($0)) }
     let onServer = !model.showHome && active != nil
