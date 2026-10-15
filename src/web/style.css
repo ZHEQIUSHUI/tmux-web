@@ -3099,8 +3099,15 @@ body.resizing .splitter:active {
   transform-origin: center;
   -webkit-user-drag: none;
 }
-.lb-stage img.lb-ease {
-  transition: transform 0.18s ease-out;
+.lb-strip,
+.lb-slide {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+.lb-slide {
+  right: auto;
+  width: 100%;
 }
 .lb-nav {
   position: absolute;
