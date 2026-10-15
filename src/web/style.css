@@ -3023,3 +3023,114 @@ body.resizing .splitter:active {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* image viewer */
+.lb {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: #0e0e0e;
+  color: #eee;
+  display: flex;
+  flex-direction: column;
+  animation: lb-in 0.15s ease-out;
+}
+@keyframes lb-in {
+  from {
+    opacity: 0;
+  }
+}
+.lb-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: max(8px, env(safe-area-inset-top)) 10px 8px 14px;
+  font-size: 13px;
+}
+.lb-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+.lb-name b {
+  margin-right: 10px;
+  font-weight: 600;
+}
+.lb-spin {
+  width: 14px;
+  height: 14px;
+}
+.lb-btn {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.1);
+  color: #eee;
+  font-size: 16px;
+  display: inline-grid;
+  place-items: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+.lb-btn:hover {
+  background: rgb(255 255 255 / 0.2);
+}
+.lb-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  margin-bottom: env(safe-area-inset-bottom);
+}
+.lb-stage img {
+  /* centered, as large as fits */
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  transform-origin: center;
+  -webkit-user-drag: none;
+}
+.lb-stage img.lb-ease {
+  transition: transform 0.18s ease-out;
+}
+.lb-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 64px;
+  border: 0;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 0.08);
+  color: #fff;
+  font-size: 34px;
+  line-height: 1;
+  cursor: pointer;
+}
+.lb-nav:hover {
+  background: rgb(255 255 255 / 0.18);
+}
+.lb-nav.prev {
+  left: 10px;
+}
+.lb-nav.next {
+  right: 10px;
+}
+@media (hover: none) {
+  /* phones: swipe instead */
+  .lb-nav {
+    display: none;
+  }
+}
+.md-img {
+  cursor: zoom-in;
+}

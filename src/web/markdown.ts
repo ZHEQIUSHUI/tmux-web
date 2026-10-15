@@ -62,7 +62,7 @@ export function imageUrl(href: string, c: ImageCtx | null = ctx): string | null 
 export const shown = (url: string, width = 1280) => (/^\/_tw\/api\/.*\/(file-)?image\?/.test(url) ? `${url}&w=${width}` : url);
 
 export const imageHtml = (url: string, alt: string) =>
-  `<a class="md-img" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="点开看原图"><img src="${esc(shown(url))}" alt="${esc(alt)}" loading="lazy" decoding="async"></a>`;
+  `<a class="md-img" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="点开查看"><img src="${esc(shown(url))}" alt="${esc(alt)}" loading="lazy" decoding="async"></a>`;
 
 const IMAGE_MD = /!\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)/g;
 /** Plain-text items (your messages, tool output): pull the image references out to show below. */

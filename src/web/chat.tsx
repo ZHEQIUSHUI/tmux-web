@@ -16,7 +16,7 @@ function Images({ list }: { list: { url: string; alt: string }[] }) {
   return (
     <div class="msg-images">
       {list.map((im) => (
-        <a key={im.url} class="md-img" href={im.url} target="_blank" rel="noopener noreferrer" title="点开看原图">
+        <a key={im.url} class="md-img" href={im.url} target="_blank" rel="noopener noreferrer" title="点开查看">
           <img src={shown(im.url)} alt={im.alt} loading="lazy" decoding="async" />
         </a>
       ))}

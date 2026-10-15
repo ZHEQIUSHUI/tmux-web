@@ -6,6 +6,7 @@ import { Shell } from './shell';
 import { chatCache } from './chat';
 import { clearChats, loadChats } from './chat-store';
 import './style.css';
+import { Lightbox } from './lightbox';
 
 // ---------------- login ----------------
 
@@ -101,3 +102,6 @@ if (vv && coarsePointer && layoutPref() === 'auto') {
 applyLayout();
 followTurns();
 render(<App />, document.getElementById('app')!);
+// image viewer: over everything, its own root so it never re-renders the app
+const lb = document.body.appendChild(document.createElement('div'));
+render(<Lightbox />, lb);
