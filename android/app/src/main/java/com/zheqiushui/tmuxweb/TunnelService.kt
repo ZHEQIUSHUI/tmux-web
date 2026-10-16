@@ -99,7 +99,8 @@ class TunnelService : Service() {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    val notification = Notices.service(this, "正在连接…")
+    // what it is now: a check while connected leaves it connected (it says so itself if not)
+    val notification = Notices.service(this, statusText(tunnel.state.takeIf { it !is TunnelState.Idle } ?: TunnelState.Connecting()))
     if (Build.VERSION.SDK_INT >= 34) startForeground(Notices.SERVICE_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
     else startForeground(Notices.SERVICE_ID, notification)
     when (intent?.action) {
@@ -136,14 +137,15 @@ class TunnelService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   private fun updateNotification(s: TunnelState) {
-    val text = when (s) {
-      is TunnelState.Ready -> "已连接 ${Hub.profileTitle}"
-      is TunnelState.Connecting -> "正在连接…"
-      is TunnelState.Reconnecting -> s.message
-      is TunnelState.Failed -> "连不上：${s.message}"
-      TunnelState.Idle -> "未连接"
-    }
-    getSystemService(NotificationManager::class.java).notify(Notices.SERVICE_ID, Notices.service(this, text))
+    getSystemService(NotificationManager::class.java).notify(Notices.SERVICE_ID, Notices.service(this, statusText(s)))
+  }
+
+  private fun statusText(s: TunnelState) = when (s) {
+    is TunnelState.Ready -> "已连接 ${Hub.profileTitle}"
+    is TunnelState.Connecting -> "正在连接…"
+    is TunnelState.Reconnecting -> s.message
+    is TunnelState.Failed -> "连不上：${s.message}"
+    TunnelState.Idle -> "未连接"
   }
 
   /**
