@@ -109,6 +109,7 @@ fun AppScreen(m: AppModel, a: Actions, web: WebView) {
     }
   }
   m.question?.let { QuestionDialog(it, a) }
+  UpdateDialog()
 }
 
 // ---- the page ----
