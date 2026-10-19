@@ -217,7 +217,14 @@ enum Updater {
     p.executableURL = URL(fileURLWithPath: "/bin/sh")
     p.arguments = ["-c", script, "sh", app, fresh, tmp.path]
     try? p.run()
-    await MainActor.run { NSApp.terminate(nil) }
+    await MainActor.run {
+      // macOS ignores quitting while a sheet is up (this one, or a server's settings under it)
+      sheet = nil
+      for _ in 0..<3 { for w in NSApp.windows { if let s = w.attachedSheet { w.endSheet(s) } } }
+      NSApp.terminate(nil)
+      // still here (something else held it up): the swap waits for us, so go anyway
+      DispatchQueue.main.asyncAfter(deadline: .now() + 3) { exit(0) }
+    }
   }
 
   /// "1.10.0" > "1.9.2"
