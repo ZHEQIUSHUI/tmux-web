@@ -523,6 +523,9 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
   // last scroll position, kept as we go: the element is already gone when we unmount
   const lastTop = useRef<number | null>(cached?.scrollTop ?? null);
   const anchor = useRef<{ height: number; top: number } | null>(null);
+  // scrolled up a fair way: the ↓ button shows; `unseen`: something new arrived meanwhile
+  const [away, setAway] = useState(false);
+  const [unseen, setUnseen] = useState(false);
   const id = session.id;
   // idle for a while and still not in the log: it won't come (e.g. the turn was interrupted and
   // Claude put the queued text back into its input box)
@@ -715,9 +718,30 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
     } else if (stick.current) el.scrollTop = el.scrollHeight;
   }, [items, pending, state.preview, state.status]);
 
+  // new at the bottom while reading further up (older ones prepended don't count)
+  const lastId = items[items.length - 1]?.id;
+  const seenLast = useRef(lastId);
+  useEffect(() => {
+    if (lastId !== seenLast.current && seenLast.current !== undefined && !stick.current) setUnseen(true);
+    seenLast.current = lastId;
+  }, [lastId]);
+
+  const toBottom = () => {
+    const el = scroller.current;
+    if (!el) return;
+    stick.current = true;
+    setUnseen(false);
+    // a long way: jump most of it, glide the rest
+    if (el.scrollHeight - el.scrollTop - el.clientHeight > el.clientHeight * 3) el.scrollTop = el.scrollHeight - el.clientHeight * 2;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  };
+
   const onScroll = () => {
     const el = scroller.current!;
-    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stick.current = gap < 60;
+    setAway(gap > 300);
+    if (gap < 60) setUnseen(false);
     lastTop.current = el.scrollTop;
     if (el.scrollTop < 200 && page?.hasMore && !loadingOlder) loadOlder();
   };
@@ -782,6 +806,15 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
             )
           )}
         </div>
+        {away && (
+          <div class="to-bottom-wrap">
+            <button class={`to-bottom${unseen ? ' unseen' : ''}`} onClick={toBottom} title={unseen ? '有新消息，回到最下面' : '回到最下面'} aria-label="回到最下面">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 5v14M6 13l6 6 6-6" />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
       {error && (
         <div class="banner error" onClick={() => setError('')}>
