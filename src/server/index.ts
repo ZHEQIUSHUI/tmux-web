@@ -521,8 +521,10 @@ route('POST', '/_tw/api/sessions/:id/input', async (req, res, [id]) => {
   if (typeof text !== 'string') throw new HttpError(400, 'text required');
   if (!live.alive) throw new HttpError(409, 'session 已停止');
   if (text) await live.clearPromptInput();
-  if (text && submit) await backend.submit(live.target, text);
-  else if (text) await backend.paste(live.target, text);
+  if (text && submit) {
+    await backend.submit(live.target, text);
+    await live.confirmSubmitted();
+  } else if (text) await backend.paste(live.target, text);
   else if (submit) await backend.keys(live.target, ['Enter']);
   sendJson(req, res, 200, { ok: true });
 });

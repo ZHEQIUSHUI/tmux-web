@@ -554,6 +554,22 @@ label select {
 .msg.pending .bubble {
   opacity: 0.6;
 }
+.msg.pending.lost .bubble {
+  opacity: 1;
+  outline: 1px dashed color-mix(in srgb, var(--danger) 60%, transparent);
+}
+.pending-tag.lost {
+  color: var(--danger);
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.pending-tag.lost button {
+  font-size: 12px;
+  padding: 2px 10px;
+}
 .pending-tag {
   display: block;
   font-size: 11px;

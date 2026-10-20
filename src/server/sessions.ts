@@ -377,6 +377,22 @@ export class LiveSession extends EventEmitter {
     await new Promise((r) => setTimeout(r, 150));
   }
 
+  /**
+   * After a message and Enter went into Claude Code: if the text still sits in its input box (the
+   * Enter came before the TUI had taken the paste in, and became a new line), press Enter again,
+   * so it isn't left there unsent (and cleared by the next message). Not over a menu.
+   */
+  async confirmSubmitted(): Promise<void> {
+    if (this.row.agent !== 'claude' || !this.screen) return;
+    for (const wait of [400, 700, 1200]) {
+      await new Promise((r) => setTimeout(r, wait));
+      await this.screen?.flush();
+      if (!this.screen || this.status === 'waiting' || !this.screen.hasPromptInput()) return;
+      console.warn(`session ${this.row.id}: message still in Claude's input box, pressing Enter again`);
+      await backend.keys(this.target, ['Enter']);
+    }
+  }
+
   write(data: string | Buffer) {
     this.stream?.write(data);
   }

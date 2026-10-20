@@ -360,6 +360,8 @@ export interface Pending {
   text: string;
   sent: boolean;
   at: number;
+  /** sent, but Claude went quiet without it ever reaching the log: shown with 重发 instead of dropped */
+  lost?: boolean;
 }
 
 // Messages you sent that the agent's log doesn't show yet (Claude queues them while it works),
@@ -528,13 +530,24 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
   const [unseen, setUnseen] = useState(false);
   const id = session.id;
   // idle for a while and still not in the log: it won't come (e.g. the turn was interrupted and
-  // Claude put the queued text back into its input box)
-  const idleNow = state.status === 'idle' && pending.some((p) => p.sent);
+  // Claude put the queued text back into its input box). Say so, with 重发, rather than drop it.
+  const idleNow = state.status === 'idle' && pending.some((p) => p.sent && !p.lost);
   useEffect(() => {
     if (!idleNow) return;
-    const t = setTimeout(() => updatePending(id, (ps) => ps.filter((p) => !p.sent || Date.now() - p.at < 15000)), 15000);
+    const t = setTimeout(() => updatePending(id, (ps) => ps.map((p) => (p.sent && !p.lost && Date.now() - p.at >= 15000 ? { ...p, lost: true } : p))), 15000);
     return () => clearTimeout(t);
   }, [idleNow, id]);
+  const resend = (p: Pending) => {
+    stick.current = true;
+    updatePending(id, (ps) => ps.map((q) => (q.key === p.key ? { ...q, sent: false, lost: false, at: Date.now() } : q)));
+    api('POST', `/_tw/api/sessions/${id}/input`, { text: p.text })
+      .then(() => updatePending(id, (ps) => ps.map((q) => (q.key === p.key ? { ...q, sent: true } : q))))
+      .catch((e) => {
+        setError(e.message);
+        updatePending(id, (ps) => ps.map((q) => (q.key === p.key ? { ...q, lost: true } : q)));
+      });
+  };
+  const forget = (p: Pending) => updatePending(id, (ps) => ps.filter((q) => q.key !== p.key));
   // bumped when the agent switches to another conversation (/clear): start over
   const [generation, setGeneration] = useState(0);
 
@@ -766,10 +779,18 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
           {!page && !error && <div class="empty">加载中…</div>}
           {blocks.map((b) => (b.kind === 'tools' ? <ToolGroup key={b.items[0].id} sid={id} items={b.items} onExpand={expand} /> : <Message key={b.it.id} sid={id} it={b.it} onExpand={expand} onRewind={canRewind ? rewind : undefined} />))}
           {pending.map((p) => (
-            <div key={p.key} class="msg user pending">
+            <div key={p.key} class={`msg user pending${p.lost ? ' lost' : ''}`}>
               <div class="bubble">
                 {p.text}
-                <span class="pending-tag">{p.sent ? '已发送' : '发送中…'}</span>
+                {p.lost ? (
+                  <span class="pending-tag lost">
+                    Claude 好像没收到这条
+                    <button onClick={() => resend(p)}>重发</button>
+                    <button onClick={() => forget(p)}>不要了</button>
+                  </span>
+                ) : (
+                  <span class="pending-tag">{p.sent ? '已发送' : '发送中…'}</span>
+                )}
               </div>
             </div>
           ))}
@@ -1040,7 +1061,8 @@ export function Composer(props: {
     update('');
     // slash commands don't show up as chat messages: no placeholder bubble for them
     // /commands and !shell lines never show up as a message of yours in the log
-    const isCommand = /^\s*[/!]/.test(msg);
+    // (a path like /mnt/data/... is a message, not a command)
+    const isCommand = /^\s*(!|\/[\w:-]+(\s|$))/.test(msg);
     const done = isCommand ? () => {} : onPending(msg);
     try {
       await api('POST', `/_tw/api/sessions/${sessionId}/input`, { text: msg });
