@@ -49,6 +49,8 @@ export interface ChatItem {
   text: string;
   tool?: string;
   truncated?: boolean;
+  /** when it was written (ms since epoch) */
+  at?: number;
 }
 
 export interface Page {

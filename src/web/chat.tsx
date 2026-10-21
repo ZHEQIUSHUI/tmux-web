@@ -39,6 +39,7 @@ export function ToolGroup({ sid, items, onExpand }: { sid: number; items: ChatIt
           {last.tool && last.tool !== 'result' ? <b>{last.tool} </b> : null}
           {firstLine}
         </span>
+        <Time at={last.at} />
       </summary>
       {items.map((it) => {
         const { text, images } = splitImages(it.text, imageCtx(sid, it));
@@ -83,6 +84,21 @@ export function Markdown({ sid, id, text }: { sid: number; id: string; text: str
   return <div ref={ref} class="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
+/** When a message was written: just the time today, with the date before that; hover for the full one. */
+function Time({ at }: { at?: number }) {
+  if (!at) return null;
+  const d = new Date(at);
+  const now = new Date();
+  const hm = `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const md = `${d.getMonth() + 1}/${d.getDate()}`;
+  const label = d.toDateString() === now.toDateString() ? hm : d.getFullYear() === now.getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}/${md} ${hm}`;
+  return (
+    <span class="msg-time" title={d.toLocaleString()}>
+      {label}
+    </span>
+  );
+}
+
 export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: ChatItem; onExpand: (it: ChatItem) => void; onRewind?: () => void }) {
   const [actions, setActions] = useState(false);
   const more = it.truncated && (
@@ -99,6 +115,7 @@ export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: Chat
           {text}
           <Images list={images} />
           {more}
+          <Time at={it.at} />
         </div>
         <div class="msg-actions">
           <CopyBtn class="link" label="复制" text={it.truncated ? () => fullText(sid, it) : it.text} />
@@ -124,6 +141,7 @@ export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: Chat
       <Markdown sid={sid} id={it.id} text={it.text} />
       {more}
       <div class="msg-tools">
+        <Time at={it.at} />
         <CopyBtn text={it.truncated ? () => fullText(sid, it) : it.text} title="复制这条回复（Markdown 原文）" />
       </div>
     </div>

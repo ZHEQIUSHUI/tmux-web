@@ -13,6 +13,8 @@ export interface ChatItem {
   /** for tool calls: the tool name */
   tool?: string;
   truncated?: boolean;
+  /** when the line was written (ms since epoch), if the log says */
+  at?: number;
 }
 
 const LIMITS = { user: 4000, assistant: 6000, tool: 240, meta: 300 } as const;
@@ -196,7 +198,8 @@ export function parseLine(agent: Agent, line: string, offset: number, full = fal
     return [];
   }
   const items = agent === 'claude' ? parseClaude(o) : agent === 'codex' ? parseCodex(o) : [];
-  return items.map((it, i) => ({ id: `${offset}:${i}`, ...clip({ ...it, text: pullImages(it.text, images) }, full) }));
+  const at = typeof o.timestamp === 'string' ? Date.parse(o.timestamp) : NaN;
+  return items.map((it, i) => ({ id: `${offset}:${i}`, ...clip({ ...it, text: pullImages(it.text, images) }, full), ...(at > 0 ? { at } : {}) }));
 }
 
 // ---------- reading (through the host, so remote machines work the same as local) ----------

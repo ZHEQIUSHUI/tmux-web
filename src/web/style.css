@@ -684,6 +684,10 @@ label select {
   font-family: var(--mono);
   flex: none;
 }
+.tools summary .msg-time {
+  margin-left: auto;
+  flex: none;
+}
 .tool-last {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2553,8 +2557,22 @@ a.btn {
 }
 .msg-tools {
   display: flex;
+  align-items: center;
   gap: 6px;
   margin-top: 2px;
+}
+/* small and dim: in your bubble it sits after the last line (or under it when the line is full);
+   under a reply it shares the row with the copy button, so neither adds height */
+.msg-time {
+  font-size: 11px;
+  line-height: 1;
+  color: var(--dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.bubble .msg-time {
+  float: right;
+  margin: 6px -4px -4px 10px;
 }
 .msg-tools .copy-btn {
   border-color: transparent;
@@ -2568,6 +2586,17 @@ a.btn {
   }
   .msg.assistant:hover .msg-tools,
   .msg-tools:has(.ok) {
+    opacity: 1;
+  }
+  .msg-tools:has(.msg-time) {
+    opacity: 1;
+  }
+  .msg-tools:has(.msg-time) .copy-btn {
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .msg.assistant:hover .msg-tools .copy-btn,
+  .msg-tools .copy-btn.ok {
     opacity: 1;
   }
 }
