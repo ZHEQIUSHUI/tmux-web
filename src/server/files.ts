@@ -69,6 +69,11 @@ export function streamFile(host: Host, cwd: string, path: string): ChildProcessW
   return host.spawn(['sh', '-c', AT_CWD + `f=$(h "$2"); exec cat -- "$f"`, 'sh', cwd, path]);
 }
 
+/** `length` bytes from `offset` as a stream (audio/video played with seeking). */
+export function streamPart(host: Host, cwd: string, path: string, offset: number, length: number): ChildProcessWithoutNullStreams {
+  return host.spawn(['sh', '-c', AT_CWD + `f=$(h "$2"); tail -c +$(( $3 + 1 )) -- "$f" | head -c $4`, 'sh', cwd, path, String(offset), String(length)]);
+}
+
 /** An image: a line "mtime-size", then the bytes unless that matches `etag` (at most 20MB). */
 export function imageFile(host: Host, cwd: string, path: string, etag: string): Promise<Buffer> {
   return host.sh(

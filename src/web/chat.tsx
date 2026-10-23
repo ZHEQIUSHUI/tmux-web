@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api, type ChatItem, type Page, type SessionInfo, type Status } from './api';
-import { renderMarkdown, shown, splitImages } from './markdown';
+import { mediaKind, renderMarkdown, shown, splitImages } from './markdown';
 import { hydrateMermaid } from './mermaid-lazy';
 import { MAX_SESSIONS, saveChat } from './chat-store';
 import { coarsePointer, liveStream, norm, quotePath, store } from './lib';
@@ -15,11 +15,21 @@ function Images({ list }: { list: { url: string; alt: string }[] }) {
   if (!list.length) return null;
   return (
     <div class="msg-images">
-      {list.map((im) => (
-        <a key={im.url} class="md-img" href={im.url} target="_blank" rel="noopener noreferrer" title="点开查看">
-          <img src={shown(im.url)} alt={im.alt} loading="lazy" decoding="async" />
-        </a>
-      ))}
+      {list.map((im) => {
+        const media = mediaKind(im.url);
+        if (media)
+          // tapping the player is for the player, not the message under it
+          return (
+            <span key={im.url} class={`md-media ${media}`} onClick={(e) => e.stopPropagation()}>
+              {media === 'audio' ? <audio controls preload="metadata" src={im.url} title={im.alt} /> : <video controls preload="metadata" src={im.url} title={im.alt} />}
+            </span>
+          );
+        return (
+          <a key={im.url} class="md-img" href={im.url} target="_blank" rel="noopener noreferrer" title="点开查看">
+            <img src={shown(im.url)} alt={im.alt} loading="lazy" decoding="async" />
+          </a>
+        );
+      })}
     </div>
   );
 }

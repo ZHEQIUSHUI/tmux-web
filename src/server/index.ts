@@ -29,7 +29,7 @@ import {
   type LiveSession,
 } from './sessions.js';
 import { claudeState, followLog, readFull, readImage, readPage } from './transcript.js';
-import { changes, diff, fileSize, imageFile, insideCwd, listDir, readPart, search, streamFile } from './files.js';
+import { changes, diff, fileSize, imageFile, insideCwd, listDir, readPart, search, streamFile, streamPart } from './files.js';
 import { shrink, thumbWidth } from './thumb.js';
 import { hostStats } from './stats.js';
 import { latestVersion, releaseFile } from './app-updates.js';
@@ -303,6 +303,11 @@ const fileError = (e: any): never => {
 };
 
 // Images: served on their own (lazily, cacheable) so message pages stay small.
+// types browsers can play themselves (mkv/mov only when the codecs inside are ones they know)
+const MEDIA_TYPES: Record<string, string> = {
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+  mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', ogv: 'video/ogg', mkv: 'video/x-matroska',
+};
 const IMAGE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml', avif: 'image/avif' };
 function sendImage(res: ServerResponse, type: string, body: Buffer, cache: string, etag?: string, original?: number) {
   res.writeHead(200, {
@@ -373,6 +378,44 @@ for (const [prefix, scope] of FILE_SCOPES) {
     const { p, host, cwd } = at(req, id, url, 'dir');
     const text = await diff(host, cwd, p, url.searchParams.get('path') || '').catch(fileError);
     sendBody(req, res, 200, Buffer.from(text), { 'Content-Type': 'text/plain; charset=utf-8' });
+  });
+
+  /** An audio or video file, e.g. `![](out/demo.mp4)`. Answers Range requests, so the player can seek. */
+  route('GET', `${prefix}/file-media`, async (req, res, [id], url) => {
+    const { p, host, cwd } = at(req, id, url);
+    const type = MEDIA_TYPES[p.split('.').pop()!.toLowerCase()];
+    if (!type) throw new HttpError(400, '不是音频或视频文件');
+    const size = await fileSize(host, cwd, p).catch(fileError);
+    let start = 0;
+    let end = size - 1;
+    const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || '').trim());
+    if (range && (range[1] || range[2])) {
+      if (range[1]) {
+        start = Number(range[1]);
+        if (range[2]) end = Math.min(Number(range[2]), size - 1);
+      } else start = Math.max(0, size - Number(range[2]));
+      if (start > end) {
+        res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+        return void res.end();
+      }
+    }
+    res.writeHead(range ? 206 : 200, {
+      'Content-Type': type,
+      'Content-Length': end - start + 1,
+      'Accept-Ranges': 'bytes',
+      ...(range ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
+      'Cache-Control': 'private, no-cache',
+    });
+    if (end < start) return void res.end();
+    const child = streamPart(host, cwd, p, start, end - start + 1);
+    child.stdout.pipe(res);
+    child.stderr.resume();
+    child.on('error', () => res.destroy());
+    // seeking drops the request for the old position: stop reading it
+    res.on('close', () => {
+      child.stdout.destroy();
+      child.kill();
+    });
   });
 
   /** An image file, e.g. `![](out/plot.png)` written by the agent. */

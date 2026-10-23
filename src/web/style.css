@@ -2122,6 +2122,34 @@ a.btn {
 .msg-images .md-img img {
   max-height: 200px;
 }
+/* ![](x.mp3) / ![](x.mp4): a player in place of the image */
+.md-media {
+  display: block;
+  margin: 6px 0;
+  max-width: 100%;
+}
+.md-media video {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  border-radius: 8px;
+  background: #000;
+}
+.md-media audio {
+  display: block;
+  width: 360px;
+  max-width: 100%;
+}
+.md-media-alt {
+  display: block;
+  font-size: 12px;
+  color: var(--dim);
+  margin-top: 2px;
+}
+.msg-images .md-media {
+  flex-basis: 100%;
+  margin: 0;
+}
 
 /* mermaid: source until rendered (on demand) */
 .mermaid-block {

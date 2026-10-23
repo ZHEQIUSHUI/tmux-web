@@ -30,8 +30,20 @@ export function joinPath(base: string, rel: string): string {
   return (base.startsWith('/') ? '/' : '') + out.join('/');
 }
 let ctx: ImageCtx | null = null;
+/** an <audio>/<video> without its own src was just opened (see the html renderer) */
+let openMedia = false;
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+const AUDIO_EXT = /\.(mp3|wav|ogg|oga|opus|m4a|aac|flac)$/i;
+const VIDEO_EXT = /\.(mp4|m4v|mov|webm|ogv|mkv)$/i;
+
+/** `![](x.mp3)` / `![](x.mp4)` show a player instead of an image: which one, by the file's extension. */
+export function mediaKind(url: string): 'audio' | 'video' | null {
+  let path = url.split(/[?#]/)[0];
+  const m = /\/file-media\?path=([^&]*)/.exec(url);
+  if (m) path = decodeURIComponent(m[1]);
+  return AUDIO_EXT.test(path) ? 'audio' : VIDEO_EXT.test(path) ? 'video' : null;
+}
 
 /**
  * URL to show an image reference with, or null to keep it a plain link. Embedded images come from
@@ -52,7 +64,8 @@ export function imageUrl(href: string, c: ImageCtx | null = ctx): string | null 
     /* keep as written */
   }
   if (c.base) path = joinPath(c.base, path);
-  return IMAGE_EXT.test(path) ? `${c.api}/file-image?path=${encodeURIComponent(path)}` : null;
+  if (IMAGE_EXT.test(path)) return `${c.api}/file-image?path=${encodeURIComponent(path)}`;
+  return AUDIO_EXT.test(path) || VIDEO_EXT.test(path) ? `${c.api}/file-media?path=${encodeURIComponent(path)}` : null;
 }
 
 /**
@@ -61,8 +74,22 @@ export function imageUrl(href: string, c: ImageCtx | null = ctx): string | null 
  */
 export const shown = (url: string, width = 1280) => (/^\/_tw\/api\/.*\/(file-)?image\?/.test(url) ? `${url}&w=${width}` : url);
 
-export const imageHtml = (url: string, alt: string) =>
-  `<a class="md-img" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="点开查看"><img src="${esc(shown(url))}" alt="${esc(alt)}" loading="lazy" decoding="async"></a>`;
+export const imageHtml = (url: string, alt: string) => {
+  const media = mediaKind(url);
+  // preload="metadata": only the length and first frame until it's played
+  if (media)
+    return `<span class="md-media ${media}"><${media} controls preload="metadata" src="${esc(url)}"${alt ? ` title="${esc(alt)}"` : ''}></${media}>${alt ? `<span class="md-media-alt">${esc(alt)}</span>` : ''}</span>`;
+  return `<a class="md-img" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="点开查看"><img src="${esc(shown(url))}" alt="${esc(alt)}" loading="lazy" decoding="async"></a>`;
+};
+
+/** `<audio src="x.wav">` / `<video><source src="x.mp4"></video>`: the file it plays, if any. */
+const MEDIA_TAG = /<(audio|video)\b([^>]*)>(?:([\s\S]*?)<\/\1\s*>)?/gi;
+const srcOf = (attrs: string) => /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attrs)?.slice(1).find((v) => v !== undefined) ?? null;
+function mediaTagUrl(attrs: string, inner: string | undefined, c: ImageCtx | null): string | null {
+  const src = srcOf(attrs) ?? (inner && /<source\b([^>]*)>/i.exec(inner) ? srcOf(/<source\b([^>]*)>/i.exec(inner)![1]) : null);
+  const url = src ? imageUrl(src, c) : null;
+  return url && mediaKind(url) ? url : null;
+}
 
 const IMAGE_MD = /!\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)/g;
 /** Plain-text items (your messages, tool output): pull the image references out to show below. */
@@ -72,6 +99,11 @@ export function splitImages(text: string, c: ImageCtx): { text: string; images: 
     const url = imageUrl(href, c);
     if (!url) return all;
     images.push({ url, alt });
+    return '';
+  }).replace(MEDIA_TAG, (all, _tag: string, attrs: string, inner?: string) => {
+    const url = mediaTagUrl(attrs, inner, c);
+    if (!url) return all;
+    images.push({ url, alt: '' });
     return '';
   });
   return { text: images.length ? rest.trim() : text, images };
@@ -83,7 +115,31 @@ const md = new Marked({
   breaks: true,
   renderer: {
     html({ text }: Tokens.HTML | Tokens.Tag) {
-      return esc(text);
+      // the one kind of HTML that becomes something: an <audio>/<video> of a file (as ![](x.mp4) does);
+      // a lone closing tag left over from an inline one goes with it. Everything else stays text.
+      if (/^\s*<\/(audio|video)\s*>\s*$/i.test(text)) {
+        openMedia = false;
+        return '';
+      }
+      // inside a paragraph marked hands over <video>, <source src=…> and </video> one by one
+      if (/^\s*<(audio|video)\b[^>]*>\s*$/i.test(text) && !srcOf(text)) {
+        openMedia = true;
+        return '';
+      }
+      const source = openMedia && /^\s*<source\b([^>]*)>\s*$/i.exec(text);
+      if (source) {
+        const url = mediaTagUrl(source[1], undefined, ctx);
+        if (url) return imageHtml(url, '');
+      }
+      let out = '';
+      let last = 0;
+      for (const t of text.matchAll(MEDIA_TAG)) {
+        const url = mediaTagUrl(t[2], t[3], ctx);
+        if (!url) continue;
+        out += esc(text.slice(last, t.index)) + imageHtml(url, '');
+        last = t.index! + t[0].length;
+      }
+      return out + esc(text.slice(last));
     },
     link({ href, title, tokens }: Tokens.Link) {
       const inner = this.parser.parseInline(tokens);
@@ -116,6 +172,7 @@ const md = new Marked({
 
 export function renderMarkdown(src: string, images?: ImageCtx): string {
   ctx = images ?? null;
+  openMedia = false;
   try {
     return md.parse(src, { async: false }) as string;
   } finally {

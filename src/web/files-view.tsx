@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { api } from './api';
 import { ago, copyText, store } from './lib';
-import { renderMarkdown, shown } from './markdown';
+import { mediaKind, renderMarkdown, shown } from './markdown';
 import { CopyBtn, Icon, Modal } from './ui';
 
 // File browser: a session's working directory (files tab) or a whole host (global browser). Read
@@ -335,6 +335,8 @@ function Row({ name, dir, meta, onOpen, onActions, onPick }: { name: string; dir
 
 function FileViewer({ api: base, path, onBack, onActions }: { api: string; path: string; onBack: () => void; onActions: () => void }) {
   const isImage = IMAGE.test(path);
+  // audio/video: played in place, the browser fetches the parts it needs
+  const media = mediaKind(path);
   const isMd = MARKDOWN.test(path);
   const [bytes, setBytes] = useState<Uint8Array | null>(null);
   const [from, setFrom] = useState(0); // offset of bytes[0]
@@ -371,8 +373,8 @@ function FileViewer({ api: base, path, onBack, onActions }: { api: string; path:
   };
   useEffect(() => {
     setBytes(null);
-    if (!isImage) void load(0, false);
-    // an image is shown shrunk: its real size goes next to 打开原图
+    if (!isImage && !media) void load(0, false);
+    // an image is shown shrunk: its real size goes next to 打开原图 (a player shows the size too)
     else
       fetch(`${base}/files/read?path=${q(path)}&offset=0&length=1`, { credentials: 'same-origin' })
         .then((r) => setTotal(Number(r.headers.get('X-File-Size')) || 0))
@@ -420,7 +422,11 @@ function FileViewer({ api: base, path, onBack, onActions }: { api: string; path:
         </button>
       </div>
       {error && <p class="error pad">{error}</p>}
-      {isImage ? (
+      {media ? (
+        <div class={`pad md-media ${media}`}>
+          {media === 'audio' ? <audio controls preload="metadata" src={`${base}/file-media?path=${q(path)}`} /> : <video controls preload="metadata" src={`${base}/file-media?path=${q(path)}`} />}
+        </div>
+      ) : isImage ? (
         <a class="md-img fv-image" href={img} target="_blank" rel="noopener noreferrer">
           <img src={shown(img, 2048)} alt={path} />
         </a>
