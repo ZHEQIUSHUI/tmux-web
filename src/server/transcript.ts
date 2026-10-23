@@ -83,6 +83,23 @@ const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 const stripTags = (s: string) => stripAnsi(s.replace(/<\/?[a-z-]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 const tagText = (s: string, tag: string) => stripAnsi(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(s)?.[1] ?? '').replace(/\s+/g, ' ').trim();
 
+/**
+ * A turn Claude Code wrote into the conversation for itself, not one the person typed: a subagent's
+ * message (shown folded, like tool output, since it can be long) or a background-task notice.
+ */
+function notice(content: string): Omit<ChatItem, 'id'>[] {
+  const peer = /^\s*<agent-message\b[^>]*>([\s\S]*?)(<\/agent-message>\s*)?$/.exec(content);
+  if (peer) {
+    const text = stripAnsi(peer[1]).trim();
+    return text ? [{ role: 'tool', tool: '子任务消息', text }] : [];
+  }
+  const summary = tagText(content, 'summary').replace(/^Monitor event: "(.*)"$/, '监控「$1」');
+  const event = tagText(content, 'event');
+  const status = tagText(content, 'status');
+  const text = [summary, event].filter(Boolean).join(' → ') || stripTags(content);
+  return text ? [{ role: 'meta', text: `后台任务${status ? `（${status}）` : ''}：${text}` }] : [];
+}
+
 function parseClaude(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
   // a message sent while Claude was busy: queued, then handed to the running turn as an
   // attachment (the queue-operation lines around it are bookkeeping and would duplicate it)
@@ -90,6 +107,10 @@ function parseClaude(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
     const a = o.attachment;
     const text = unwrapPasted(typeof a.prompt === 'string' ? a.prompt : blockText(a.prompt));
     if (!text?.trim()) return [];
+    // only what the person typed is theirs: the queue also carries background-task notices and
+    // messages from subagents ("peer"), which used to show up as if you had sent them
+    const origin = a.origin?.kind as string | undefined;
+    if ((origin && origin !== 'human') || a.isMeta || a.commandMode === 'task-notification') return notice(text);
     return a.commandMode && a.commandMode !== 'prompt' ? [{ role: 'meta', text: `${a.commandMode}: ${text}` }] : [{ role: 'user', text }];
   }
   if ((o.type !== 'user' && o.type !== 'assistant') || o.isSidechain) return [];
@@ -110,13 +131,7 @@ function parseClaude(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
     // Claude Code injects notifications (background tasks, monitors) as user turns; only
     // origin.kind "human" is something the person actually typed
     const origin = o.origin?.kind as string | undefined;
-    if ((origin && origin !== 'human') || o.promptSource === 'system' || /^\s*<task-notification>/.test(content)) {
-      const summary = tagText(content, 'summary').replace(/^Monitor event: "(.*)"$/, '监控「$1」');
-      const event = tagText(content, 'event');
-      const status = tagText(content, 'status');
-      const text = [summary, event].filter(Boolean).join(' → ') || stripTags(content);
-      return text ? [{ role: 'meta', text: `后台任务${status ? `（${status}）` : ''}：${text}` }] : [];
-    }
+    if ((origin && origin !== 'human') || o.promptSource === 'system' || /^\s*<(task-notification|agent-message)\b/.test(content)) return notice(content);
     if (/^\s*<(command-name|command-message|command-args)>/.test(content)) {
       const cmd = tagText(content, 'command-name') || `/${tagText(content, 'command-message')}`;
       const args = tagText(content, 'command-args');

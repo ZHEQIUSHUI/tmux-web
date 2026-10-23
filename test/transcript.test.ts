@@ -31,6 +31,14 @@ test('claude: message sent while busy (queued_command attachment)', () => {
   assert.deepEqual(items({ type: 'queue-operation', operation: 'enqueue', content: '现在咋样了' }), []);
 });
 
+test('claude: queued messages from subagents and task notices are not shown as yours', () => {
+  const peer = { type: 'attachment', attachment: { type: 'queued_command', prompt: '<agent-message from="a2a01c">\n线 A：进展如下\n</agent-message>', commandMode: 'prompt', isMeta: true, origin: { kind: 'peer', from: 'a2a01c' } } };
+  assert.deepEqual(items(peer), [{ role: 'tool', tool: '子任务消息', text: '线 A：进展如下' }]);
+  const task = { type: 'attachment', attachment: { type: 'queued_command', prompt: '<task-notification>\n<task-id>x</task-id>\n<status>completed</status>\n<summary>Agent "线 A" finished</summary>\n</task-notification>', commandMode: 'task-notification', origin: { kind: 'task-notification' } } };
+  assert.deepEqual(items(task), [{ role: 'meta', text: '后台任务（completed）：Agent "线 A" finished' }]);
+  assert.deepEqual(items(cc.user('<agent-message from="b1">直接到达的消息</agent-message>', { origin: { kind: 'peer' } })), [{ role: 'tool', tool: '子任务消息', text: '直接到达的消息' }]);
+});
+
 test('claude: assistant text and tool calls; thinking dropped', () => {
   const a = cc.assistant([
     { type: 'thinking', thinking: 'hmm' },
