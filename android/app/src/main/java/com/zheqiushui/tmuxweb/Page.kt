@@ -103,6 +103,7 @@ fun AppScreen(m: AppModel, a: Actions, web: WebView) {
           Screen.Home -> HomeScreen(m, a)
           is Screen.Editor -> EditorScreen(m, a, s)
           Screen.Keys -> KeysScreen(m, a)
+          Screen.Share -> ShareScreen(m, a)
           else -> {}
         }
       }

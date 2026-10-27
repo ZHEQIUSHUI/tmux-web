@@ -12,6 +12,8 @@
 - **全局文件浏览器**（侧边栏 / 手机首页顶部的文件图标）：浏览任意可用主机，从主目录开始，也可以进入根目录；可以在任意目录「在这里新建会话」
 - 可以通过 SSH 管理**多台主机**；支持账号和分组
 - 可以**导入主机上已有的 tmux 会话**：里面的程序不重启，你在本机照常 attach，网页上同时可见
+- **Claude Code / Codex 历史会话都能继续**：从网页新建时可以选择旧对话；Codex 的 rollout、标题和最近提问会自动识别
+- **Mac / 安卓 App 可以在局域网里共享配置**：选择服务器和 SSH 私钥，设置端口与访问密码后，另一台设备输入地址和密码即可导入；完全相同的配置和私钥会自动跳过
 - 手机端按终端 App 的方式设计：会话卡片列表、终端附加键栏（Ctrl/Alt/Esc/方向键/粘贴）、双指缩放字号，可以添加到主屏幕
 
 也可以用 App：[Mac](mac/README.md) 和 [安卓](android/README.md)。它们自动维持 SSH 端口转发并打开网页，提醒会变成系统通知，并且会自动更新。下载：[最新版本](https://github.com/ZHEQIUSHUI/tmux-web/releases/latest)。
@@ -101,6 +103,7 @@ agent 在主机上启动的网页（比如 `npm run dev` 监听在 5173），可
 | `PORT` | `8080` | |
 | `COOKIE_SECURE` | `auto` | `auto` 表示根据请求是否为 https（包括 `X-Forwarded-Proto`）决定 |
 | `TRUST_PROXY` | `true` | 是否信任 `X-Forwarded-*` 头（用于限速时识别 IP 以及判断 https）|
+| `CODEX_ARGS` | `--yolo --profile xx` | 新建 Codex 会话时附加的启动参数；设为空字符串可启动不带参数的 `codex` |
 
 `/data` 里保存 SQLite 数据库（账号、分组、主机、会话）和 SSH 私钥。SSH 私钥能登录你的主机，请保护好这个目录。如果想限制这把钥匙只能从本机使用，可以在 `authorized_keys` 里对应那一行前面加上 `from="127.0.0.1"`。
 

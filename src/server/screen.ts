@@ -12,8 +12,10 @@ export type AgentStatus = 'starting' | 'idle' | 'busy' | 'waiting' | 'offline' |
 // no ellipsis) and Codex's "Working (3s • esc to interrupt)"
 // queued messages ("Press up to edit queued messages") only exist while a turn is running
 const BUSY = /esc to interrupt|Press up to edit queued messages|^\s*\S?\s*[A-Z][\w-]*…\s*\(\s*\d+[hms]|^\s*\S?\s*Working\s*\(\d+[hms]/im;
-// permission prompts / pickers of Claude Code and Codex
-const WAITING = [/Do you want to /, /^\s*[❯›>]\s*\d+\.\s/m, /Enter to confirm/, /\(y\/n\)/i, /Press enter to continue/i, /Yes, (allow|proceed)/i];
+// A confirmation without a numbered menu (for example a shell's y/n question). Only the very
+// bottom of the screen counts: the conversation above can quote these words without asking us
+// anything, which used to leave Codex sessions stuck on "等待确认".
+const PLAIN_CONFIRM = /(?:\(y\/n\)|Press enter to continue|Enter to confirm|Do you want to .*\?)/i;
 const MODES: [RegExp, string][] = [
   [/bypass permissions on/i, 'bypassPermissions'],
   [/accept edits on/i, 'acceptEdits'],
@@ -38,10 +40,12 @@ const OPTION = /^\s*([❯›>]\s*)?(\d{1,2})[.)]\s+(.*\S)\s*$/;
 export function findChoices(lines: string[]): Choices | null {
   const options: Choices['options'] = [];
   let question = '';
+  let optionEnd = -1;
   for (let i = lines.length - 1; i >= Math.max(0, lines.length - 40); i--) {
     const l = lines[i].replace(/^\s*│\s?/, '').replace(/\s?│\s*$/, '');
     const m = OPTION.exec(l);
     if (m) {
+      if (optionEnd === -1) optionEnd = i;
       options.unshift({ n: Number(m[2]), label: m[3].trim(), selected: !!m[1] });
       continue;
     }
@@ -55,6 +59,11 @@ export function findChoices(lines: string[]): Choices | null {
   const run = start === -1 ? [] : options.slice(start);
   const consecutive = run.every((o, i) => o.n === i + 1);
   if (!run.length || !consecutive || !run.some((o) => o.selected)) return null;
+  // Codex echoes old menus and user prompts above its live composer. A prompt/input line below
+  // the options means this menu is history, not something waiting for a choice now.
+  for (const l of lines.slice(optionEnd + 1)) {
+    if (PROMPT_LINE.test(l) && !OPTION.test(l.replace(/^\s*│\s?/, '').replace(/\s?│\s*$/, ''))) return null;
+  }
   return { question, options: run };
 }
 
@@ -206,7 +215,9 @@ export class Screen {
     // "✔ Update installed · Restart to update" in the footer: a new version is waiting
     // (shown just above the input box, so look a bit higher than the footer)
     const update = /(Update installed|·)\s*·?\s*Restart to (update|apply)/i.test(lines.slice(-8).join('\n'));
-    const waiting = WAITING.some((re) => re.test(text));
+    const choices = findChoices(lines);
+    const bottom = lines.filter((l) => l.trim()).slice(-3).join('\n');
+    const waiting = choices !== null || PLAIN_CONFIRM.test(bottom);
     const status: AgentStatus = waiting ? 'waiting' : BUSY.test(text) ? 'busy' : 'idle';
 
     let end = lines.length;
@@ -243,7 +254,7 @@ export class Screen {
     while (tail.length && !tail[0].trim()) tail.shift();
     // background work Claude Code is keeping alive ("1 shell, 1 monitor"); "← 1 agent" is just a hint
     const background = BACKGROUND.exec(footer)?.[0] ?? '';
-    return { status, preview: tail.join('\n'), mode, update, background, choices: waiting ? findChoices(lines) : null, suggestion: status === 'idle' ? this.promptSuggestion() : '' };
+    return { status, preview: tail.join('\n'), mode, update, background, choices: waiting ? choices : null, suggestion: status === 'idle' ? this.promptSuggestion() : '' };
   }
 
   dispose() {

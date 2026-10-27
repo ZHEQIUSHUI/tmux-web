@@ -142,6 +142,7 @@ fun HomeScreen(m: AppModel, a: Actions) {
               IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "更多") }
               DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 DropdownMenuItem(text = { Text("私钥") }, leadingIcon = { Icon(KeyIcon, null) }, onClick = { menu = false; a.keys() })
+                DropdownMenuItem(text = { Text("共享配置") }, leadingIcon = { Icon(ShareIcon, null) }, onClick = { menu = false; a.share() })
                 DropdownMenuItem(text = { Text("检查更新") }, leadingIcon = { Icon(UpdateIcon, null) }, onClick = { menu = false; a.checkUpdates() })
                 DropdownMenuItem(text = { Text("关于") }, leadingIcon = { Icon(Icons.Filled.Info, null) }, onClick = { menu = false; about = true })
               }

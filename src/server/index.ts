@@ -13,6 +13,7 @@ import {
   backend,
   claudeHistory,
   claudeHistoryCached,
+  codexHistoryCached,
   listExistingTmux,
   createSession,
   deleteSession,
@@ -46,7 +47,7 @@ function folderView(f: FolderRow) {
 }
 
 function publicUser(u: UserRow) {
-  return { id: u.id, username: u.username, role: u.role, disabled: !!u.disabled, groups: groupIdsOf(u.id) };
+  return { id: u.id, username: u.username, role: u.role, disabled: !!u.disabled, groups: groupIdsOf(u.id), defaults: { codexArgs: config.codexArgs } };
 }
 
 function requireUser(req: IncomingMessage): UserRow {
@@ -132,7 +133,7 @@ route('POST', '/_tw/api/sessions', async (req, res) => {
   if (groupId !== null && user.role !== 'admin' && !groupIdsOf(user.id).includes(groupId)) throw new HttpError(400, '不在该分组');
   const args = String(b.args || '').replace(/[\r\n]/g, ' ').slice(0, 500);
   const resumeId = b.resumeId ? String(b.resumeId) : undefined;
-  if (resumeId && (agent !== 'claude' || !/^[0-9a-f-]{36}$/.test(resumeId))) throw new HttpError(400, '历史会话无效');
+  if (resumeId && (agent === 'bash' || !/^[0-9a-f-]{36}$/.test(resumeId))) throw new HttpError(400, '历史会话无效');
   try {
     const row = await createSession(user, {
       resumeId,
@@ -860,6 +861,18 @@ route('GET', '/_tw/api/hosts/:id/claude-history', async (req, res, [id]) => {
   if (!h || !canUseHost(user, h)) throw new HttpError(404, '主机不存在');
   try {
     sendJson(req, res, 200, await claudeHistoryCached(getHost(h.id)!));
+  } catch (e: any) {
+    throw new HttpError(502, e.message);
+  }
+});
+
+/** Recent Codex conversations on a host, to continue one in a new session. */
+route('GET', '/_tw/api/hosts/:id/codex-history', async (req, res, [id]) => {
+  const user = requireUser(req);
+  const h = q.hostById.get(Number(id));
+  if (!h || !canUseHost(user, h)) throw new HttpError(404, '主机不存在');
+  try {
+    sendJson(req, res, 200, await codexHistoryCached(getHost(h.id)!));
   } catch (e: any) {
     throw new HttpError(502, e.message);
   }

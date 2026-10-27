@@ -159,6 +159,14 @@ class ProfileStore(context: Context) {
     save()
   }
 
+  /** a shared bundle: all new keys and servers land together, with one write */
+  fun upsertImported(importedKeys: List<SshKey>, importedProfiles: List<Profile>) {
+    keys = importedKeys
+    profiles = importedProfiles
+    if (currentId == null) currentId = profiles.firstOrNull()?.id
+    save()
+  }
+
   /** gone from the list; the servers that used it log in without a key from now on */
   fun removeKey(id: String) {
     keys = keys.filter { it.id != id }

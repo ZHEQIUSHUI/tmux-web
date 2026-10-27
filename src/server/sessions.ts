@@ -6,7 +6,7 @@ import { TmuxBackend } from './backend/tmux.js';
 import type { PaneStream, PaneTarget, SessionBackend } from './backend/types.js';
 import { getHost, shq, type Host } from './host.js';
 import { Screen, type AgentStatus, type Choices } from './screen.js';
-import { claudeTranscript, findCodexRollout } from './transcript.js';
+import { claudeTranscript, codexTranscript, codexUserText, findCodexRollout } from './transcript.js';
 
 export const backend: SessionBackend = new TmuxBackend();
 
@@ -21,8 +21,9 @@ const INSTALL_HINT: Record<string, string[]> = {
  * The pane's command. It runs in a login shell so the agent sees the same PATH and environment
  * as an interactive login on the host; when the agent exits, a shell stays in the pane.
  */
-function agentCommand(row: SessionRow, resume: boolean, fork = false): string {
-  const extra = row.args.trim() ? ' ' + row.args.trim() : '';
+export function agentCommand(row: SessionRow, resume: boolean, fork = false): string {
+  const args = row.args.trim() || (row.agent === 'codex' ? config.codexArgs.trim() : '');
+  const extra = args ? ' ' + args : '';
   let cmd = '';
   if (row.agent === 'claude') {
     const id = row.agent_session_id!;
@@ -32,7 +33,7 @@ function agentCommand(row: SessionRow, resume: boolean, fork = false): string {
       ? `if ls "$HOME"/.claude/projects/*/${id}.jsonl >/dev/null 2>&1; then ${resumeCmd}; else claude --session-id ${id}${extra}; fi`
       : `claude --session-id ${id}${extra}`;
   } else if (row.agent === 'codex') {
-    cmd = resume && row.agent_session_id ? `codex resume ${row.agent_session_id}${extra}` : `codex${extra}`;
+    cmd = resume && row.agent_session_id ? `codex ${fork ? 'fork' : 'resume'} ${row.agent_session_id}${extra}` : `codex${extra}`;
   }
   if (cmd) cmd = `if command -v ${row.agent} >/dev/null; then ${cmd}; else printf '%s\\n' ${INSTALL_HINT[row.agent].map(shq).join(' ')}; fi; `;
   return `exec bash -lc ${shq(`export LANG="\${LANG:-C.UTF-8}"; ${cmd}exec bash -l`)}`;
@@ -441,8 +442,14 @@ export class LiveSession extends EventEmitter {
       const file = await claudeTranscript(host, r.agent_session_id);
       if (file) found = { id: r.agent_session_id, file };
     } else if (r.agent === 'codex') {
-      const claimed = new Set(q.sessions.all().map((s) => s.transcript_path).filter((p): p is string => !!p));
-      found = await findCodexRollout(host, r.cwd, r.created_at, claimed);
+      if (r.agent_session_id) {
+        const file = await codexTranscript(host, r.agent_session_id);
+        if (file) found = { id: r.agent_session_id, file };
+      }
+      if (!found) {
+        const claimed = new Set(q.sessions.all().map((s) => s.transcript_path).filter((p): p is string => !!p));
+        found = await findCodexRollout(host, r.cwd, r.created_at, claimed);
+      }
     }
     if (!found) return null;
     q.setTranscript.run(found.id, found.file, r.id);
@@ -534,6 +541,21 @@ async function claudeTitle(host: Host, file: string): Promise<string> {
   return last.customTitle || last.agentName || last.aiTitle || '';
 }
 
+/** Codex's generated thread name, stored in ~/.codex/session_index.jsonl. */
+async function codexTitle(host: Host, id: string): Promise<string> {
+  const out = await host.shText(`f="$HOME/.codex/session_index.jsonl"; [ -f "$f" ] || exit 0; tail -n 1000 "$f"`);
+  const lines = out.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const o = JSON.parse(lines[i]);
+      if (o.id === id && typeof o.thread_name === 'string') return o.thread_name.replace(/\s+/g, ' ').trim();
+    } catch {
+      /* partial */
+    }
+  }
+  return '';
+}
+
 const ACTIVITY_EVERY_MS = 10_000;
 
 /**
@@ -570,9 +592,14 @@ async function pollActivity() {
       }
       // titles change rarely: re-read only for sessions whose log moved since
       for (const sess of list) {
-        if (sess.row.agent !== 'claude' || sess.titleAt >= sess.activityAt) continue;
+        if (sess.row.agent === 'bash' || sess.titleAt >= sess.activityAt) continue;
         sess.titleAt = sess.activityAt;
-        const title = await claudeTitle(host, sess.row.transcript_path!).catch(() => sess.title);
+        const title =
+          sess.row.agent === 'claude'
+            ? await claudeTitle(host, sess.row.transcript_path!).catch(() => sess.title)
+            : sess.row.agent_session_id
+              ? await codexTitle(host, sess.row.agent_session_id).catch(() => sess.title)
+              : sess.title;
         if (title !== sess.title) {
           sess.title = title;
           hub.emit('list');
@@ -616,14 +643,19 @@ export async function createSession(
     throw new Error(`主机不可用：${e.message}`);
   });
   if (input.resumeId && !input.fork) {
-    // two claude processes on one conversation would interleave its log
-    const running = (await claudeHistory(host, 200)).find((h) => h.id === input.resumeId)?.running;
-    if (running) throw new Error(`这个会话正在${running.tmux ? ` tmux「${running.tmux}」` : '别处'}运行，请选择「复制一份继续」，或直接导入那个 tmux 会话`);
+    // two agent processes on one conversation would interleave its log
+    const history = input.agent === 'codex' ? await codexHistory(host, 200) : await claudeHistory(host, 200);
+    const running = history.find((h) => h.id === input.resumeId)?.running;
+    if (running) {
+      const where = running.tmux ? ` tmux「${running.tmux}」` : '别处';
+      throw new Error(input.agent === 'codex' ? `这个 Codex 会话正在${where}运行，请直接导入那个 tmux 会话` : `这个会话正在${where}运行，请选择「复制一份继续」，或直接导入那个 tmux 会话`);
+    }
   }
   const cwd = await prepareCwd(host, input.cwd || '~');
-  const agentSessionId = input.agent === 'claude' ? input.resumeId || crypto.randomUUID() : null;
+  const agentSessionId = input.agent === 'claude' ? input.resumeId || crypto.randomUUID() : input.agent === 'codex' ? input.resumeId || null : null;
+  const args = input.args.trim() || (input.agent === 'codex' ? config.codexArgs.trim() : '');
   const name = input.name || `${input.agent} ${cwd.split('/').pop() || '~'}`;
-  const info = q.insertSession.run(name, owner.id, input.groupId, input.share, input.agent, agentSessionId, cwd, input.args, input.hostId, Date.now());
+  const info = q.insertSession.run(name, owner.id, input.groupId, input.share, input.agent, agentSessionId, cwd, args, input.hostId, Date.now());
   const row = q.sessionById.get(Number(info.lastInsertRowid))!;
   const s = new LiveSession(row);
   live.set(row.id, s);
@@ -634,6 +666,7 @@ export async function createSession(
     q.deleteSession.run(row.id);
     throw e;
   }
+  clearHistoryCaches(input.hostId);
   hub.emit('list');
   return row;
 }
@@ -649,6 +682,7 @@ export async function restartSession(id: number) {
 }
 
 export async function deleteSession(id: number) {
+  const hostId = q.sessionById.get(id)?.host_id;
   const s = live.get(id);
   if (s) {
     s.stop();
@@ -657,6 +691,7 @@ export async function deleteSession(id: number) {
     live.delete(id);
   }
   q.deleteSession.run(id);
+  if (hostId !== undefined) clearHistoryCaches(hostId);
   hub.emit('list');
 }
 
@@ -686,6 +721,10 @@ export interface ExistingTmux {
   agent: Agent;
   /** Claude Code conversation running in it, if any */
   claudeSession?: string;
+  /** Codex conversation running in it, if its command line names one */
+  codexSession?: string;
+  /** tmux session creation time (ms), used to find the agent log it is writing */
+  createdAt: number;
   attached: boolean;
   /** already shown in tmux-web */
   adoptedAs?: number;
@@ -694,11 +733,15 @@ export interface ExistingTmux {
 /** The user's own tmux sessions on a host (default server), with what runs in them. */
 export async function listExistingTmux(host: Host, socket = 'default'): Promise<ExistingTmux[]> {
   const out = await host.shText(
-    `tmux -L "$1" list-panes -a -F '#{session_name}\t#{window_index}.#{pane_index}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}\t#{session_attached}' 2>/dev/null | ` +
-      `while IFS="$(printf '\t')" read -r s wp pp cmd cwd att; do ` +
-      `[ "$wp" = "0.0" ] || continue; sid=; for p in $pp $(pgrep -P "$pp" 2>/dev/null); do f="$HOME/.claude/sessions/$p.json"; ` +
-      `[ -f "$f" ] && sid=$(sed -n 's/.*"sessionId" *: *"\\([0-9a-f-]*\\)".*/\\1/p' "$f" | head -n1) && break; done; ` +
-      `printf '%s\t%s\t%s\t%s\t%s\n' "$s" "$cmd" "$cwd" "$att" "$sid"; done`,
+    `tmux -L "$1" list-panes -a -F '#{session_name}\t#{window_index}.#{pane_index}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}\t#{session_attached}\t#{session_created}' 2>/dev/null | ` +
+      `while IFS="$(printf '\t')" read -r s wp pp cmd cwd att created; do ` +
+      `[ "$wp" = "0.0" ] || continue; sid=; csid=; acmd=$cmd; ` +
+      `for p in $pp $(pgrep -P "$pp" 2>/dev/null); do f="$HOME/.claude/sessions/$p.json"; ` +
+      `if [ -f "$f" ]; then sid=$(sed -n 's/.*"sessionId" *: *"\\([0-9a-f-]*\\)".*/\\1/p' "$f" | head -n1) && acmd=claude && break; fi; ` +
+      `a=$(ps -o command= -p "$p" 2>/dev/null); case "$a" in ` +
+      `*codex*) acmd=codex; csid=$(printf '%s\\n' "$a" | sed -n 's/.*codex resume \\([0-9a-f-]\\{36\\}\\).*/\\1/p; s/.*codex fork \\([0-9a-f-]\\{36\\}\\).*/\\1/p' | head -n1); break;; ` +
+      `*claude*) acmd=claude; break;; esac; done; ` +
+      `printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$s" "$acmd" "$cwd" "$att" "$sid" "$csid" "$created"; done`,
     [socket],
   );
   const adopted = new Map(
@@ -711,9 +754,20 @@ export async function listExistingTmux(host: Host, socket = 'default'): Promise<
     .split('\n')
     .filter(Boolean)
     .map((line) => {
-      const [name, command, cwd, att, sid] = line.split('\t');
-      const agent: Agent = sid || command === 'claude' ? 'claude' : command === 'codex' ? 'codex' : 'bash';
-      return { socket, name, cwd, command, agent, claudeSession: sid || undefined, attached: att !== '0', adoptedAs: adopted.get(`${socket}/${name}`) };
+      const [name, command, cwd, att, sid, csid, created] = line.split('\t');
+      const agent: Agent = sid || command === 'claude' ? 'claude' : csid || command === 'codex' ? 'codex' : 'bash';
+      return {
+        socket,
+        name,
+        cwd,
+        command,
+        agent,
+        claudeSession: sid || undefined,
+        codexSession: csid || undefined,
+        createdAt: Number(created) * 1000 || Date.now(),
+        attached: att !== '0',
+        adoptedAs: adopted.get(`${socket}/${name}`),
+      };
     });
 }
 
@@ -722,11 +776,23 @@ export async function adoptSession(owner: UserRow, host: Host, socket: string, n
   const found = (await listExistingTmux(host, socket)).find((e) => e.name === name);
   if (!found) throw new Error(`tmux 会话 ${name} 不存在`);
   if (found.adoptedAs) return q.sessionById.get(found.adoptedAs)!;
-  const info = q.insertAdopted.run(name, owner.id, found.agent, found.claudeSession ?? null, found.cwd, host.row.id, socket, name, Date.now());
+  let transcript: { id: string; file: string } | null = null;
+  if (found.agent === 'codex' && !found.codexSession) {
+    const claimed = new Set(q.sessions.all().map((s) => s.transcript_path).filter((p): p is string => !!p));
+    transcript = await findCodexRollout(host, found.cwd, found.createdAt, claimed).catch(() => null);
+  }
+  const sessionId = found.claudeSession ?? found.codexSession ?? transcript?.id ?? null;
+  const info = q.insertAdopted.run(name, owner.id, found.agent, sessionId, found.cwd, host.row.id, socket, name, Date.now());
   const row = q.sessionById.get(Number(info.lastInsertRowid))!;
+  if (transcript) {
+    q.setTranscript.run(transcript.id, transcript.file, row.id);
+    row.agent_session_id = transcript.id;
+    row.transcript_path = transcript.file;
+  }
   const s = new LiveSession(row);
   live.set(row.id, s);
   await s.start(true);
+  clearHistoryCaches(host.row.id);
   hub.emit('list');
   return row;
 }
@@ -842,6 +908,157 @@ export async function claudeHistory(host: Host, limit = 60): Promise<ClaudeHisto
     if (running.has(h.id)) h.running = running.get(h.id);
     if (open.has(h.id)) h.openAs = open.get(h.id);
   }
+  return list;
+}
+
+// ---------- Codex history ----------
+
+export interface CodexHistory {
+  id: string;
+  cwd: string;
+  title: string;
+  lastPrompt: string;
+  mtime: number;
+  size: number;
+  /** running in some codex process right now (its tmux pane if known) */
+  running?: { tmux?: string };
+  /** already open in tmux-web as this session */
+  openAs?: number;
+}
+
+/**
+ * Parse the output of `codexHistory`'s host command. Kept separate so the format can be tested
+ * without a real Codex installation.
+ */
+export function parseCodexHistory(out: string): CodexHistory[] {
+  const list: CodexHistory[] = [];
+  const titles = new Map<string, string>();
+  const prompts = new Map<string, string>();
+  let section = '';
+  let cur: CodexHistory | null = null;
+  const flush = () => {
+    if (cur) list.push(cur);
+    cur = null;
+  };
+  for (const line of out.split('\n')) {
+    if (line === '@INDEX') {
+      flush();
+      section = 'index';
+      continue;
+    }
+    if (line === '@HIST') {
+      flush();
+      section = 'hist';
+      continue;
+    }
+    if (line.startsWith('F\t')) {
+      flush();
+      section = '';
+      const [, file, stat] = line.split('\t');
+      const [mtime, size] = (stat || '').split(' ').map(Number);
+      const id = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/.exec(file || '')?.[1];
+      if (id) cur = { id, cwd: '', title: '', lastPrompt: '', mtime: mtime * 1000, size };
+      continue;
+    }
+    if (section === 'index') {
+      try {
+        const o = JSON.parse(line);
+        if (o.id && o.thread_name) titles.set(String(o.id), String(o.thread_name).replace(/\s+/g, ' ').trim());
+      } catch {
+        /* partial */
+      }
+      continue;
+    }
+    if (section === 'hist') {
+      try {
+        const o = JSON.parse(line);
+        if (o.session_id && typeof o.text === 'string' && o.text.trim()) prompts.set(String(o.session_id), o.text.replace(/\s+/g, ' ').trim());
+      } catch {
+        /* partial */
+      }
+      continue;
+    }
+    if (!cur) continue;
+    try {
+      const o = JSON.parse(line);
+      if (o.type === 'session_meta') {
+        const p = o.payload ?? {};
+        if (p.id) cur.id = String(p.id);
+        if (p.cwd) cur.cwd = String(p.cwd);
+      } else if (o.type === 'response_item' && o.payload?.type === 'message' && o.payload.role === 'user') {
+        const text = codexUserText(o.payload);
+        if (text) cur.lastPrompt = text.replace(/\s+/g, ' ').trim();
+      }
+    } catch {
+      /* partial line while an agent is writing */
+    }
+  }
+  flush();
+  for (const h of list) {
+    h.title = titles.get(h.id) || '';
+    const prompt = prompts.get(h.id);
+    if (prompt) h.lastPrompt = prompt;
+  }
+  return list.sort((a, b) => b.mtime - a.mtime);
+}
+
+const codexHistoryCache = new Map<number, { at: number; list: Promise<CodexHistory[]> }>();
+
+/** New/deleted sessions change history's openAs marker: drop both agents' cached picker data. */
+function clearHistoryCaches(hostId: number) {
+  historyCache.delete(hostId);
+  codexHistoryCache.delete(hostId);
+}
+
+/** Codex history with the same short cache behaviour as Claude's picker. */
+export function codexHistoryCached(host: Host): Promise<CodexHistory[]> {
+  const hit = codexHistoryCache.get(host.row.id);
+  const refresh = () => {
+    const list = codexHistory(host);
+    codexHistoryCache.set(host.row.id, { at: Date.now(), list });
+    list.catch(() => codexHistoryCache.delete(host.row.id));
+    return list;
+  };
+  if (!hit) return refresh();
+  if (Date.now() - hit.at > 15_000) {
+    const prev = hit.list;
+    refresh().catch(() => {});
+    return prev;
+  }
+  return hit.list;
+}
+
+export async function codexHistory(host: Host, limit = 60, withRunning = true): Promise<CodexHistory[]> {
+  const out = await host.shText(
+    `d="$HOME/.codex/sessions"; [ -d "$d" ] || exit 0; ` +
+      `find "$d" -type f -name 'rollout-*.jsonl' 2>/dev/null | while IFS= read -r f; do ` +
+      `printf '%s\\t%s\\n' "$(stat -c '%Y %s' -- "$f" 2>/dev/null || stat -f '%m %z' -- "$f" 2>/dev/null)" "$f"; done | ` +
+      `sort -rn | head -n "$1" | cut -f2- | while IFS= read -r f; do ` +
+      `printf 'F\\t%s\\t%s\\n' "$f" "$(stat -c '%Y %s' -- "$f" 2>/dev/null || stat -f '%m %z' -- "$f" 2>/dev/null)"; ` +
+      `head -n 1 "$f" | head -c 262144; printf '\\n'; tail -c 65536 -- "$f"; printf '\\n'; done; ` +
+      `if [ -f "$HOME/.codex/session_index.jsonl" ]; then printf '@INDEX\\n'; cat "$HOME/.codex/session_index.jsonl"; fi; ` +
+      `if [ -f "$HOME/.codex/history.jsonl" ]; then printf '@HIST\\n'; tail -n 2000 "$HOME/.codex/history.jsonl"; fi; true`,
+    [String(limit)],
+  );
+  const list = parseCodexHistory(out);
+  if (withRunning) {
+    const running = new Map<string, { tmux?: string }>();
+    for (const socket of new Set(['default', config.tmuxSocket])) {
+      try {
+        for (const t of await listExistingTmux(host, socket)) if (t.codexSession) running.set(t.codexSession, { tmux: t.name });
+      } catch {
+        /* tmux is optional for reading history */
+      }
+    }
+    for (const h of list) if (running.has(h.id)) h.running = running.get(h.id);
+  }
+  const open = new Map(
+    q.sessions
+      .all()
+      .filter((r) => r.host_id === host.row.id && r.agent === 'codex' && r.agent_session_id)
+      .map((r) => [r.agent_session_id!, r.id]),
+  );
+  for (const h of list) if (open.has(h.id)) h.openAs = open.get(h.id);
   return list;
 }
 

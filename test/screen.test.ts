@@ -80,6 +80,42 @@ test('choices: permission prompt; numbered text above is not a menu', async () =
   assert.equal(idle.analyze().choices, null);
 });
 
+test('Codex: confirmation words in the conversation are not a live prompt', async () => {
+  const s = await screen([
+    '• Ran rg -n "Enter to confirm|Do you want to proceed?" src',
+    '  └ Enter to confirm   ← only text that was searched for',
+    '',
+    '› Ask Codex to do anything',
+    '',
+    '  deepseek-flash high · ~/workspace · 接管当前项目',
+    '  ? for shortcuts',
+  ]);
+  const a = s.analyze();
+  assert.equal(a.status, 'idle');
+  assert.equal(a.choices, null);
+});
+
+test('Codex: an old numbered menu above the live composer is not waiting', async () => {
+  const s = await screen([
+    '• Earlier question:',
+    '  ❯ 1. Yes',
+    '    2. No',
+    '    3. Cancel',
+    '',
+    '› Ask Codex to do anything',
+    '',
+    '  deepseek-flash high · ~/workspace · 接管当前项目',
+    '  ? for shortcuts',
+  ]);
+  assert.equal(s.analyze().status, 'idle');
+  assert.equal(s.analyze().choices, null);
+});
+
+test('a confirmation without numbered options still counts when it is the live bottom line', async () => {
+  const s = await screen(['Install it? (y/n)', '', '  ? for shortcuts']);
+  assert.equal(s.analyze().status, 'waiting');
+});
+
 test('queued messages mean a turn is running even when a narrow footer drops the busy marker', async () => {
   const s = await screen(['  AIxF/z9t/3x/8AXo/4RiL', '', '❯ 感觉pid效果更好', '  ctrl+x ctrl+s to send now', SEP, '❯ Press up to edit queued messages', SEP, '  ⏵⏵ bypass permissions on · 1 shell, 1 monitor · …']);
   assert.equal(s.analyze().status, 'busy');

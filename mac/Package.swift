@@ -5,5 +5,8 @@ import PackageDescription
 let package = Package(
   name: "TmuxWeb",
   platforms: [.macOS(.v13)],
-  targets: [.executableTarget(name: "TmuxWeb", path: "Sources/TmuxWeb")]
+  targets: [
+    .executableTarget(name: "TmuxWeb", path: "Sources/TmuxWeb"),
+    .testTarget(name: "TmuxWebTests", dependencies: ["TmuxWeb"], path: "Tests/TmuxWebTests"),
+  ]
 )

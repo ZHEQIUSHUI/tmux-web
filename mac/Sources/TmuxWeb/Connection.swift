@@ -69,6 +69,8 @@ struct ServerActions {
   var checkUpdates: () -> Void = {}
   /// the key list
   var keys: () -> Void = {}
+  /// send/receive servers and keys over the local network
+  var share: () -> Void = {}
 }
 
 /// Everything the window shows: home or a server, every connection's state, the servers' probes.

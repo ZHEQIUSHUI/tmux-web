@@ -105,6 +105,8 @@ struct SSHKey: Codable, Identifiable, Equatable, Hashable {
 final class ProfileStore: ObservableObject {
   static let shared = ProfileStore()
   private let defaults = UserDefaults.standard
+  /// an import changes keys and servers together; only one write when it is done
+  private var importing = false
 
   @Published var profiles: [Profile] { didSet { save() } }
   @Published var currentID: UUID? { didSet { save() } }
@@ -221,7 +223,18 @@ final class ProfileStore: ObservableObject {
     if currentID == id { currentID = profiles.first?.id }
   }
 
+  /// replace both lists as one unit after merging a shared bundle
+  func applyImport(keys newKeys: [SSHKey], profiles newProfiles: [Profile]) {
+    importing = true
+    keys = newKeys
+    profiles = newProfiles
+    importing = false
+    if currentID == nil { currentID = profiles.first?.id }
+    save()
+  }
+
   private func save() {
+    guard !importing else { return }
     guard let data = try? JSONEncoder().encode(profiles) else { return }
     if let enc = Sealed.seal(data) {
       defaults.set(enc, forKey: "profiles.v2")

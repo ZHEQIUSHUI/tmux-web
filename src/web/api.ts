@@ -6,6 +6,8 @@ export interface Me {
   role: 'admin' | 'member';
   disabled: boolean;
   groups: number[];
+  /** server-side launch defaults, shown in the new-session dialog */
+  defaults?: { codexArgs?: string };
 }
 
 export interface SessionInfo {

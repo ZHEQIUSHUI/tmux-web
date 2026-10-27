@@ -35,6 +35,8 @@ sealed interface Screen {
   object Page : Screen
   /** the private keys, kept once for any number of servers */
   object Keys : Screen
+  /** send selected servers/keys over the LAN, or import them from another device */
+  object Share : Screen
   /** a server's settings: `id` an existing one, `copyOf` a copy, else a new one (in `mode`) */
   data class Editor(val id: String? = null, val copyOf: String? = null, val mode: String? = null) : Screen
 }
@@ -79,6 +81,10 @@ interface Actions {
   fun keys()
   fun saveKey(k: SshKey)
   fun removeKey(k: SshKey)
+  /** the LAN configuration sharing screen */
+  fun share()
+  /** merge a received bundle, then show the new servers */
+  fun importShared(payload: SharedPayload): ShareImportSummary
   /** back to the servers; the connection stays */
   fun home()
   fun disconnect()
@@ -319,6 +325,16 @@ class MainActivity : ComponentActivity(), Actions {
   override fun removeKey(k: SshKey) {
     store.removeKey(k.id)
     reloadProfiles()
+  }
+
+  override fun share() {
+    model.screen = Screen.Share
+  }
+
+  override fun importShared(payload: SharedPayload): ShareImportSummary {
+    val summary = store.importShared(payload)
+    reloadProfiles()
+    return summary
   }
 
   override fun forgetHostKey(p: Profile) {

@@ -164,16 +164,27 @@ function parseClaude(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
 
 const CODEX_HIDDEN_USER = /^\s*(<(environment_context|user_instructions|permissions|user_shell_command|turn_aborted|developer)|# AGENTS\.md)/;
 
+export function codexMessageText(p: Record<string, any>): string {
+  return (p.content ?? [])
+    .map((c: any) => (c.type === 'input_text' || c.type === 'output_text' ? c.text : c.type === 'input_image' ? imageMarkdown(c) : ''))
+    .join('\n')
+    .trim();
+}
+
+/** The text a person typed into Codex (hides its injected environment/instruction messages). */
+export function codexUserText(p: Record<string, any>): string {
+  if (p.role !== 'user') return '';
+  const text = codexMessageText(p);
+  return text && !CODEX_HIDDEN_USER.test(text) ? text : '';
+}
+
 function parseCodex(o: Record<string, any>): Omit<ChatItem, 'id'>[] {
   if (o.type !== 'response_item') return [];
   const p = o.payload ?? {};
   switch (p.type) {
     case 'message': {
       if (p.role !== 'user' && p.role !== 'assistant') return [];
-      const text = (p.content ?? [])
-        .map((c: any) => (c.type === 'input_text' || c.type === 'output_text' ? c.text : c.type === 'input_image' ? imageMarkdown(c) : ''))
-        .join('\n')
-        .trim();
+      const text = codexMessageText(p);
       if (!text || (p.role === 'user' && CODEX_HIDDEN_USER.test(text))) return [];
       return [{ role: p.role, text }];
     }
@@ -363,6 +374,16 @@ export function followLog(agent: Agent, host: Host, file: string, offset: number
 export async function claudeTranscript(host: Host, sessionId: string): Promise<string | null> {
   const out = await host.shText(`for f in "$HOME"/.claude/projects/*/"$1".jsonl; do [ -f "$f" ] && printf '%s' "$f" && break; done; true`, [sessionId]);
   return out || null;
+}
+
+/** Codex rollout for a known session id (the file name ends with the id). */
+export async function codexTranscript(host: Host, sessionId: string): Promise<string | null> {
+  if (!/^[0-9a-f-]{36}$/.test(sessionId)) return null;
+  const out = await host.shText(
+    `d="$HOME/.codex/sessions"; [ -d "$d" ] || exit 0; find "$d" -type f -name "*-$1.jsonl" 2>/dev/null | head -n 1; true`,
+    [sessionId],
+  );
+  return out.trim() || null;
 }
 
 /**

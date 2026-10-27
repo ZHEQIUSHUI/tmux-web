@@ -54,6 +54,8 @@ export interface ExistingTmux {
   command: string;
   agent: 'claude' | 'codex' | 'bash';
   claudeSession?: string;
+  codexSession?: string;
+  createdAt: number;
   attached: boolean;
   adoptedAs?: number;
 }
@@ -92,7 +94,7 @@ export function AdoptList({ hostId, onAdopted }: { hostId: number; onAdopted: (i
         {list?.map((t) => (
           <div class="user-row" key={t.name}>
             <div>
-              <b>{t.name}</b> <span class="tag">{t.claudeSession ? 'Claude' : t.command}</span>
+              <b>{t.name}</b> <span class="tag">{AGENT_LABEL[t.agent]}</span>
               {t.attached && <span class="tag">已在别处打开</span>}
               <div class="dim small">{t.cwd}</div>
             </div>
@@ -114,7 +116,7 @@ export function AdoptList({ hostId, onAdopted }: { hostId: number; onAdopted: (i
   );
 }
 
-export interface ClaudeHistory {
+export interface HistorySession {
   id: string;
   cwd: string;
   title: string;
@@ -125,25 +127,25 @@ export interface ClaudeHistory {
   openAs?: number;
 }
 
-/** Pick an earlier Claude Code conversation on the host to continue (claude --resume). */
-export function ClaudeHistoryPicker({ hostId, selected, onSelect }: { hostId: number; selected: ClaudeHistory | null; onSelect: (h: ClaudeHistory | null) => void }) {
-  const [list, setList] = useState<ClaudeHistory[] | null>(null);
+/** Pick an earlier Claude Code or Codex conversation on the host to continue. */
+export function HistoryPicker({ agent, hostId, selected, onSelect }: { agent: 'claude' | 'codex'; hostId: number; selected: HistorySession | null; onSelect: (h: HistorySession | null) => void }) {
+  const [list, setList] = useState<HistorySession[] | null>(null);
   const [err, setErr] = useState('');
   const [filter, setFilter] = useState('');
   useEffect(() => {
     setList(null);
     setErr('');
-    api<ClaudeHistory[]>('GET', `/_tw/api/hosts/${hostId}/claude-history`).then(setList, (e) => {
+    api<HistorySession[]>('GET', `/_tw/api/hosts/${hostId}/${agent}-history`).then(setList, (e) => {
       setList([]);
       setErr(e.message);
     });
-  }, [hostId]);
+  }, [agent, hostId]);
   const f = filter.trim().toLowerCase();
   const shown = (list || []).filter((h) => !f || `${h.title} ${h.lastPrompt} ${h.cwd}`.toLowerCase().includes(f));
   return (
     <div class="hist">
       <div class="hist-head">
-        <span>从历史会话继续</span>
+        <span>从 {AGENT_LABEL[agent]} 历史会话继续</span>
         {list && list.length > 5 && <input value={filter} onInput={(e) => setFilter((e.target as HTMLInputElement).value)} placeholder="搜索标题、内容、目录" />}
       </div>
       <div class="hist-list">
@@ -176,8 +178,11 @@ export function NewSession({ me, at, onClose, onCreated }: { me: Me; at?: { host
   const [agent, setAgent] = useState<keyof typeof AGENT_LABEL>('claude');
   // extra launch options: remembered per agent type, presets toggle in and out
   const [args, setArgs] = useState(() => store.get('tw:args:claude') ?? '');
-  useEffect(() => setArgs(store.get(`tw:args:${agent}`) ?? ''), [agent]);
-  const [resume, setResume] = useState<ClaudeHistory | null>(null);
+  useEffect(() => {
+    setResume(null);
+    setArgs(store.get(`tw:args:${agent}`) ?? (agent === 'codex' ? (me.defaults?.codexArgs ?? '') : ''));
+  }, [agent]);
+  const [resume, setResume] = useState<HistorySession | null>(null);
   const [hosts] = useHosts();
   const [hostId, setHostId] = useState<number | null>(at?.hostId ?? null);
   const [dirs, setDirs] = useState<string[]>([]);
@@ -199,7 +204,7 @@ export function NewSession({ me, at, onClose, onCreated }: { me: Me; at?: { host
     setBusy(true);
     setErr('');
     try {
-      const fromHistory = agent === 'claude' && resume;
+      const fromHistory = agent !== 'bash' && resume;
       const { id } = await api<{ id: number }>('POST', '/_tw/api/sessions', {
         ...f,
         ...(fromHistory ? { resumeId: resume.id, cwd: resume.cwd, fork: !!resume.running, name: f.name || resume.title || '' } : {}),
@@ -263,10 +268,16 @@ export function NewSession({ me, at, onClose, onCreated }: { me: Me; at?: { host
           </label>
         )}
         {host && host.ok === false && <p class="error small">这台主机当前连不上：{host.error}</p>}
-        {agent === 'claude' && hostId !== null && <ClaudeHistoryPicker key={hostId} hostId={hostId} selected={resume} onSelect={setResume} />}
-        {agent === 'claude' && resume?.running && (
+        {agent !== 'bash' && hostId !== null && <HistoryPicker key={`${agent}-${hostId}`} agent={agent} hostId={hostId} selected={resume} onSelect={setResume} />}
+        {agent !== 'bash' && resume?.running && (
           <p class="small hint">
-            这个会话正在{resume.running.tmux ? ` tmux「${resume.running.tmux}」` : '别处'}运行。两个进程同时写同一个对话会互相干扰，所以会<b>复制一份</b>再继续（--fork-session），原会话不受影响。
+            {agent === 'claude' ? (
+              <>
+                这个会话正在{resume.running.tmux ? ` tmux「${resume.running.tmux}」` : '别处'}运行。两个进程同时写同一个对话会互相干扰，所以会<b>复制一份</b>再继续（--fork-session），原会话不受影响。
+              </>
+            ) : (
+              <>这个 Codex 会话正在{resume.running.tmux ? ` tmux「${resume.running.tmux}」` : '别处'}运行，不能同时恢复。请用「导入已有 tmux」直接打开原会话。</>
+            )}
             {resume.openAs ? (
               <>
                 {' '}
@@ -281,9 +292,9 @@ export function NewSession({ me, at, onClose, onCreated }: { me: Me; at?: { host
             )}
           </p>
         )}
-        <label style={agent === 'claude' && resume ? 'display:none' : ''}>
+        <label style={agent !== 'bash' && resume ? 'display:none' : ''}>
           工作目录
-          <input name="cwd" list="dirs" key={hostId ?? 0} defaultValue={(at?.hostId === hostId && at?.cwd) || dirs[0] || ''} placeholder="~/项目，不存在会自动创建" required={!(agent === 'claude' && resume)} />
+          <input name="cwd" list="dirs" key={hostId ?? 0} defaultValue={(at?.hostId === hostId && at?.cwd) || dirs[0] || ''} placeholder="~/项目，不存在会自动创建" required={!(agent !== 'bash' && resume)} />
           <datalist id="dirs">
             {dirs.map((d) => (
               <option key={d} value={d} />
@@ -292,17 +303,17 @@ export function NewSession({ me, at, onClose, onCreated }: { me: Me; at?: { host
         </label>
         <label>
           名称
-          <input name="name" placeholder={agent === 'claude' && resume?.title ? resume.title : '留空则用 agent + 目录名'} maxLength={60} />
+          <input name="name" placeholder={agent !== 'bash' && resume?.title ? resume.title : '留空则用 agent + 目录名'} maxLength={60} />
         </label>
         <label>
           额外启动参数
-          <input name="args" value={args} onInput={(e) => setArgs((e.target as HTMLInputElement).value)} placeholder="点下面的常用项，或自己填写" autocapitalize="off" spellcheck={false} />
+          <input name="args" value={args} onInput={(e) => setArgs((e.target as HTMLInputElement).value)} placeholder={agent === 'codex' && me.defaults?.codexArgs ? `默认：${me.defaults.codexArgs}` : '点下面的常用项，或自己填写'} autocapitalize="off" spellcheck={false} />
         </label>
         {ARG_PRESETS[agent] && <ArgPresets presets={ARG_PRESETS[agent]!} args={args} onChange={setArgs} />}
         <ShareFields groups={groups} />
         {err && <p class="error">{err}</p>}
-        <button class="primary" disabled={busy || hostId === null}>
-          {busy ? '创建中…' : agent === 'claude' && resume ? (resume.running ? '复制一份并继续' : '继续这个会话') : '创建'}
+        <button class="primary" disabled={busy || hostId === null || (agent === 'codex' && !!resume?.running)}>
+          {busy ? '创建中…' : agent !== 'bash' && resume ? (resume.running ? (agent === 'claude' ? '复制一份并继续' : '会话运行中') : '继续这个会话') : '创建'}
         </button>
       </form>
     </Modal>
@@ -794,6 +805,7 @@ const ARG_PRESETS: Partial<Record<keyof typeof AGENT_LABEL, ArgPreset[]>> = {
     { arg: '--effort max', label: '思考 max', group: 'effort' },
   ],
   codex: [
+    { arg: '--yolo', label: '跳过确认和沙箱', group: 'perm', danger: true },
     { arg: '--dangerously-bypass-approvals-and-sandbox', label: '跳过确认和沙箱', group: 'perm', danger: true },
     { arg: '-s workspace-write', label: '可写工作区沙箱', group: 'perm' },
     { arg: '--search', label: '联网搜索' },

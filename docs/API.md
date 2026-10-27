@@ -16,7 +16,7 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `sessions` | 你能看到的会话列表（字段见下） |
-| POST | `sessions` | 新建：`{agent: "claude"\|"codex"\|"bash", hostId, cwd, name?, args?, resumeId?, fork?, groupId?, share?}` |
+| POST | `sessions` | 新建：`{agent: "claude"\|"codex"\|"bash", hostId, cwd, name?, args?, resumeId?, fork?, groupId?, share?}`。`resumeId` 可以是 Claude 或 Codex 的历史会话 id |
 | PATCH | `sessions/:id` | 修改 `{name?, note?, groupId?, share?}`（有操作权限的人都能改 `note`） |
 | PUT | `sessions/:id/folder` | 放进你的某个文件夹：`{folderId \| null}` |
 | DELETE | `sessions/:id` | 删除（导入的 tmux 会话只是取消接管，原会话不会被关掉） |
@@ -84,7 +84,7 @@
 | GET | `me` | 当前账号 |
 | GET/POST/DELETE | `tokens`, `tokens/:id` | 列出 / 新建 `{name}`（响应里的 `token` 只出现这一次）/ 吊销 API 令牌 |
 | GET/POST/PATCH/DELETE | `folders`, `folders/:id` | 你的文件夹 `{name, note, position}` |
-| GET | `hosts`, `hosts/:id/dirs`, `hosts/:id/ports`, `hosts/:id/tmux`, `hosts/:id/claude-history` | 主机、目录建议、监听中的端口、已有的 tmux 会话、Claude 历史对话 |
+| GET | `hosts`, `hosts/:id/dirs`, `hosts/:id/ports`, `hosts/:id/tmux`, `hosts/:id/claude-history`, `hosts/:id/codex-history` | 主机、目录建议、监听中的端口、已有的 tmux 会话、Claude / Codex 历史对话 |
 | GET | `hosts/:id/stats` | 资源占用：CPU（采样半秒）、内存和交换分区、显卡（有 `nvidia-smi` 时）、磁盘、当前最占 CPU 的进程。结果缓存 2 秒 |
 | GET | `app/version.json` | App 的最新版本信息（转发自 GitHub 最新 Release 的 version.json，缓存 10 分钟）。不需要登录 |
 | GET | `app/download/<文件名>` | 下载最新版 App 的安装包（服务器从 GitHub 下载一次后缓存）。不需要登录 |

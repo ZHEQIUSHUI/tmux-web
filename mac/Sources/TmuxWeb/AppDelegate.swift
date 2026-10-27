@@ -31,7 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
       editActive: { [weak self] in self?.editCurrent() },
       home: { [weak self] in self?.goHome() },
       checkUpdates: { [weak self] in self?.checkUpdates() },
-      keys: { [weak self] in self?.openKeys() }
+      keys: { [weak self] in self?.openKeys() },
+      share: { [weak self] in self?.openShare() }
     )
     UNUserNotificationCenter.current().delegate = self
     buildMenu()
@@ -272,6 +273,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     main.window.beginSheet(w)
   }
 
+  /// The LAN sharing sheet: send and receive in one place.
+  @objc private func openShare() {
+    main.bringBack()
+    if let e = editor { return e.makeKeyAndOrderFront(nil) }
+    let view = ConfigShareView(onClose: { [weak self] in self?.closeEditor() })
+    let w = NSWindow(contentViewController: NSHostingController(rootView: view))
+    w.styleMask = [.titled]
+    w.isReleasedWhenClosed = false
+    editor = w
+    main.window.beginSheet(w)
+  }
+
   private func closeEditor() {
     if let e = editor { main.window.endSheet(e) }
     editor = nil
@@ -373,6 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     if conns.count > 1 { m.addItem(item("断开全部（\(conns.count) 台）", #selector(disconnectAll))) }
     m.addItem(.separator())
     m.addItem(item("私钥…", #selector(openKeys)))
+    m.addItem(item("共享配置…", #selector(openShare)))
     m.addItem(item("检查更新…", #selector(checkUpdates)))
     return m
   }
@@ -448,6 +462,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     menu.addItem(item("全部服务器", #selector(homeAction), "l"))
     menu.addItem(item("新建服务器…", #selector(newServer), "n"))
     menu.addItem(item("私钥…", #selector(openKeys)))
+    menu.addItem(item("共享配置…", #selector(openShare)))
     if !store.profiles.isEmpty { menu.addItem(.separator()) }
     store.sorted.forEach { menu.addItem(serverItem($0)) }
     let onServer = !model.showHome && active != nil
