@@ -181,7 +181,7 @@ fun KeysScreen(m: AppModel, a: Actions) {
   var deleting by remember { mutableStateOf<SshKey?>(null) }
   val ctx = LocalContext.current
   val clipboard = LocalClipboardManager.current
-  val users = { k: SshKey -> m.profiles.filter { !it.isDirect && it.keyId == k.id } }
+  val users = { k: SshKey -> m.profiles.filter { it.mode == "ssh" && it.keyId == k.id } }
 
   Scaffold(
     topBar = {

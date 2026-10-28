@@ -74,11 +74,16 @@ object StateColor {
 
 // ---- small pieces used on several screens ----
 
-/** The server's letter on a rounded square: teal for direct access, indigo for SSH. */
+/** The server's letter on a rounded square: teal direct, blue EasyTier, indigo SSH. */
 @Composable
 fun ServerAvatar(p: Profile, size: Dp = 44.dp) {
+  val color = when {
+    p.isDirect -> Color(0xFF13A3A0)
+    p.isEasyTier -> Color(0xFF2F6FDE)
+    else -> Color(0xFF5B5BD6)
+  }
   Box(
-    Modifier.size(size).clip(RoundedCornerShape(size * 0.28f)).background(if (p.isDirect) Color(0xFF13A3A0) else Color(0xFF5B5BD6)),
+    Modifier.size(size).clip(RoundedCornerShape(size * 0.28f)).background(color),
     contentAlignment = Alignment.Center,
   ) {
     Text(p.title.trim().take(1).uppercase().ifEmpty { "?" }, color = Color.White, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.42f).sp)
@@ -211,6 +216,7 @@ fun pathIcon(name: String, d: String): ImageVector =
     .build()
 
 val CopyIcon = pathIcon("Copy", "M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z")
+val LinkIcon = pathIcon("Link", "M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z")
 val LinkOffIcon = pathIcon("LinkOff", "M17 7h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1 0 1.43-.98 2.63-2.31 2.98l1.46 1.46C20.88 15.61 22 13.95 22 12c0-2.76-2.24-5-5-5zm-1 4h-2.19l2 2H16zM2 4.27l3.11 3.11C3.29 8.12 2 9.91 2 12c0 2.76 2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1 0-1.59 1.21-2.9 2.76-3.07L8.73 11H8v2h2.73L13 15.27V17h1.73l4.01 4L20 19.74 3.27 3 2 4.27z")
 val UpdateIcon = pathIcon("Update", "M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1-2.73 2.71-2.73 7.08 0 9.79s7.15 2.71 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.53-9.11-.02-12.58s9.14-3.47 12.65 0L21 3v7.12z")
 val UploadFileIcon = pathIcon("FileOpen", "M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11zM8 15.01l1.41 1.41L11 14.84V19h2v-4.16l1.59 1.59L16 15.01 12.01 11z")

@@ -91,6 +91,10 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
   var mode by remember(e) { mutableStateOf(start.mode) }
   var name by remember(e) { mutableStateOf(start.name) }
   var url by remember(e) { mutableStateOf(start.directUrl) }
+  var easyNetwork by remember(e) { mutableStateOf(start.easyTierNetwork) }
+  var easySecret by remember(e) { mutableStateOf(start.easyTierSecret) }
+  var easyPeers by remember(e) { mutableStateOf(start.easyTierPeers) }
+  var easyServerIP by remember(e) { mutableStateOf(start.easyTierServerIP) }
   var target by remember(e) { mutableStateOf(start.target) }
   var sshPort by remember(e) { mutableStateOf(start.sshPort.toString()) }
   var remotePort by remember(e) { mutableStateOf(start.remotePort.toString()) }
@@ -106,10 +110,12 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
 
   val draft = start.copy(
     mode = mode, name = name.trim(), directUrl = url.trim(), target = target.trim(),
+    easyTierNetwork = easyNetwork.trim(), easyTierSecret = easySecret, easyTierPeers = easyPeers.trim(),
+    easyTierServerIP = easyServerIP.trim(),
     sshPort = sshPort.toIntOrNull() ?: 0, remotePort = remotePort.toIntOrNull() ?: 0, remoteHost = remoteHost.trim().ifEmpty { "127.0.0.1" },
     localPort = localPort.toIntOrNull() ?: 0, password = password, keyId = keyId.takeIf { id -> m.keys.any { it.id == id } } ?: "",
   )
-  LaunchedEffect(mode, url, target, sshPort) { test = null }
+  LaunchedEffect(mode, url, target, sshPort, easyNetwork, easySecret, easyPeers, easyServerIP) { test = null }
 
   // ---- checks as you type ----
   fun portError(s: String) = if ((s.toIntOrNull() ?: 0) in 1..65535) null else "端口在 1–65535 之间"
@@ -120,10 +126,22 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
     target.contains(' ') -> "不能有空格；端口填在下面"
     else -> null
   }
+  val easyNetworkError = if (mode == "easytier" && easyNetwork.trim().isEmpty()) "填写 EasyTier 网络名称" else null
+  val easyServerIPError = if (mode == "easytier" && !EasyTierConfig.validIPv4(easyServerIP)) "要填 IPv4 地址，比如 10.144.144.30" else null
+  val easyPeerError = if (mode == "easytier") {
+    val nodes = EasyTierConfig.peers(easyPeers)
+    when {
+      nodes.isEmpty() -> "至少填一个公共节点"
+      else -> nodes.firstOrNull { !EasyTierConfig.validPeer(it) }?.let { "格式不对：$it" }
+    }
+  } else null
   val taken = m.profiles.firstOrNull { !it.isDirect && it.id != draft.id && it.localPort == draft.localPort }
   val localError = portError(localPort) ?: taken?.let { "「${it.title}」也用这个端口，换一个" }
-  val valid = if (mode == "direct") draft.directBase != null else
-    targetError == null && draft.isComplete && listOf(sshPort, remotePort).all { portError(it) == null } && localError == null
+  val valid = when (mode) {
+    "direct" -> draft.directBase != null
+    "easytier" -> draft.isComplete && easyNetworkError == null && easyServerIPError == null && easyPeerError == null && localError == null
+    else -> targetError == null && draft.isComplete && listOf(sshPort, remotePort).all { portError(it) == null } && localError == null
+  }
 
   BackHandler { a.closeEditor() }
   Scaffold(
@@ -140,10 +158,11 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
         Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).navigationBarsPadding(),
         verticalArrangement = Arrangement.spacedBy(14.dp),
       ) {
-        // the way in: two big choices
+        // the way in
         Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-          ModeCard(LanIcon, Color(0xFF13A3A0), "直接访问", "EasyTier、局域网等能直接打开的网址", mode == "direct", Modifier.weight(1f)) { mode = "direct" }
-          ModeCard(TerminalIcon, Color(0xFF5B5BD6), "SSH 转发", "SSH 登录后转发端口，不用开放端口", mode == "ssh", Modifier.weight(1f)) { mode = "ssh" }
+          ModeCard(LanIcon, Color(0xFF13A3A0), "直接访问", "直接打开网址", mode == "direct", Modifier.weight(1f)) { mode = "direct" }
+          ModeCard(LinkIcon, Color(0xFF2F6FDE), "内置 EasyTier", "App 加入网络", mode == "easytier", Modifier.weight(1f)) { mode = "easytier" }
+          ModeCard(TerminalIcon, Color(0xFF5B5BD6), "SSH 转发", "不用开放端口", mode == "ssh", Modifier.weight(1f)) { mode = "ssh" }
         }
 
         Section("服务器")
@@ -155,6 +174,33 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
           OutlinedTextField(
             url, { url = it }, Modifier.fillMaxWidth(), label = { Text("网址") }, placeholder = { Text("http://10.126.126.2:8080") },
             isError = urlError != null, supportingText = { Text(urlError ?: "tmux-web 的地址，不写 http:// 也行") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+          )
+        } else if (mode == "easytier") {
+          OutlinedTextField(
+            easyServerIP, { easyServerIP = it }, Modifier.fillMaxWidth(), label = { Text("服务器虚拟 IP") },
+            placeholder = { Text("10.144.144.30") }, isError = easyServerIPError != null, singleLine = true,
+            supportingText = { Text(easyServerIPError ?: "tmux-web 这台机器在 EasyTier 网络里的 IPv4 地址") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+          )
+          OutlinedTextField(
+            remotePort, { remotePort = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), label = { Text("tmux-web 端口") },
+            isError = portError(remotePort) != null, supportingText = { Text(portError(remotePort) ?: "服务器上监听的端口，默认 8080") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+          )
+
+          Section("EasyTier 网络")
+          OutlinedTextField(
+            easyNetwork, { easyNetwork = it }, Modifier.fillMaxWidth(), label = { Text("网络名称") },
+            placeholder = { Text("my-network") }, isError = easyNetworkError != null, singleLine = true,
+            supportingText = { Text(easyNetworkError ?: "和 EasyTier 客户端里的 Network Name 一致") },
+          )
+          SecretField(easySecret, { easySecret = it }, "网络密钥", supporting = "可留空；加密保存在手机里，不写入日志")
+          OutlinedTextField(
+            easyPeers, { easyPeers = it }, Modifier.fillMaxWidth(), label = { Text("公共节点") },
+            placeholder = { Text("tcp://public.example.com:11010") }, isError = easyPeerError != null,
+            minLines = 2, singleLine = false,
+            supportingText = { Text(easyPeerError ?: "一个或多个，用逗号或换行分隔") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
           )
         } else {
@@ -180,23 +226,26 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
           SecretField(password, { password = it }, "SSH 密码", supporting = "可选。不填的话需要时弹框输入")
           KeyPicker(m.keys, draft.keyId, onSelect = { keyId = it }, onAdd = { addingKey = true })
 
-          // the rarely needed ones, folded away
-          Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { advanced = !advanced }.padding(vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Text("高级", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
-            Icon(if (advanced) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown, null, tint = MaterialTheme.colorScheme.primary)
-          }
-          // a port clash opens it by itself: that's where the fix is
-          AnimatedVisibility(advanced || localError != null) {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-              OutlinedTextField(
-                localPort, { localPort = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), label = { Text("本地端口") },
-                isError = localError != null, singleLine = true,
-                supportingText = { Text(localError ?: "手机上用的端口，每台服务器固定一个，网页的登录状态才能保留") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-              )
+        }
+
+        // the rarely needed ones, folded away
+        Row(
+          Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { advanced = !advanced }.padding(vertical = 10.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text("高级", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+          Icon(if (advanced) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown, null, tint = MaterialTheme.colorScheme.primary)
+        }
+        // a port clash opens it by itself: that's where the fix is
+        AnimatedVisibility(advanced || localError != null) {
+          Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            OutlinedTextField(
+              localPort, { localPort = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), label = { Text("本地端口") },
+              isError = localError != null, singleLine = true,
+              supportingText = { Text(localError ?: "手机上用的端口，每台服务器固定一个，网页的登录状态才能保留") },
+              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
+            if (mode == "ssh") {
               OutlinedTextField(
                 remoteHost, { remoteHost = it }, Modifier.fillMaxWidth(), label = { Text("tmux-web 在服务器上的地址") },
                 supportingText = { Text("一般不用改") }, singleLine = true,
@@ -230,11 +279,16 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
             Text("测试连接")
           }
         }
-        test?.takeIf { it != Probe.Result.Checking }?.let { TestResult(it, mode == "direct") }
+        test?.takeIf { it != Probe.Result.Checking }?.let { TestResult(it, mode) }
 
         if (mode == "ssh") {
           Text(
             "需要验证码时，连接过程中会弹框输入。设置（包括密码和私钥）加密保存在手机里。",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        } else if (mode == "easytier") {
+          Text(
+            "由 App 内置的 EasyTier 加入网络，不需要另开 EasyTier，也不占用系统的 VPN。网络密钥加密保存，不会写进日志。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
         }
@@ -286,29 +340,38 @@ private fun ModeCard(icon: ImageVector, color: Color, title: String, text: Strin
 }
 
 @Composable
-private fun TestResult(r: Probe.Result, direct: Boolean) {
+private fun TestResult(r: Probe.Result, mode: String) {
   val ok = r is Probe.Result.Up
+  val unknown = r is Probe.Result.Unknown
   Surface(
     shape = RoundedCornerShape(16.dp),
-    color = if (ok) StateColor.ok.copy(alpha = 0.12f) else MaterialTheme.colorScheme.errorContainer,
+    color = when {
+      ok -> StateColor.ok.copy(alpha = 0.12f)
+      unknown -> MaterialTheme.colorScheme.surfaceContainerLow
+      else -> MaterialTheme.colorScheme.errorContainer
+    },
     modifier = Modifier.fillMaxWidth(),
   ) {
     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-      Icon(if (ok) Icons.Filled.CheckCircle else Icons.Filled.Warning, null, tint = if (ok) StateColor.ok else MaterialTheme.colorScheme.onErrorContainer)
+      Icon(
+        if (ok) Icons.Filled.CheckCircle else Icons.Filled.Warning, null,
+        tint = if (ok) StateColor.ok else if (unknown) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onErrorContainer,
+      )
       Spacer(Modifier.size(12.dp))
       Column {
         when (r) {
           is Probe.Result.Up -> {
-            Text(if (direct) "tmux-web 有响应 · ${r.ms} ms" else "SSH 端口能连上 · ${r.ms} ms", fontWeight = FontWeight.SemiBold)
-            if (!direct) Text("登录在连接时验证", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(if (mode == "direct") "tmux-web 有响应 · ${r.ms} ms" else "SSH 端口能连上 · ${r.ms} ms", fontWeight = FontWeight.SemiBold)
+            if (mode == "ssh") Text("登录在连接时验证", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
           }
           is Probe.Result.Down -> {
             Text("连不上：${r.why}", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onErrorContainer)
             Text(
-              if (direct) "确认网址、tmux-web 在运行，以及手机能访问到它" else "确认地址、SSH 端口，以及手机能访问到服务器",
+              if (mode == "direct") "确认网址、tmux-web 在运行，以及手机能访问到它" else "确认地址、SSH 端口，以及手机能访问到服务器",
               style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer,
             )
           }
+          is Probe.Result.Unknown -> Text(r.why, fontWeight = FontWeight.SemiBold)
           else -> {}
         }
       }

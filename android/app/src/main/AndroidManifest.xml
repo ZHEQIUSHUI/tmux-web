@@ -34,7 +34,7 @@
       android:foregroundServiceType="specialUse">
       <property
         android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-        android:value="Keeps the SSH port forward to the user's own tmux-web server open while the app is in the background, and shows its alerts." />
+        android:value="Keeps the bundled EasyTier connection or SSH port forward to the user's own tmux-web server open while the app is in the background, and shows its alerts." />
     </service>
 
     <provider

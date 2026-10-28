@@ -44,7 +44,7 @@ data class SharedProfile(
   val keyId: String,
   val password: String,
   val extraArgs: String = "",
-  /** macOS 的内置 EasyTier；安卓端目前先保留字段，导入时明确跳过。 */
+  /** 内置 EasyTier（两端共用） */
   val easyTierNetwork: String = "",
   val easyTierSecret: String = "",
   val easyTierPeers: String = "",
@@ -268,7 +268,7 @@ object ShareProtocol {
   }
 }
 
-/** What makes two SSH servers, or two direct addresses, the same configuration. */
+/** What makes two servers the same configuration. */
 object ShareIdentity {
   /** CRLF/CR → LF, trailing spaces removed, blank lines at both ends dropped. */
   fun canonicalKey(text: String): String {
@@ -299,11 +299,19 @@ object ShareIdentity {
 
   fun profileIdentity(p: Profile, keyText: String?): String =
     if (p.isDirect) "direct|${directIdentity(p.directUrl)}"
+    else if (p.isEasyTier) easyTierIdentity(p.easyTierNetwork, p.easyTierSecret, p.easyTierPeers, p.easyTierServerIP, p.remotePort)
     else sshIdentity(p.target, p.sshPort, p.remoteHost, p.remotePort, p.password, keyText, "")
 
   fun profileIdentity(p: SharedProfile, keyText: String?): String =
     if (p.mode == "direct") "direct|${directIdentity(p.directUrl)}"
+    else if (p.mode == "easytier") easyTierIdentity(p.easyTierNetwork, p.easyTierSecret, p.easyTierPeers, p.easyTierServerIP, p.remotePort)
     else sshIdentity(p.target, p.sshPort, p.remoteHost, p.remotePort, p.password, keyText, p.extraArgs)
+
+  private fun easyTierIdentity(network: String, secret: String, peers: String, serverIP: String, remotePort: Int): String {
+    val nodes = EasyTierConfig.peers(peers).map { it.lowercase() }.sorted()
+    return listOf("easytier", network.trim(), secret, nodes.joinToString(","), serverIP.trim(), remotePort.toString())
+      .joinToString("\u0000")
+  }
 
   private fun sshIdentity(target: String, sshPort: Int, remoteHost: String, remotePort: Int, password: String, key: String?, extraArgs: String): String {
     val t = target.trim()
@@ -337,8 +345,12 @@ object SharePayloadBuilder {
           sshPort = p.sshPort,
           remoteHost = p.remoteHost,
           remotePort = p.remotePort,
-          keyId = p.keyId.takeIf { !p.isDirect && it in includedKeyIds } ?: "",
-          password = if (p.isDirect) "" else p.password,
+          keyId = p.keyId.takeIf { p.mode == "ssh" && it in includedKeyIds } ?: "",
+          password = if (p.mode == "ssh") p.password else "",
+          easyTierNetwork = p.easyTierNetwork,
+          easyTierSecret = p.easyTierSecret,
+          easyTierPeers = p.easyTierPeers,
+          easyTierServerIP = p.easyTierServerIP,
         )
       },
     )
@@ -356,7 +368,7 @@ data class ShareImportSummary(
     get() = buildString {
       append("新增 ${profilesAdded} 个服务器")
       if (profilesSkipped > 0) append("，跳过 ${profilesSkipped} 个重复配置")
-      if (profilesUnsupported > 0) append("，跳过 ${profilesUnsupported} 个当前安卓版暂不支持的 EasyTier 配置")
+      if (profilesUnsupported > 0) append("，跳过 ${profilesUnsupported} 个不支持或填写不完整的配置")
       if (keysAdded > 0) append("；新增 ${keysAdded} 把私钥")
       if (keysReused > 0) append("；复用 ${keysReused} 把已有私钥")
     }
@@ -400,11 +412,15 @@ fun ProfileStore.importShared(payload: SharedPayload): ShareImportSummary {
   var profilesSkipped = 0
   var profilesUnsupported = 0
   for (p in payload.profiles) {
-    if (p.mode !in setOf("direct", "ssh")) {
+    if (p.mode !in setOf("direct", "ssh", "easytier")) {
       profilesUnsupported++
       continue
     }
-    val keyId = if (p.keyId.isEmpty()) "" else portableKeyIds[p.keyId] ?: ""
+    if (p.mode == "easytier" && EasyTierConfig.problem(p.easyTierNetwork, p.easyTierServerIP, p.easyTierPeers, p.remotePort, 18080) != null) {
+      profilesUnsupported++
+      continue
+    }
+    val keyId = if (p.mode != "ssh" || p.keyId.isEmpty()) "" else portableKeyIds[p.keyId] ?: ""
     val keyText = nextKeys.firstOrNull { it.id == keyId }?.privateKey
     val identity = ShareIdentity.profileIdentity(p, keyText)
     if (identity in identities) {
@@ -423,8 +439,12 @@ fun ProfileStore.importShared(payload: SharedPayload): ShareImportSummary {
       remoteHost = p.remoteHost,
       remotePort = p.remotePort,
       localPort = if (p.mode == "direct") 18080 else localPort,
+      easyTierNetwork = p.easyTierNetwork,
+      easyTierSecret = p.easyTierSecret,
+      easyTierPeers = p.easyTierPeers,
+      easyTierServerIP = p.easyTierServerIP,
       keyId = keyId,
-      password = if (p.mode == "direct") "" else p.password,
+      password = if (p.mode == "ssh") p.password else "",
       lastUsed = 0,
     )
     nextProfiles += imported

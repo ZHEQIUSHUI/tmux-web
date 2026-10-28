@@ -49,6 +49,8 @@ android {
       excludes += setOf("META-INF/versions/**", "META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA", "META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/DEPENDENCIES")
     }
   }
+  // The full LGPL text is shared with the Mac app rather than duplicated in the repository.
+  sourceSets.getByName("main").assets.srcDir(rootProject.file("../mac/ThirdParty"))
 }
 
 dependencies {

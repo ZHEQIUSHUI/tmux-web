@@ -16,6 +16,7 @@ object Probe {
     object Checking : Result()
     data class Up(val ms: Long) : Result()
     data class Down(val why: String) : Result()
+    data class Unknown(val why: String) : Result()
   }
 
   private val pool = Executors.newFixedThreadPool(4) { r -> Thread(r, "probe").apply { isDaemon = true } }
@@ -28,7 +29,10 @@ object Probe {
   fun run(p: Profile, timeout: Int = 3000): Result {
     val t0 = System.nanoTime()
     return try {
-      if (p.isDirect) {
+      if (p.isEasyTier) {
+        EasyTierConfig.problem(p)?.let { return Result.Down(it) }
+        return Result.Unknown("连接时由 App 内置的 EasyTier 加入网络")
+      } else if (p.isDirect) {
         val base = p.directBase ?: return Result.Down("网址不对")
         val c = URL("$base/_tw/api/me").openConnection() as HttpURLConnection
         c.connectTimeout = timeout

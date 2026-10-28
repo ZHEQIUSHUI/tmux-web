@@ -147,7 +147,7 @@ private fun ShareSender(m: AppModel) {
     item {
       ShareCard {
         Text("共享哪些配置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text("选中的服务器会带上连接地址、账号、密码和所用私钥。接收方会自动跳过完全相同的配置。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("选中的服务器会带上连接地址、账号、密码、EasyTier 网络信息和所用私钥。接收方会自动跳过完全相同的配置。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.size(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           TextButton(onClick = { selectedProfiles = m.profiles.map { it.id }.toSet(); selectedKeys = m.keys.map { it.id }.toSet() }) { Text("全选") }
@@ -174,7 +174,7 @@ private fun ShareSender(m: AppModel) {
     if (m.keys.isNotEmpty()) {
       item { SectionLabel("SSH 私钥 · ${selectedKeys.size}/${m.keys.size}") }
       items(m.keys, key = { "k-${it.id}" }) { k ->
-        val users = m.profiles.count { !it.isDirect && it.keyId == k.id }
+        val users = m.profiles.count { it.mode == "ssh" && it.keyId == k.id }
         SelectionRow(
           checked = k.id in selectedKeys,
           title = k.name.ifBlank { "未命名私钥" },
@@ -318,7 +318,7 @@ private fun ShareReceiver(a: Actions) {
       ShareCard {
         Text("查重规则", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.size(7.dp))
-        Text("服务器会按连接方式、账号、地址、端口、密码和私钥判断。完全相同的配置会跳过；同一台服务器但密码或私钥不同，会作为另一个配置导入。相同的私钥只保留一份，导入的服务器会复用它。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("服务器会按连接方式、账号、地址、端口、密码和私钥判断；EasyTier 还会比较网络名称、密钥、公共节点和服务器虚拟 IP。完全相同的配置会跳过；同一台服务器但凭据不同，会作为另一个配置导入。相同的私钥只保留一份，导入的服务器会复用它。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
       }
     }
   }

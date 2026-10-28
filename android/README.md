@@ -1,12 +1,13 @@
 # tmux-web 安卓 App
 
-和 Mac App 一样是个「壳」：直接打开服务器上的 tmux-web 网页，或者在 App 里维持一条 SSH 端口转发再打开。网页内容由服务器提供，服务器更新后点顶部的刷新就是新版。App 自己的界面（首页、连接页、设置）用 Jetpack Compose + Material 3。
+和 Mac App 一样是个「壳」：直接打开服务器上的 tmux-web 网页，或者由 App 内置的 EasyTier 加入虚拟网络，再通过 SSH 端口转发打开。网页内容由服务器提供，服务器更新后点顶部的刷新就是新版。App 自己的界面（首页、连接页、设置）用 Jetpack Compose + Material 3。
 
 ## 安装和使用
 
 1. 下载 [tmux-web-android.apk](https://github.com/ZHEQIUSHUI/tmux-web/releases/latest/download/tmux-web-android.apk)，点开安装（系统可能要求允许「安装未知应用」）。Android 8 起。
 2. 打开后是服务器首页，第一次会让你选连接方式：
-   - **直接访问**：已经能直接访问服务器时用（比如在 EasyTier、局域网里），只填网址，比如 `http://10.126.126.2:8080`
+   - **直接访问**：已经能直接访问服务器时用（比如在已打开的 EasyTier、局域网里），只填网址，比如 `http://10.126.126.2:8080`
+   - **内置 EasyTier**：App 自己加入 EasyTier 网络，不需要另开 EasyTier，也不占用系统的 VPN。填写网络名称、网络密钥、公共节点、服务器虚拟 IP 和 tmux-web 端口；App 用 no-TUN 模式只转发这一个本地端口。
    - **SSH 转发**：通过 SSH 端口转发访问，填下面这些：
    - **SSH 目标**：`user@host`
    - **SSH 端口**、**服务器上 tmux-web 的端口**（默认 8080）、**本地端口**（每台服务器自动分配一个：18080、18081…，固定不变，网页的登录状态才能保留）
@@ -23,7 +24,7 @@
 
 ## 功能
 
-- 内置 SSH（sshj），支持私钥、密码、验证码（两步验证），断线自动重连
+- 内置 EasyTier（Android JNI，no-TUN 端口转发）和 SSH（sshj），都支持断线自动重连；EasyTier 不占用系统 VPN，SSH 支持私钥、密码、验证码（两步验证）
 - 在后台保持连接（通知栏里有一条「已连接」），网页的「等待确认 / 任务完成」提醒变成系统通知，点通知跳到对应会话
 - 配置（包括密码和私钥）用安卓系统密钥库加密保存
 - 服务器的主机密钥第一次连接时记住，之后变了会拒绝连接（防冒充）；服务器重装过的话在「编辑服务器 → 高级」里点「忘记主机密钥」
@@ -37,17 +38,18 @@
 
 - **共享给其他设备**：勾选要发送的服务器和私钥，设置端口（默认 `48620`）与至少 6 位访问密码，点「开始共享」。页面会列出本机的所有局域网 IPv4 地址，另一台设备填入 `IP:端口` 和密码即可获取。
 - **从其他设备获取**：打开「从其他设备获取」，填对方显示的 IP、端口和密码。导入的服务器会分配新的本地 UUID 和空闲本地转发端口，不会覆盖本机已有配置。
-- **查重**：私钥按规范化后的文本 SHA-256 指纹比较，同一把私钥只保留一份并复用。SSH 服务器按账号、主机、SSH 端口、远端地址与端口、密码、私钥指纹和额外参数比较；直连地址会先规范化协议、主机、默认端口和末尾斜杠。完全相同的配置直接跳过，同一主机但凭据不同则保留为独立配置。当前安卓版还没有内置 EasyTier：从新版 Mac App 收到 EasyTier 配置时会明确跳过并提示，不会生成坏配置。
+- **查重**：私钥按规范化后的文本 SHA-256 指纹比较，同一把私钥只保留一份并复用。SSH 服务器按账号、主机、SSH 端口、远端地址与端口、密码、私钥指纹和额外参数比较；直连地址会先规范化协议、主机、默认端口和末尾斜杠；EasyTier 比较网络名称、网络密钥、公共节点（顺序无关）、服务器虚拟 IP 和 tmux-web 端口。完全相同的配置直接跳过，同一主机但凭据不同则保留为独立配置。
 - **安全**：共享内容用 AES-256-GCM 加密，密钥由访问密码经 PBKDF2-HMAC-SHA256（120,000 次）派生。接收端连续输错 5 次会锁定 60 秒。只在可信局域网使用，不要把共享端口暴露到公网；共享会一直运行到点「停止共享」或退出 App。
 
 ## 编译
 
 ```sh
 cd android
+./build-easytier.sh           # 首次：编译 arm64-v8a 的 EasyTier JNI
 ./gradlew assembleDebug        # → app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`local.properties` 里写 `sdk.dir=<安卓 SDK 路径>`（需要 platform 35 和 build-tools 35.0.0）。
+`local.properties` 里写 `sdk.dir=<安卓 SDK 路径>`（需要 platform 35 和 build-tools 35.0.0）。编译 EasyTier 还需要 Rust、`cargo-ndk`、NDK、`libclang` 和 `patchelf`；脚本会自动准备 EasyTier 源码和固定版本的 protoc（约 2 MB）。内置 EasyTier 目前构建 `arm64-v8a`，适用于 ARM64 安卓手机；没有原生库时直连和 SSH 仍可正常使用，EasyTier 页会提示安装包不支持当前架构。EasyTier 以 LGPL-3.0 动态链接，构建来源和本地补丁见 `THIRD_PARTY_NOTICES.md`。
 
 ## 发版（CI）
 

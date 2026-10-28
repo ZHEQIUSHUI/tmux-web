@@ -18,7 +18,7 @@
 - **Mac / 安卓 App 可以在局域网里共享配置**：选择服务器和 SSH 私钥，设置端口与访问密码后，另一台设备输入地址和密码即可导入；完全相同的配置和私钥会自动跳过
 - 手机端按终端 App 的方式设计：会话卡片列表、终端附加键栏（Ctrl/Alt/Esc/方向键/粘贴）、双指缩放字号，可以添加到主屏幕
 
-也可以用 App：[Mac](mac/README.md) 和 [安卓](android/README.md)。它们自动维持 SSH 端口转发并打开网页，提醒会变成系统通知，并且会自动更新；Mac 版还可以直接内置 EasyTier，不用另外打开 EasyTier App。下载：[最新版本](https://github.com/ZHEQIUSHUI/tmux-web/releases/latest)。
+也可以用 App：[Mac](mac/README.md) 和 [安卓](android/README.md)。它们自动维持 SSH 端口转发并打开网页，提醒会变成系统通知，并且会自动更新；Mac 和安卓版都可以直接内置 EasyTier，不用另外打开 EasyTier App。下载：[最新版本](https://github.com/ZHEQIUSHUI/tmux-web/releases/latest)。
 
 ## 快速开始
 

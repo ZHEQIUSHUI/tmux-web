@@ -17,9 +17,16 @@ import javax.crypto.spec.GCMParameterSpec
 data class Profile(
   val id: String = UUID.randomUUID().toString(),
   val name: String = "",
-  /** "direct": open [directUrl] as it is (EasyTier, LAN…); "ssh": through an SSH port forward */
+  /** "direct": open [directUrl] as it is; "easytier": bundled EasyTier + a local forward; "ssh" */
   val mode: String = "direct",
   val directUrl: String = "",
+  /** the EasyTier network name and its shared secret */
+  val easyTierNetwork: String = "",
+  val easyTierSecret: String = "",
+  /** one or more public relay nodes, comma or newline separated */
+  val easyTierPeers: String = "",
+  /** the tmux-web server's IPv4 address inside the EasyTier network */
+  val easyTierServerIP: String = "",
   /** user@host */
   val target: String = "",
   val sshPort: Int = 22,
@@ -39,12 +46,27 @@ data class Profile(
   val lastUsed: Long = 0,
 ) {
   val isDirect get() = mode == "direct"
-  val title get() = name.ifBlank { if (isDirect) directBase?.let { android.net.Uri.parse(it).host } ?: directUrl else target }
+  val isEasyTier get() = mode == "easytier"
+  val title get() = name.ifBlank {
+    when {
+      isDirect -> directBase?.let { android.net.Uri.parse(it).host } ?: directUrl
+      isEasyTier -> easyTierServerIP.ifBlank { easyTierNetwork.ifBlank { "EasyTier" } }
+      else -> target
+    }
+  }
   val user get() = target.substringBefore('@', "")
   val host get() = target.substringAfter('@')
   /** what the card shows under the name */
-  val address get() = if (isDirect) directBase ?: directUrl else "${target.trim()}${if (sshPort == 22) "" else ":$sshPort"} → $remotePort"
-  val isComplete get() = if (isDirect) directBase != null else target.contains('@') && host.isNotBlank() && user.isNotBlank() && remotePort > 0 && localPort > 0
+  val address get() = when {
+    isDirect -> directBase ?: directUrl
+    isEasyTier -> "EasyTier${easyTierNetwork.trim().let { if (it.isEmpty()) "" else " · $it" }} → ${easyTierServerIP.trim()}:$remotePort"
+    else -> "${target.trim()}${if (sshPort == 22) "" else ":$sshPort"} → $remotePort"
+  }
+  val isComplete get() = when {
+    isDirect -> directBase != null
+    isEasyTier -> EasyTierConfig.problem(this) == null
+    else -> target.contains('@') && host.isNotBlank() && user.isNotBlank() && remotePort > 0 && localPort > 0
+  }
 
   /** The direct address as http(s)://host[:port] ("10.0.0.2:8080" gets http://), or null. */
   val directBase: String?
@@ -58,6 +80,7 @@ data class Profile(
 
   fun toJson() = JSONObject().apply {
     put("id", id); put("name", name); put("mode", mode); put("directUrl", directUrl); put("target", target); put("sshPort", sshPort)
+    put("easyTierNetwork", easyTierNetwork); put("easyTierSecret", easyTierSecret); put("easyTierPeers", easyTierPeers); put("easyTierServerIP", easyTierServerIP)
     put("remoteHost", remoteHost); put("remotePort", remotePort); put("localPort", localPort)
     put("keyId", keyId); put("password", password); put("lastUsed", lastUsed)
   }
@@ -65,6 +88,8 @@ data class Profile(
   companion object {
     fun fromJson(o: JSONObject) = Profile(
       id = o.optString("id", UUID.randomUUID().toString()), name = o.optString("name"), mode = o.optString("mode", "ssh"), directUrl = o.optString("directUrl"), target = o.optString("target"),
+      easyTierNetwork = o.optString("easyTierNetwork"), easyTierSecret = o.optString("easyTierSecret"),
+      easyTierPeers = o.optString("easyTierPeers"), easyTierServerIP = o.optString("easyTierServerIP"),
       sshPort = o.optInt("sshPort", 22), remoteHost = o.optString("remoteHost", "127.0.0.1"), remotePort = o.optInt("remotePort", 8080),
       localPort = o.optInt("localPort", 18080), keyId = o.optString("keyId"), privateKey = o.optString("privateKey"), keyPassphrase = o.optString("keyPassphrase"),
       password = o.optString("password"), lastUsed = o.optLong("lastUsed", 0),
@@ -148,10 +173,12 @@ class ProfileStore(context: Context) {
   fun key(id: String): SshKey? = if (id.isEmpty()) null else keys.firstOrNull { it.id == id }
 
   /** the servers that log in with it */
-  fun usersOf(keyId: String) = profiles.filter { !it.isDirect && it.keyId == keyId }
+  fun usersOf(keyId: String) = profiles.filter { it.mode == "ssh" && it.keyId == keyId }
 
   /** The server as the connection needs it: with its key's text. */
-  fun resolved(p: Profile): Profile = key(p.keyId)?.let { p.copy(privateKey = it.privateKey, keyPassphrase = it.passphrase) } ?: p.copy(privateKey = "", keyPassphrase = "")
+  fun resolved(p: Profile): Profile = if (p.mode == "ssh") {
+    key(p.keyId)?.let { p.copy(privateKey = it.privateKey, keyPassphrase = it.passphrase) } ?: p.copy(privateKey = "", keyPassphrase = "")
+  } else p.copy(privateKey = "", keyPassphrase = "")
 
   /** a changed one stays where it was; a new one goes last */
   fun upsertKey(k: SshKey) {
@@ -177,6 +204,7 @@ class ProfileStore(context: Context) {
   /** A key that came with the server (an older version's, a test's) goes into the key list; the same key only once. */
   private fun adopt(p: Profile): Profile {
     val text = p.privateKey.trim()
+    if (p.mode != "ssh") return p.copy(keyId = "", privateKey = "", keyPassphrase = "")
     if (text.isEmpty() || key(p.keyId) != null) return p.copy(privateKey = "", keyPassphrase = "")
     val k = keys.firstOrNull { it.privateKey.trim() == text }
       ?: SshKey(name = "${p.title} 的私钥", privateKey = text, passphrase = p.keyPassphrase).also { keys = keys + it }

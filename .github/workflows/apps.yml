@@ -57,6 +57,17 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
           SDKM=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -1)
           yes | "$SDKM" --install "platforms;android-35" "build-tools;35.0.0" > /dev/null
+          if [ ! -d "$ANDROID_HOME/ndk/27.2.12479018" ]; then
+            yes | "$SDKM" --install "ndk;27.2.12479018" > /dev/null
+          fi
+      - name: Rust 与 Android NDK 工具
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev patchelf
+          command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked --version 4.1.2
+      # EasyTier is built from a pinned upstream commit, not committed as a binary.
+      - name: 内置 EasyTier
+        run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018" bash android/build-easytier.sh
       # signed with the public key in the repository (android/release.jks)
       - name: 编译
         working-directory: android

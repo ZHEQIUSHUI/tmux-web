@@ -222,7 +222,7 @@ private fun ServerCard(
       }
       Spacer(Modifier.size(12.dp))
       Row(Modifier.padding(end = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Pill(if (p.isDirect) "直接访问" else "SSH 转发")
+        Pill(if (p.isDirect) "直接访问" else if (p.isEasyTier) "内置 EasyTier" else "SSH 转发")
         ReachPill(probe)
         Spacer(Modifier.weight(1f))
         Text(ago(p.lastUsed), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
@@ -257,6 +257,7 @@ fun ReachPill(r: Probe.Result?) {
     null, Probe.Result.Checking -> Pill("检测中", dot = StateColor.off)
     is Probe.Result.Up -> Pill("在线 · ${r.ms} ms", dot = StateColor.ok)
     is Probe.Result.Down -> Pill("离线", dot = StateColor.bad)
+    is Probe.Result.Unknown -> Pill("连接时检测", dot = StateColor.off)
   }
 }
 
@@ -302,7 +303,7 @@ fun ConfirmDelete(p: Profile, onDismiss: () -> Unit, onConfirm: () -> Unit) {
   )
 }
 
-/** nothing yet: the two ways in, each a big choice */
+/** nothing yet: the ways in, each a big choice */
 @Composable
 private fun EmptyHome(a: Actions, modifier: Modifier) {
   Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -320,6 +321,8 @@ private fun EmptyHome(a: Actions, modifier: Modifier) {
       )
       Spacer(Modifier.size(24.dp))
       ChoiceCard(LanIcon, Color(0xFF13A3A0), "直接访问", "EasyTier、局域网、VPN 里能直接打开网址时用") { a.edit(Screen.Editor(mode = "direct")) }
+      Spacer(Modifier.size(12.dp))
+      ChoiceCard(LinkIcon, Color(0xFF2F6FDE), "内置 EasyTier", "App 自己加入 EasyTier 网络，不用另开 App，也不占用系统 VPN") { a.edit(Screen.Editor(mode = "easytier")) }
       Spacer(Modifier.size(12.dp))
       ChoiceCard(TerminalIcon, Color(0xFF5B5BD6), "SSH 转发", "通过 SSH 登录服务器，把 tmux-web 转发到手机上，不用开放端口") { a.edit(Screen.Editor(mode = "ssh")) }
       Spacer(Modifier.size(24.dp))
@@ -364,7 +367,7 @@ private fun AboutDialog(a: Actions, close: () -> Unit) {
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("版本 ${BuildConfig.VERSION_NAME}", fontWeight = FontWeight.SemiBold)
-        Text("在手机上使用服务器上的 Claude Code / Codex 会话：直接打开 tmux-web 的网页，或者通过 SSH 转发过去。")
+        Text("在手机上使用服务器上的 Claude Code / Codex 会话：直接打开 tmux-web 的网页，或者通过内置 EasyTier、SSH 转发过去。")
         Text("开源项目（MIT），按现状提供。安装包只从项目的 GitHub Release 下载。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
       }
     },

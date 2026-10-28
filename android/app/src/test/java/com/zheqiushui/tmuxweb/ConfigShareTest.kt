@@ -73,9 +73,9 @@ class ConfigShareTest {
   }
 
   @Test
-  fun summaryExplainsSkippedEasyTierProfiles() {
+  fun summaryExplainsSkippedUnsupportedProfiles() {
     val text = ShareImportSummary(1, 0, 0, 0, 2).text
-    assertEquals(true, text.contains("2 个当前安卓版暂不支持的 EasyTier 配置"))
+    assertEquals(true, text.contains("2 个不支持或填写不完整的配置"))
   }
 
   @Test

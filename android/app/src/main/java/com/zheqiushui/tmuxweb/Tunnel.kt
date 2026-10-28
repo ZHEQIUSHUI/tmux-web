@@ -61,6 +61,7 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
   @Volatile private var generation = 0
   @Volatile private var client: SSHClient? = null
   @Volatile private var server: ServerSocket? = null
+  @Volatile private var profile: Profile? = null
   private var thread: Thread? = null
   /** the wait before the next reconnect; nudge() cuts it short */
   private val pause = Object()
@@ -81,6 +82,7 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
 
   fun start(p: Profile) {
     stop()
+    profile = p
     wanted = true
     val gen = ++generation
     thread = Thread({ run(p, gen) }, "tunnel").apply { isDaemon = true; start() }
@@ -88,8 +90,11 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
 
   fun stop() {
     wanted = false
+    val wasEasyTier = profile?.isEasyTier == true
+    profile = null
     try { server?.close() } catch (_: Exception) {}
     try { client?.disconnect() } catch (_: Exception) {}
+    if (wasEasyTier) EasyTierNative.stop()
     thread?.interrupt()
     thread = null
     generation++
@@ -102,18 +107,107 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
     val base = p.directBase ?: return report(gen, TunnelState.Failed("地址不对：${p.directUrl}"))
     report(gen, TunnelState.Connecting(0))
     try {
-      val c = java.net.URL("$base/_tw/api/me").openConnection() as java.net.HttpURLConnection
-      c.connectTimeout = 10_000
-      c.readTimeout = 10_000
-      c.responseCode // any answer (401 = not logged in yet) means it's there
+      if (!webAnswers(base, 10_000)) throw IllegalStateException("没有响应")
       report(gen, TunnelState.Ready(base))
     } catch (e: Exception) {
       report(gen, TunnelState.Failed("打不开 $base：${describe(e)}"))
     }
   }
 
+  /** The bundled EasyTier joins the virtual network; the generated forward exposes tmux-web locally. */
+  private fun runEasyTier(p: Profile, gen: Int) {
+    var everReady = false
+    var retry = 0
+    while (wanted && gen == generation) {
+      report(gen, if (everReady) TunnelState.Reconnecting("EasyTier 正在重新连接…") else TunnelState.Connecting(0))
+      try {
+        easyTierConnection(p, gen) { everReady = true; retry = 0 }
+      } catch (e: Exception) {
+        if (!wanted || gen != generation) return
+        val msg = EasyTierLog.redact(describe(e), p.easyTierSecret)
+        android.util.Log.w("tmux-web", "EasyTier: $msg")
+        if (!everReady) {
+          report(gen, TunnelState.Failed(msg))
+          wanted = false
+          return
+        }
+        retry++
+        val wait = minOf(30, 1 shl minOf(retry, 5))
+        report(gen, TunnelState.Reconnecting("EasyTier 连接断开，$wait 秒后重连…"))
+        try {
+          synchronized(pause) {
+            if (!nudged) pause.wait(wait * 1000L)
+            nudged = false
+          }
+        } catch (_: InterruptedException) { return }
+      } finally {
+        EasyTierNative.stop()
+      }
+    }
+  }
+
+  /** Starts one instance, waits for tmux-web through the forward, then watches it until it breaks. */
+  private fun easyTierConnection(p: Profile, gen: Int, onReady: () -> Unit) {
+    EasyTierConfig.problem(p)?.let { throw EasyTierException(it) }
+    var waited = 0
+    while (waited < 1_000 && portInUse(p.localPort)) {
+      if (!sleep(100)) return
+      waited += 100
+    }
+    if (portInUse(p.localPort)) {
+      throw IllegalStateException("本地端口 ${p.localPort} 已被占用，换一个本地端口试试。")
+    }
+
+    EasyTierNative.start(EasyTierConfig.make(p), p.easyTierSecret)
+    val base = "http://127.0.0.1:${p.localPort}"
+    val deadline = System.currentTimeMillis() + 60_000
+    var ready = false
+    while (wanted && gen == generation && System.currentTimeMillis() < deadline) {
+      if (webAnswers(base, 2_000)) {
+        ready = true
+        break
+      }
+      if (!sleep(500)) return
+    }
+    if (!wanted || gen != generation) return
+    if (!ready) throw IllegalStateException("EasyTier 在 60 秒内没有连上 tmux-web。检查网络名称、密钥、公共节点和服务器虚拟 IP。")
+
+    report(gen, TunnelState.Ready(base))
+    onReady()
+
+    var misses = 0
+    while (wanted && gen == generation) {
+      if (!sleep(5_000)) return
+      if (webAnswers(base, 3_000)) {
+        misses = 0
+        if (state !is TunnelState.Ready) report(gen, TunnelState.Ready(base))
+      } else if (++misses >= 3) {
+        throw IllegalStateException("EasyTier 连接断开")
+      }
+    }
+  }
+
+  private fun webAnswers(base: String, timeout: Int): Boolean = try {
+    val c = java.net.URL("$base/_tw/api/me").openConnection() as java.net.HttpURLConnection
+    c.connectTimeout = timeout
+    c.readTimeout = timeout
+    c.responseCode // any answer (401 = not logged in yet) means it's there
+    c.disconnect()
+    true
+  } catch (_: Exception) {
+    false
+  }
+
+  private fun sleep(ms: Long): Boolean = try {
+    Thread.sleep(ms)
+    true
+  } catch (_: InterruptedException) {
+    false
+  }
+
   private fun run(p: Profile, gen: Int) {
     if (p.isDirect) return direct(p, gen)
+    if (p.isEasyTier) return runEasyTier(p, gen)
     var everReady = false
     var retry = 0
     while (wanted && gen == generation) {
@@ -231,6 +325,21 @@ class Tunnel(private val context: Context, private val asker: Asker, private val
    */
   fun check() {
     if (state is TunnelState.Reconnecting) return nudge()
+    val easy = profile?.takeIf { it.isEasyTier }
+    if (state is TunnelState.Ready && easy != null && !checking) {
+      checking = true
+      Thread({
+        try {
+          if (!webAnswers("http://127.0.0.1:${easy.localPort}", 3_000)) {
+            // Interrupt the monitor: its finally block stops the instance and the loop reconnects.
+            thread?.interrupt()
+          }
+        } finally {
+          checking = false
+        }
+      }, "check-easytier").apply { isDaemon = true; start() }
+      return
+    }
     val ssh = client
     if (state !is TunnelState.Ready || ssh == null || checking) return
     checking = true

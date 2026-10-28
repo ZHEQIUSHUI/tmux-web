@@ -228,10 +228,14 @@ fun ServerSwitcher(m: AppModel, a: Actions, close: () -> Unit) {
 /** Each step on the way to the page; a failure says where, why, and what to do about it. */
 @Composable
 fun ConnectingScreen(m: AppModel, a: Actions, p: Profile) {
-  val steps = if (p.isDirect) {
-    listOf("连接服务器" to (p.directBase ?: p.directUrl), "打开网页" to "加载 tmux-web")
-  } else {
-    listOf(
+  val steps = when {
+    p.isDirect -> listOf("连接服务器" to (p.directBase ?: p.directUrl), "打开网页" to "加载 tmux-web")
+    p.isEasyTier -> listOf(
+      "加入 EasyTier 网络" to "${p.easyTierNetwork} · ${p.easyTierServerIP}",
+      "端口转发" to "手机 ${p.localPort} → 服务器 ${p.easyTierServerIP}:${p.remotePort}",
+      "打开网页" to "加载 tmux-web",
+    )
+    else -> listOf(
       "SSH 登录" to "${p.host}:${p.sshPort}",
       "端口转发" to "手机 ${p.localPort} → 服务器 ${p.remoteHost}:${p.remotePort}",
       "打开网页" to "加载 tmux-web",
@@ -273,7 +277,7 @@ fun ConnectingScreen(m: AppModel, a: Actions, p: Profile) {
                 else -> StepState.Waiting
               }
               // while logging in: questions (a code, a password) come up as a dialog
-              val hint = if (state == StepState.Active && i == 0 && !p.isDirect) "$detail · 需要验证码或密码时会弹框" else detail
+              val hint = if (state == StepState.Active && i == 0 && p.mode == "ssh") "$detail · 需要验证码或密码时会弹框" else detail
               StepRow(label, hint.takeIf { state == StepState.Active || state == StepState.Failed }, state)
             }
           }
@@ -362,12 +366,19 @@ private fun FailureCard(error: String, failedPage: Boolean, a: Actions, p: Profi
 fun explain(msg: String, failedPage: Boolean, p: Profile): Pair<String, String> = when {
   failedPage -> "网页打不开" to
     if (p.isDirect) "服务器有响应，但页面没加载出来。刷新试试，或者确认网址就是 tmux-web 的地址。"
+    else if (p.isEasyTier) "EasyTier 已经连上，但服务器上的 ${p.easyTierServerIP}:${p.remotePort} 没有响应。确认 tmux-web 在运行、端口填对，并且服务器虚拟 IP 正确。"
     else "SSH 已经连上，但服务器上的 ${p.remoteHost}:${p.remotePort} 没有响应。确认 tmux-web 在运行，端口填对（默认 8080）。"
   msg.contains("地址不对") -> "网址不对" to "填完整的网址，比如 http://10.126.126.2:8080。"
   msg.contains("找不到主机") -> "找不到服务器" to "检查地址有没有拼错，以及手机是否连上了能访问它的网络（EasyTier、VPN、局域网）。"
   msg.contains("超时") || msg.contains("timed out", true) -> "连接超时" to "服务器没有响应：确认地址和端口对、服务器开着，手机的网络能到达它。"
   msg.contains("拒绝") || msg.contains("refused", true) -> "连接被拒绝" to
-    if (p.isDirect) "这个地址的端口上没有服务。确认 tmux-web 在运行、端口没填错。" else "SSH 端口上没有服务，确认 SSH 端口（一般是 22）。"
+    when {
+      p.isDirect -> "这个地址的端口上没有服务。确认 tmux-web 在运行、端口没填错。"
+      p.isEasyTier -> "EasyTier 网络里这个地址的端口没有服务。确认服务器虚拟 IP、tmux-web 端口和服务器状态。"
+      else -> "SSH 端口上没有服务，确认 SSH 端口（一般是 22）。"
+    }
+  msg.contains("EasyTier") || msg.contains("原生库") -> "EasyTier 连不上" to
+    "检查网络名称、网络密钥、公共节点和服务器虚拟 IP。还要确认手机能访问公共节点，并且安装包包含当前手机架构的原生库。"
   msg.contains("登录失败") -> "登录失败" to "密码、私钥或私钥口令不对，或者服务器不接受这种登录方式。编辑服务器检查一下。"
   msg.contains("主机密钥") -> "服务器身份变了" to "如果服务器重装过，在「编辑服务器 → 高级」里点「忘记主机密钥」再重试；否则可能有人冒充，先别连。"
   msg.contains("本地端口") -> "本地端口被占用" to "在「编辑服务器 → 高级」里换一个本地端口，或者关掉占用它的其他 App。"
