@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'preact/hooks';
-import { api, type Folder, type Group, type HostInfo, type Me, type SessionInfo } from './api';
+import { api, type CodexProfile, type Folder, type Group, type HostInfo, type Me, type SessionInfo } from './api';
 import { AGENT_LABEL, coarsePointer, copyText, relTime, shortPath, store } from './lib';
+import { codexProfileOf, setCodexProfile } from './codex-profile';
 import { Modal } from './ui';
 import { restartAgent } from './chat';
 
@@ -185,6 +186,8 @@ export function NewSession({ me, at, onClose, onCreated }: { me: Me; at?: { host
   const [resume, setResume] = useState<HistorySession | null>(null);
   const [hosts] = useHosts();
   const [hostId, setHostId] = useState<number | null>(at?.hostId ?? null);
+  const [profiles, setProfiles] = useState<CodexProfile[]>([]);
+  const [profilesError, setProfilesError] = useState('');
   const [dirs, setDirs] = useState<string[]>([]);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -197,7 +200,22 @@ export function NewSession({ me, at, onClose, onCreated }: { me: Me; at?: { host
     setDirs([]);
     api<string[]>('GET', `/_tw/api/hosts/${hostId}/dirs`).then(setDirs, () => {});
   }, [hostId]);
+  useEffect(() => {
+    if (agent !== 'codex' || hostId === null) {
+      setProfiles([]);
+      setProfilesError('');
+      return;
+    }
+    let off = false;
+    setProfilesError('');
+    api<CodexProfile[]>('GET', `/_tw/api/hosts/${hostId}/codex-profiles`).then(
+      (list) => !off && setProfiles(list),
+      (e) => !off && (setProfiles([]), setProfilesError(e.message)),
+    );
+    return () => void (off = true);
+  }, [agent, hostId]);
   const host = hosts?.find((h) => h.id === hostId);
+  const profile = agent === 'codex' ? codexProfileOf(args) : '';
   const submit = async (e: Event) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target as HTMLFormElement)) as Record<string, string>;
@@ -305,6 +323,22 @@ export function NewSession({ me, at, onClose, onCreated }: { me: Me; at?: { host
           名称
           <input name="name" placeholder={agent !== 'bash' && resume?.title ? resume.title : '留空则用 agent + 目录名'} maxLength={60} />
         </label>
+        {agent === 'codex' && (
+          <label>
+            Codex 配置
+            <select value={profile} onChange={(e) => setArgs(setCodexProfile(args, (e.target as HTMLSelectElement).value))}>
+              <option value="">默认（不使用 --profile）</option>
+              {profile && !profiles.some((p) => p.name === profile) && <option value={profile}>{profile}（未找到配置文件）</option>}
+              {profiles.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <span class="small">索引自这台主机的 ~/.codex/*.config.toml</span>
+            {profilesError && <span class="error small">读取配置失败：{profilesError}</span>}
+          </label>
+        )}
         <label>
           额外启动参数
           <input name="args" value={args} onInput={(e) => setArgs((e.target as HTMLInputElement).value)} placeholder={agent === 'codex' && me.defaults?.codexArgs ? `默认：${me.defaults.codexArgs}` : '点下面的常用项，或自己填写'} autocapitalize="off" spellcheck={false} />
@@ -347,7 +381,14 @@ export function SessionSettings({ me, session, folders, onClose }: { me: Me; ses
     }
   };
   const restart = async () => {
-    if (!confirm(session.adopted ? `重启会关闭你原来的 tmux 会话「${session.tmux}」，然后在 tmux-web 里恢复对话。继续？` : '重启会话？正在运行的任务会被中断，对话会自动恢复。')) return;
+    if (
+      !confirm(
+        session.adopted
+          ? `重启会话「${session.name}」？这会关闭你原来的 tmux 会话「${session.tmux}」，并由 tmux-web 重新创建，对话会接着继续。继续？`
+          : `重启会话「${session.name}」？正在运行的任务会被中断，对话会自动恢复。`,
+      )
+    )
+      return;
     try {
       await api('POST', `/_tw/api/sessions/${session.id}/restart`);
       onClose();
@@ -371,7 +412,11 @@ export function SessionSettings({ me, session, folders, onClose }: { me: Me; ses
         <p class="dim small">
           {AGENT_LABEL[session.agent]} · {session.host}:{session.cwd} · 创建者 {session.owner}
         </p>
-        {session.adopted && <p class="small">接管自你的 tmux 会话 <code>{session.tmux}</code>。删除只是停止接管；「重启」会关掉原会话，并在 tmux-web 里恢复对话。</p>}
+        {session.adopted && (
+          <p class="small">
+            接管自你的 tmux 会话 <code>{session.tmux}</code>。删除只是停止接管；重启会关闭原会话，由 tmux-web 重新创建并接着原来的对话。
+          </p>
+        )}
         {owner && (
           <label>
             名称
@@ -406,8 +451,8 @@ export function SessionSettings({ me, session, folders, onClose }: { me: Me; ses
             </button>
           )}
           {session.access === 'control' && (
-            <button type="button" onClick={restart} title="关闭整个 tmux 会话再重建">
-              {session.adopted ? '迁移到 tmux-web' : '重建会话'}
+            <button type="button" onClick={restart} title={session.adopted ? '关闭原 tmux 会话并由 tmux-web 重建，接管会话会转为网页管理' : '关闭整个 tmux 会话再重建，对话会自动恢复'}>
+              重启会话
             </button>
           )}
           {owner && (

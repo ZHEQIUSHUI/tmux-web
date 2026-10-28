@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api, type ChatItem, type Page, type SessionInfo, type Status } from './api';
 import { mediaKind, renderMarkdown, shown, splitImages } from './markdown';
+import { parseAttachments } from './attachment';
+import { ChatAttachments } from './attachments';
 import { hydrateMermaid } from './mermaid-lazy';
 import { MAX_SESSIONS, saveChat } from './chat-store';
 import { coarsePointer, liveStream, norm, quotePath, store } from './lib';
@@ -34,6 +36,19 @@ function Images({ list }: { list: { url: string; alt: string }[] }) {
   );
 }
 const imageCtx = (sid: number, it: ChatItem) => ({ api: `/_tw/api/sessions/${sid}`, off: it.id.split(':')[0] });
+
+/** A plain-text chat item: Markdown images first, then the file paths the composer inserted. */
+function ChatContent({ sid, text, off = '' }: { sid: number; text: string; off?: string }) {
+  const media = splitImages(text, { api: `/_tw/api/sessions/${sid}`, off });
+  const body = parseAttachments(media.text);
+  return (
+    <>
+      {body.text}
+      <Images list={media.images} />
+      <ChatAttachments sid={sid} list={body.attachments} />
+    </>
+  );
+}
 
 export function ToolGroup({ sid, items, onExpand }: { sid: number; items: ChatItem[]; onExpand: (it: ChatItem) => void }) {
   const last = items[items.length - 1];
@@ -117,13 +132,11 @@ export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: Chat
     </button>
   );
   if (it.role === 'user') {
-    const { text, images } = splitImages(it.text, imageCtx(sid, it));
     return (
       // tap (phones) or hover (desktop) shows what can be done with your own message
       <div class={`msg user ${actions ? 'show-actions' : ''}`} onClick={() => setActions((v) => !v)}>
         <div class="bubble">
-          {text}
-          <Images list={images} />
+          <ChatContent sid={sid} text={it.text} off={it.id.split(':')[0]} />
           {more}
           <Time at={it.at} />
         </div>
@@ -508,19 +521,22 @@ export function prefetchChat(s: SessionInfo): Promise<void> {
   return p;
 }
 
-/** Prefetch a list of sessions one after another, in the background. Returns a cancel. */
+/** Prefetch sessions a few at a time in the background. Returns a cancel. */
 export function prefetchAll(list: SessionInfo[]): () => void {
   let cancelled = false;
   let i = 0;
-  const next = (): void => {
-    if (cancelled) return;
-    const s = list[i++];
-    if (s) void prefetchChat(s).then(() => setTimeout(next, 150));
+  // A few at a time: on a fresh page this gets a clicked session warm much sooner than a long
+  // serial queue, while still not opening every transcript at once.
+  const next = async (): Promise<void> => {
+    while (!cancelled) {
+      const s = list[i++];
+      if (!s) return;
+      await prefetchChat(s);
+    }
   };
-  const t = setTimeout(next, 500);
+  for (let n = 0; n < Math.min(4, list.length); n++) void next();
   return () => {
     cancelled = true;
-    clearTimeout(t);
   };
 }
 
@@ -809,7 +825,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
           {pending.map((p) => (
             <div key={p.key} class={`msg user pending${p.lost ? ' lost' : ''}`}>
               <div class="bubble">
-                {p.text}
+                <ChatContent sid={id} text={p.text} />
                 {p.lost ? (
                   <span class="pending-tag lost">
                     Claude 好像没收到这条

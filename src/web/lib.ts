@@ -1,26 +1,11 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { type Status } from './api';
+import { store } from './storage';
+
+export { store } from './storage';
 
 export const STATUS_LABEL: Record<Status, string> = { starting: '连接中', idle: '空闲', busy: '运行中', waiting: '等待确认', offline: '主机离线', dead: '已停止' };
 export const AGENT_LABEL = { claude: 'Claude', codex: 'Codex', bash: 'Shell' } as const;
-
-export const store = {
-  get(k: string) {
-    try {
-      return localStorage.getItem(k);
-    } catch {
-      return null;
-    }
-  },
-  set(k: string, v: string | null) {
-    try {
-      if (v === null) localStorage.removeItem(k);
-      else localStorage.setItem(k, v);
-    } catch {
-      /* private mode */
-    }
-  },
-};
 
 export const coarsePointer = matchMedia('(pointer: coarse)').matches;
 
@@ -148,6 +133,28 @@ export function useHashFiles(): [boolean, (open: boolean) => void] {
     return () => removeEventListener('hashchange', on);
   }, []);
   return [open, (o) => (location.hash = o ? '#/files' : '')];
+}
+
+/** A file opened in its own page: #/file/<session>?path=<host path>. */
+export interface HashFilePreview {
+  sid: number;
+  path: string;
+}
+export const filePreviewHref = (sid: number, path: string) => `#/file/${sid}?path=${encodeURIComponent(path)}`;
+export function useHashFilePreview(): HashFilePreview | null {
+  const read = (): HashFilePreview | null => {
+    const m = /^#\/file\/(\d+)\?(.*)$/.exec(location.hash);
+    if (!m) return null;
+    const path = new URLSearchParams(m[2]).get('path');
+    return path === null ? null : { sid: Number(m[1]), path };
+  };
+  const [preview, setPreview] = useState(read);
+  useEffect(() => {
+    const on = () => setPreview(read());
+    addEventListener('hashchange', on);
+    return () => removeEventListener('hashchange', on);
+  }, []);
+  return preview;
 }
 export const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
 

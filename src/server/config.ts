@@ -28,6 +28,6 @@ export const config = {
   },
   defaultCols: 120,
   defaultRows: 36,
-  /** Extra arguments for new Codex sessions. Set CODEX_ARGS='' to start plain `codex`. */
-  codexArgs: process.env.CODEX_ARGS ?? '--yolo --profile xx',
+  /** Extra arguments for new Codex sessions. Profiles are selected per session in the new-session dialog. */
+  codexArgs: process.env.CODEX_ARGS ?? '--yolo',
 };

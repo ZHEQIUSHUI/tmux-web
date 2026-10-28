@@ -2151,6 +2151,164 @@ a.btn {
   margin: 0;
 }
 
+/* file paths in a message: thumbnails, players, and cards that open a preview page */
+.chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+  width: 100%;
+  white-space: normal;
+}
+.chat-att {
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  color: var(--text);
+  overflow: hidden;
+}
+.chat-att:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+.chat-att-image.md-img {
+  display: block;
+  width: min(320px, 100%);
+  margin: 0;
+  line-height: normal;
+}
+.chat-att-image img {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  max-height: 220px;
+  object-fit: contain;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.chat-att-image-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--dim);
+  min-width: 0;
+}
+.chat-att-image-name > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-att-image-name .att-kind {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+.chat-att-file {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: min(360px, 100%);
+  padding: 8px 9px;
+  text-decoration: none;
+}
+.chat-att-icon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  color: var(--accent);
+}
+.chat-att-file.kind-pdf .chat-att-icon {
+  color: #d25555;
+  background: color-mix(in srgb, #d25555 11%, transparent);
+}
+.chat-att-file.kind-archive .chat-att-icon {
+  color: #b98022;
+  background: color-mix(in srgb, #b98022 12%, transparent);
+}
+.chat-att-file.kind-sheet .chat-att-icon {
+  color: var(--idle);
+  background: color-mix(in srgb, var(--idle) 11%, transparent);
+}
+.chat-att-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.chat-att-name {
+  font-size: 13px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-att-meta {
+  font-size: 11px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-att-open {
+  flex: none;
+  color: var(--dim);
+  font-size: 16px;
+}
+.chat-att-media {
+  width: min(420px, 100%);
+  padding: 8px;
+}
+.chat-att-media.audio {
+  width: min(360px, 100%);
+}
+.chat-att-media-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.chat-att-media-head .att-kind {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  color: var(--accent);
+}
+.chat-att-media-head a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  text-decoration: none;
+  font-weight: 550;
+}
+.chat-att-media audio {
+  display: block;
+  width: 100%;
+}
+.chat-att-media video {
+  display: block;
+  width: 100%;
+  max-height: 340px;
+  border-radius: 6px;
+  background: #000;
+}
+.preview-page {
+  background: var(--panel);
+}
+.preview-page .fv-file {
+  min-height: 100%;
+}
+
 /* mermaid: source until rendered (on demand) */
 .mermaid-block {
   margin: 8px 0;

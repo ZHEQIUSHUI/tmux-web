@@ -79,6 +79,12 @@ export interface HostInfo {
   home?: string;
 }
 
+export interface CodexProfile {
+  name: string;
+  mtime: number;
+  size: number;
+}
+
 export interface Folder {
   id: number;
   name: string;

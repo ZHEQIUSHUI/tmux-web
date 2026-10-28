@@ -333,7 +333,20 @@ function Row({ name, dir, meta, onOpen, onActions, onPick }: { name: string; dir
   );
 }
 
-function FileViewer({ api: base, path, onBack, onActions }: { api: string; path: string; onBack: () => void; onActions: () => void }) {
+export function FileViewer({
+  api: base,
+  path,
+  onBack,
+  onActions,
+  standalone = false,
+}: {
+  api: string;
+  path: string;
+  onBack: () => void;
+  onActions?: () => void;
+  /** a page of its own: show download and a "back to the chat" hint */
+  standalone?: boolean;
+}) {
   const isImage = IMAGE.test(path);
   // audio/video: played in place, the browser fetches the parts it needs
   const media = mediaKind(path);
@@ -390,7 +403,7 @@ function FileViewer({ api: base, path, onBack, onActions }: { api: string; path:
   return (
     <div class="fv-file">
       <div class="fv-file-head">
-        <button class="icon-btn fv-back" onClick={onBack} aria-label="返回列表" title="返回列表">
+        <button class="icon-btn fv-back" onClick={onBack} aria-label={standalone ? '返回会话' : '返回列表'} title={standalone ? '返回会话' : '返回列表'}>
           <Icon.back />
         </button>
         <span class="fv-file-name">{baseName(path)}</span>
@@ -417,9 +430,16 @@ function FileViewer({ api: base, path, onBack, onActions }: { api: string; path:
             {wrap ? '不换行' : '自动换行'}
           </button>
         )}
-        <button class="icon-btn" onClick={onActions} aria-label="操作">
-          <Icon.more />
-        </button>
+        {standalone && (
+          <a class="icon-btn" href={`${base}/files/download?path=${q(path)}`} download={baseName(path)} aria-label="下载" title="下载">
+            <Icon.download />
+          </a>
+        )}
+        {onActions && (
+          <button class="icon-btn" onClick={onActions} aria-label="操作">
+            <Icon.more />
+          </button>
+        )}
       </div>
       {error && <p class="error pad">{error}</p>}
       {media ? (
@@ -465,6 +485,19 @@ function FileViewer({ api: base, path, onBack, onActions }: { api: string; path:
         </>
       )}
     </div>
+  );
+}
+
+/** One attached file, opened in a tab of its own (#/file/<session>?path=...). */
+export function FilePreviewPage({ sid, path, onBack }: { sid: number; path: string; onBack: () => void }) {
+  return (
+    <section class="pane preview-page">
+      <div class="files">
+        <div class="fv-body">
+          <FileViewer api={`/_tw/api/sessions/${sid}`} path={path} onBack={onBack} standalone />
+        </div>
+      </div>
+    </section>
   );
 }
 

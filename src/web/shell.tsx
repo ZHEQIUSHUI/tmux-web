@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api, type Folder, type HostInfo, type Notice, type Me, type SessionInfo } from './api';
-import { STATUS_LABEL, liveStream, quotePath, store, useHashFiles, useHashSession, useNarrow } from './lib';
+import { STATUS_LABEL, liveStream, quotePath, store, useHashFilePreview, useHashFiles, useHashSession, useNarrow } from './lib';
 import { Icon } from './ui';
 import { ChatView } from './chat';
 import { TerminalView } from './terminal-view';
@@ -9,8 +9,9 @@ import { MenuSheet, MobileHome, Sidebar, Toasts, alertsEnabled, recentReach, use
 import { idsOf, newViewId, place, removeView, saveView, useHashView, useViews } from './multi';
 import { DropZones, MultiPane, useSessionDrag } from './multi-view';
 import { PreviewView } from './preview';
-import { FilesView } from './files-view';
+import { FilePreviewPage, FilesView } from './files-view';
 import { StatsModal } from './stats-view';
+import { clearSessionSnapshot, readSessionSnapshot, saveSessionSnapshot } from './session-store';
 
 export type Tab = 'chat' | 'term' | 'files' | 'preview';
 
@@ -105,9 +106,10 @@ export function SessionPane({ me, session, folders, narrow, onBack, onNewAt, onC
 
 export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   const narrow = useNarrow();
-  const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
+  const [sessions, setSessions] = useState<SessionInfo[] | null>(() => readSessionSnapshot(me.id));
   const [current, setCurrent] = useHashSession();
   const [filesOpen, setFilesOpen] = useHashFiles();
+  const filePreview = useHashFilePreview();
   // "new session" opened from a folder in a file browser: that host and directory filled in
   const [newAt, setNewAt] = useState<{ hostId: number; cwd: string } | null>(null);
   const newSessionAt: NewAt = (hostId, cwd) => {
@@ -186,7 +188,10 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
         // the in-page alerts come on this stream too (?notices=1), one connection less
         () => '/_tw/api/events?notices=1',
         {
-          sessions: setSessions,
+          sessions: (list: SessionInfo[]) => {
+            setSessions(list);
+            saveSessionSnapshot(me.id, list);
+          },
           folders: setFolders,
           status: ({ id, status }) => setSessions((cur) => cur && cur.map((s) => (s.id === id ? { ...s, status } : s))),
           activity: ({ id, at }) => setSessions((cur) => cur && cur.map((s) => (s.id === id ? { ...s, activityAt: Math.max(s.activityAt, at) } : s))),
@@ -195,7 +200,7 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
         // a 401 also ends up as an error: confirm the login is still valid
         (ok) => ok || api('GET', '/_tw/api/me').catch(() => {}),
       ),
-    [],
+    [me.id],
   );
 
   const session = sessions?.find((s) => s.id === current) ?? null;
@@ -237,13 +242,21 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   };
   const logout = async () => {
     await api('POST', '/_tw/api/logout').catch(() => {});
+    clearSessionSnapshot(me.id);
     onLogout();
   };
 
   useEffect(() => {
-    const base = session ? `${session.status === 'waiting' ? '⚠ ' : ''}${session.name} · tmux-web` : 'tmux-web';
+    const base = filePreview ? `${filePreview.path.split('/').pop() || '文件'} · tmux-web` : session ? `${session.status === 'waiting' ? '⚠ ' : ''}${session.name} · tmux-web` : 'tmux-web';
     document.title = missed ? `(${missed}) ${base}` : base;
-  }, [session?.name, session?.status, missed]);
+  }, [session?.name, session?.status, filePreview?.path, missed]);
+
+  if (filePreview)
+    return (
+      <div class="app">
+        <FilePreviewPage sid={filePreview.sid} path={filePreview.path} onBack={() => (location.hash = `#/s/${filePreview.sid}`)} />
+      </div>
+    );
 
   return (
     <div class="app" style={narrow ? undefined : { '--side-w': `${sideW}px` }}>

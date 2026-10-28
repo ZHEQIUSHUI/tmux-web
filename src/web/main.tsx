@@ -3,8 +3,9 @@ import { useEffect, useState } from 'preact/hooks';
 import { api, type Me } from './api';
 import { applyLayout, coarsePointer, followTurns, layoutPref } from './lib';
 import { Shell } from './shell';
-import { chatCache } from './chat';
+import { chatCache, type ChatCache } from './chat';
 import { clearChats, loadChats } from './chat-store';
+import { clearSessionSnapshot } from './session-store';
 import './style.css';
 import { Lightbox } from './lightbox';
 
@@ -53,21 +54,42 @@ function Login({ onLogin }: { onLogin: (m: Me) => void }) {
   );
 }
 
-/** Bring back this account's saved chats before the first view shows (a few ms from IndexedDB). */
+/** Bring back this account's saved chats without holding the first view up for IndexedDB. */
 let lastUser = 0;
+let accountEpoch = 0;
 async function signedIn(m: Me): Promise<Me> {
+  const epoch = ++accountEpoch;
   if (lastUser && lastUser !== m.id) chatCache.clear(); // another account on this page
   lastUser = m.id;
-  const saved = await loadChats(m.id).catch(() => []);
-  for (const [sid, c] of saved) if (!chatCache.has(sid)) chatCache.set(sid, c);
+  // The saved chats usually arrive in a few milliseconds. If storage is slow or blocked, show
+  // the page after a short wait and let the chat views fetch as usual instead of a blank screen.
+  const loading = loadChats(m.id).catch(() => [] as [number, ChatCache][]);
+  const apply = (saved: [number, ChatCache][]) => {
+    if (epoch !== accountEpoch) return;
+    for (const [sid, c] of saved) if (!chatCache.has(sid)) chatCache.set(sid, c);
+  };
+  const early = await Promise.race([loading, new Promise<null>((r) => setTimeout(() => r(null), 200))]);
+  if (early) apply(early);
+  else void loading.then(apply, () => {});
   return m;
+}
+
+function signedOut() {
+  accountEpoch++;
+  if (lastUser) clearSessionSnapshot(lastUser);
+  lastUser = 0;
+  chatCache.clear();
+  void clearChats();
 }
 
 function App() {
   const [me, setMe] = useState<Me | null | false>(null);
   useEffect(() => {
     api<Me>('GET', '/_tw/api/me').then(signedIn).then(setMe, () => setMe(false));
-    const out = () => setMe(false);
+    const out = () => {
+      signedOut();
+      setMe(false);
+    };
     addEventListener('tw:logout', out);
     return () => removeEventListener('tw:logout', out);
   }, []);
@@ -77,8 +99,7 @@ function App() {
     <Shell
       me={me}
       onLogout={() => {
-        chatCache.clear();
-        void clearChats();
+        signedOut();
         setMe(false);
       }}
     />

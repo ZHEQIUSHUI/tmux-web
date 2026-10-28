@@ -14,6 +14,7 @@ import {
   claudeHistory,
   claudeHistoryCached,
   codexHistoryCached,
+  codexProfiles,
   listExistingTmux,
   createSession,
   deleteSession,
@@ -873,6 +874,18 @@ route('GET', '/_tw/api/hosts/:id/codex-history', async (req, res, [id]) => {
   if (!h || !canUseHost(user, h)) throw new HttpError(404, '主机不存在');
   try {
     sendJson(req, res, 200, await codexHistoryCached(getHost(h.id)!));
+  } catch (e: any) {
+    throw new HttpError(502, e.message);
+  }
+});
+
+/** Config files below ~/.codex that can be selected with `codex --profile <name>`. */
+route('GET', '/_tw/api/hosts/:id/codex-profiles', async (req, res, [id]) => {
+  const user = requireUser(req);
+  const h = q.hostById.get(Number(id));
+  if (!h || !canUseHost(user, h)) throw new HttpError(404, '主机不存在');
+  try {
+    sendJson(req, res, 200, await codexProfiles(getHost(h.id)!));
   } catch (e: any) {
     throw new HttpError(502, e.message);
   }

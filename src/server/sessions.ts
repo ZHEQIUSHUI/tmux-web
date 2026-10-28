@@ -926,6 +926,37 @@ export interface CodexHistory {
   openAs?: number;
 }
 
+export interface CodexProfile {
+  /** the part before `.config.toml`, passed to `codex --profile` */
+  name: string;
+  /** file mtime in ms */
+  mtime: number;
+  size: number;
+}
+
+const CODEX_PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** Parse the tab-separated listing printed by `codexProfiles`. */
+export function parseCodexProfiles(out: string): CodexProfile[] {
+  const byName = new Map<string, CodexProfile>();
+  for (const line of out.split('\n')) {
+    const [name, mtime, size] = line.trim().split('\t');
+    if (!CODEX_PROFILE_NAME.test(name || '')) continue;
+    byName.set(name, { name, mtime: (Number(mtime) || 0) * 1000, size: Number(size) || 0 });
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Config files Codex layers with `--profile <name>`: $CODEX_HOME/<name>.config.toml. */
+export async function codexProfiles(host: Host): Promise<CodexProfile[]> {
+  const out = await host.shText(
+    `d="$HOME/.codex"; [ -d "$d" ] || exit 0; ` +
+      `for f in "$d"/*.config.toml; do [ -f "$f" ] || continue; b=\${f##*/}; n=\${b%.config.toml}; ` +
+      `printf '%s\\t' "$n"; stat -c '%Y\\t%s' -- "$f" 2>/dev/null || stat -f '%m\\t%z' -- "$f" 2>/dev/null || printf '0\\t0'; printf '\\n'; done; true`,
+  );
+  return parseCodexProfiles(out);
+}
+
 /**
  * Parse the output of `codexHistory`'s host command. Kept separate so the format can be tested
  * without a real Codex installation.
