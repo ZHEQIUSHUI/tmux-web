@@ -17,8 +17,9 @@ export interface ClaudeUsage {
   at: number;
 }
 
-// The usage endpoint is rate limited and the numbers move slowly: one look per host per 2 minutes
-const TTL = 2 * 60 * 1000;
+// A rough figure is enough: one look per host per half hour at most (and only when a page asks,
+// i.e. a Claude session is open there)
+const TTL = 30 * 60 * 1000;
 const cache = new Map<number, { at: number; p: Promise<ClaudeUsage> }>();
 
 const win = (w: any): UsageWindow | undefined =>
@@ -50,10 +51,9 @@ async function fetchUsage(host: Host): Promise<ClaudeUsage> {
   }
 }
 
-export function claudeUsage(host: Host, fresh = false): Promise<ClaudeUsage> {
+export function claudeUsage(host: Host): Promise<ClaudeUsage> {
   const c = cache.get(host.row.id);
-  // "fresh" (the panel was opened) still waits out a short gap, so tapping around doesn't hammer it
-  if (c && Date.now() - c.at < (fresh ? 20000 : TTL)) return c.p;
+  if (c && Date.now() - c.at < TTL) return c.p;
   const p = fetchUsage(host);
   cache.set(host.row.id, { at: Date.now(), p });
   return p;

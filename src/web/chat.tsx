@@ -406,6 +406,7 @@ export function ClaudePanel(props: { st: ClaudeState | null; usage?: ClaudeUsage
             {props.usage.weekSonnet && <UsageRow label="本周 Sonnet" w={props.usage.weekSonnet} />}
             {props.usage.fiveHour && <UsageRow label="5 小时额度" w={props.usage.fiveHour} />}
             {props.usage.error && <span class="dim small">套餐额度：{props.usage.error}</span>}
+            {!props.usage.error && <span class="dim small">{Math.max(1, Math.round((Date.now() - props.usage.at) / 60000))} 分钟前查询，每半小时更新</span>}
           </div>
         )}
         {props.canControl && (
@@ -763,26 +764,24 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
     return () => clearTimeout(t);
   }, [id, lastAssistant, state.status === 'idle']);
 
-  // plan limits: on open, every few minutes, and fresh when the panel is opened
+  // plan limits: no polling. They only move while Claude works, so ask when the session opens and
+  // when Claude finishes a turn; the server looks it up at most every half hour per machine
   const [usage, setUsage] = useState<ClaudeUsage | null>(null);
   const loadUsage = useCallback(
-    (fresh = false) =>
-      api<ClaudeUsage | null>('GET', `/_tw/api/sessions/${id}/claude-usage${fresh ? '?fresh=1' : ''}`).then(
+    () =>
+      api<ClaudeUsage | null>('GET', `/_tw/api/sessions/${id}/claude-usage`).then(
         (u) => setUsage((old) => (u && !u.error ? u : old && !old.error ? old : u)),
         () => {},
       ),
     [id],
   );
   useEffect(() => {
-    if (!isClaude) return;
-    setUsage(null);
-    void loadUsage();
-    const t = setInterval(() => document.visibilityState === 'visible' && loadUsage(), 3 * 60 * 1000);
-    return () => clearInterval(t);
-  }, [id, isClaude]);
+    if (isClaude) setUsage(null);
+  }, [id]);
+  const idle = state.status === 'idle';
   useEffect(() => {
-    if (panel) void loadUsage(true);
-  }, [panel]);
+    if (isClaude && document.visibilityState === 'visible') void loadUsage();
+  }, [id, idle]);
 
   const runCommand = (cmd: string) =>
     api('POST', `/_tw/api/sessions/${id}/input`, { text: cmd })

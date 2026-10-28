@@ -478,10 +478,10 @@ route('GET', '/_tw/api/sessions/:id/image', async (req, res, [id], url) => {
 });
 
 /** Plan limits (5-hour and weekly) of the Claude account the session's machine is logged in to. */
-route('GET', '/_tw/api/sessions/:id/claude-usage', async (req, res, [id], url) => {
+route('GET', '/_tw/api/sessions/:id/claude-usage', async (req, res, [id]) => {
   const { row, live } = sessionFor(requireUser(req), id, 'view');
   if (row.agent !== 'claude' || !live.host) return sendJson(req, res, 200, null);
-  sendJson(req, res, 200, await claudeUsage(live.host, url.searchParams.has('fresh')));
+  sendJson(req, res, 200, await claudeUsage(live.host));
 });
 
 /** Claude Code's model and context usage, from the end of its log. */
