@@ -12,6 +12,13 @@ export const backend: SessionBackend = new TmuxBackend();
 
 const tmuxName = (id: number) => `tw-${id}`;
 
+/** New sessions start in the user's workspace; the host creates it when missing. */
+export const DEFAULT_SESSION_CWD = '~/workspace';
+
+export function normalizeSessionCwd(cwd?: string): string {
+  return cwd?.trim() || DEFAULT_SESSION_CWD;
+}
+
 const INSTALL_HINT: Record<string, string[]> = {
   claude: ['未找到 claude。可以在下面的 shell 里安装：', '  curl -fsSL https://claude.ai/install.sh | bash', '装好后在会话设置里点「重启」。'],
   codex: ['未找到 codex。可以在下面的 shell 里安装：', '  npm install -g @openai/codex', '装好后在会话设置里点「重启」。'],
@@ -635,6 +642,11 @@ async function prepareCwd(host: Host, cwd: string): Promise<string> {
   return out.trim();
 }
 
+/** Resolve a requested working directory, falling back to (and creating) ~/workspace. */
+export async function resolveSessionCwd(host: Host, cwd?: string): Promise<string> {
+  return prepareCwd(host, normalizeSessionCwd(cwd));
+}
+
 export async function createSession(
   owner: UserRow,
   input: { name: string; agent: Agent; hostId: number; cwd: string; args: string; groupId: number | null; share: Share; resumeId?: string; fork?: boolean },
@@ -651,7 +663,7 @@ export async function createSession(
       throw new Error(input.agent === 'codex' ? `这个 Codex 会话正在${where}运行，请直接导入那个 tmux 会话` : `这个会话正在${where}运行，请选择「复制一份继续」，或直接导入那个 tmux 会话`);
     }
   }
-  const cwd = await prepareCwd(host, input.cwd || '~');
+  const cwd = await resolveSessionCwd(host, input.cwd);
   const agentSessionId = input.agent === 'claude' ? input.resumeId || crypto.randomUUID() : input.agent === 'codex' ? input.resumeId || null : null;
   const args = input.args.trim() || (input.agent === 'codex' ? config.codexArgs.trim() : '');
   const name = input.name || `${input.agent} ${cwd.split('/').pop() || '~'}`;
@@ -1093,11 +1105,12 @@ export async function codexHistory(host: Host, limit = 60, withRunning = true): 
   return list;
 }
 
-/** Directories offered when creating a session: the host user's home and what's under it. */
+/** Directories offered when creating a session: the default workspace, home and what's under it. */
 export async function suggestDirs(host: Host): Promise<string[]> {
   const out = await host.shText(
-    `printf '%s\\n' "$HOME"; find "$HOME" -mindepth 1 -maxdepth 3 \\( -name '.*' -o -name node_modules -o -name __pycache__ -o -name venv \\) -prune -o -type d -print 2>/dev/null | head -n 400`,
+    `mkdir -p "$HOME/workspace" 2>/dev/null || true; printf '%s\\n' "$HOME/workspace" "$HOME"; find "$HOME" -mindepth 1 -maxdepth 3 \\( -name '.*' -o -name node_modules -o -name __pycache__ -o -name venv \\) -prune -o -type d -print 2>/dev/null | head -n 400`,
   );
-  const [home, ...dirs] = out.split('\n').filter(Boolean);
-  return [home, ...dirs.sort()];
+  const [workspace, home, ...dirs] = out.split('\n').filter(Boolean);
+  if (!workspace || !home) return [];
+  return [...new Set([workspace, home, ...dirs.sort()])];
 }

@@ -312,7 +312,7 @@ export function NewSession({ me, at, onClose, onCreated }: { me: Me; at?: { host
         )}
         <label style={agent !== 'bash' && resume ? 'display:none' : ''}>
           工作目录
-          <input name="cwd" list="dirs" key={hostId ?? 0} defaultValue={(at?.hostId === hostId && at?.cwd) || dirs[0] || ''} placeholder="~/项目，不存在会自动创建" required={!(agent !== 'bash' && resume)} />
+          <input name="cwd" list="dirs" key={hostId ?? 0} defaultValue={(at?.hostId === hostId && at?.cwd) || dirs[0] || '~/workspace'} placeholder="默认 ~/workspace，不存在会自动创建" required={!(agent !== 'bash' && resume)} />
           <datalist id="dirs">
             {dirs.map((d) => (
               <option key={d} value={d} />

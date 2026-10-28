@@ -16,7 +16,7 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `sessions` | 你能看到的会话列表（字段见下） |
-| POST | `sessions` | 新建：`{agent: "claude"\|"codex"\|"bash", hostId, cwd, name?, args?, resumeId?, fork?, groupId?, share?}`。`resumeId` 可以是 Claude 或 Codex 的历史会话 id |
+| POST | `sessions` | 新建：`{agent: "claude"\|"codex"\|"bash", hostId, cwd, name?, args?, resumeId?, fork?, groupId?, share?}`。`resumeId` 可以是 Claude 或 Codex 的历史会话 id。`cwd` 省略或留空时使用 `~/workspace`（不存在会自动创建） |
 | PATCH | `sessions/:id` | 修改 `{name?, note?, groupId?, share?}`（有操作权限的人都能改 `note`） |
 | PUT | `sessions/:id/folder` | 放进你的某个文件夹：`{folderId \| null}` |
 | DELETE | `sessions/:id` | 删除（导入的 tmux 会话只是取消接管，原会话不会被关掉） |
