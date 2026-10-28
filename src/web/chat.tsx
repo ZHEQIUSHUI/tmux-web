@@ -240,6 +240,35 @@ export interface ClaudeState {
   mode?: string;
 }
 
+/** Plan limits, see server/claude-usage.ts */
+export interface UsageWindow {
+  pct: number;
+  resetsAt: string | null;
+}
+export interface ClaudeUsage {
+  fiveHour?: UsageWindow;
+  week?: UsageWindow;
+  weekOpus?: UsageWindow;
+  weekSonnet?: UsageWindow;
+  error?: string;
+  at: number;
+}
+
+const usageLevel = (pct: number) => (pct >= 90 ? 'hi' : pct >= 70 ? 'mid' : 'lo');
+
+/** "3 天后（11/4 周二 20:00）" / "2 小时 10 分后（20:00）" */
+function resetText(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const ms = d.getTime() - Date.now();
+  if (!(ms > 0)) return '即将重置';
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  const hm = `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (h >= 24) return `${Math.floor(h / 24)} 天 ${h % 24} 小时后重置（${d.getMonth() + 1}/${d.getDate()} 周${'日一二三四五六'[d.getDay()]} ${hm}）`;
+  return `${h ? `${h} 小时 ` : ''}${m} 分后重置（${hm}）`;
+}
+
 export const MODE_LABEL: Record<string, string> = {
   auto: '自动模式',
   bypassPermissions: '跳过确认',
@@ -263,7 +292,8 @@ export const fmtTokens = (n: number) => (n >= 1e6 ? `${+(n / 1e6).toFixed(n >= 1
 /** Where a restart of Claude stands, for the bar's feedback. */
 export type Restart = '' | 'run' | 'done' | 'fail';
 
-export function ClaudeBar({ st, update, restart = '', onOpen, onRestart }: { st: ClaudeState | null; update: boolean; restart?: Restart; onOpen: () => void; onRestart?: () => void }) {
+export function ClaudeBar({ st, usage, update, restart = '', onOpen, onRestart }: { st: ClaudeState | null; usage?: ClaudeUsage | null; update: boolean; restart?: Restart; onOpen: () => void; onRestart?: () => void }) {
+  const week = usage?.week;
   // always rendered (fixed height) so the chat below doesn't jump when the data arrives
   st ||= {};
   const mode = st.mode || st.permissionMode || '';
@@ -306,6 +336,12 @@ export function ClaudeBar({ st, update, restart = '', onOpen, onRestart }: { st:
           </span>
         </span>
       )}
+      {week && (
+        // this week's share of the plan; the panel has the 5-hour window and reset times
+        <span class={`cbar-quota ${usageLevel(week.pct)}`} title={`本周额度已用 ${week.pct}%，${resetText(week.resetsAt)}`}>
+          周 {week.pct}%
+        </span>
+      )}
       <span class="cbar-more">
         <Icon.more />
       </span>
@@ -315,7 +351,22 @@ export function ClaudeBar({ st, update, restart = '', onOpen, onRestart }: { st:
 }
 
 /** Control sheet: everything else goes through Claude Code's own commands in the TUI. */
-export function ClaudePanel(props: { st: ClaudeState | null; canControl: boolean; onClose: () => void; run: (cmd: string) => void; sendKeys: (k: string[]) => void; onRestart: () => void }) {
+function UsageRow({ label, w }: { label: string; w: UsageWindow }) {
+  return (
+    <div class="cp-usage">
+      <div class="cp-usage-head">
+        <span class="dim">{label}</span>
+        <b class={`cp-usage-pct ${usageLevel(w.pct)}`}>{w.pct}%</b>
+      </div>
+      <span class="cp-usage-meter">
+        <span class={`cbar-fill ${usageLevel(w.pct)}`} style={{ width: `${Math.min(100, w.pct)}%` }} />
+      </span>
+      <span class="dim small">{resetText(w.resetsAt)}</span>
+    </div>
+  );
+}
+
+export function ClaudePanel(props: { st: ClaudeState | null; usage?: ClaudeUsage | null; canControl: boolean; onClose: () => void; run: (cmd: string) => void; sendKeys: (k: string[]) => void; onRestart: () => void }) {
   const { st } = props;
   const mode = st?.mode || st?.permissionMode || '';
   const pct = st?.contextTokens && st?.contextWindow ? Math.round((st.contextTokens / st.contextWindow) * 100) : null;
@@ -348,6 +399,15 @@ export function ClaudePanel(props: { st: ClaudeState | null; canControl: boolean
           <b>{st?.contextTokens ? `${fmtTokens(st.contextTokens)} / ${fmtTokens(st.contextWindow!)}${pct !== null ? `（${pct}%）` : ''}` : '—'}</b>
           {props.canControl && <button onClick={act('/context')}>明细…</button>}
         </div>
+        {props.usage && (
+          <div class="cp-usages">
+            {props.usage.week && <UsageRow label="本周额度" w={props.usage.week} />}
+            {props.usage.weekOpus && <UsageRow label="本周 Opus" w={props.usage.weekOpus} />}
+            {props.usage.weekSonnet && <UsageRow label="本周 Sonnet" w={props.usage.weekSonnet} />}
+            {props.usage.fiveHour && <UsageRow label="5 小时额度" w={props.usage.fiveHour} />}
+            {props.usage.error && <span class="dim small">套餐额度：{props.usage.error}</span>}
+          </div>
+        )}
         {props.canControl && (
           <div class="cp-actions">
             <button onClick={act('/rewind')}>撤回 /rewind</button>
@@ -703,6 +763,27 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
     return () => clearTimeout(t);
   }, [id, lastAssistant, state.status === 'idle']);
 
+  // plan limits: on open, every few minutes, and fresh when the panel is opened
+  const [usage, setUsage] = useState<ClaudeUsage | null>(null);
+  const loadUsage = useCallback(
+    (fresh = false) =>
+      api<ClaudeUsage | null>('GET', `/_tw/api/sessions/${id}/claude-usage${fresh ? '?fresh=1' : ''}`).then(
+        (u) => setUsage((old) => (u && !u.error ? u : old && !old.error ? old : u)),
+        () => {},
+      ),
+    [id],
+  );
+  useEffect(() => {
+    if (!isClaude) return;
+    setUsage(null);
+    void loadUsage();
+    const t = setInterval(() => document.visibilityState === 'visible' && loadUsage(), 3 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [id, isClaude]);
+  useEffect(() => {
+    if (panel) void loadUsage(true);
+  }, [panel]);
+
   const runCommand = (cmd: string) =>
     api('POST', `/_tw/api/sessions/${id}/input`, { text: cmd })
       .then(() => isInteractive(cmd) && onOpenTerminal())
@@ -808,8 +889,8 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
 
   return (
     <div class="chat">
-      {isClaude && <ClaudeBar st={claude} update={update} restart={restart} onOpen={() => setPanel(true)} onRestart={session.access === 'control' ? restartClaude : undefined} />}
-      {panel && <ClaudePanel st={claude} canControl={session.access === 'control'} onClose={() => setPanel(false)} run={runCommand} sendKeys={sendKeys} onRestart={restartClaude} />}
+      {isClaude && <ClaudeBar st={claude} usage={usage} update={update} restart={restart} onOpen={() => setPanel(true)} onRestart={session.access === 'control' ? restartClaude : undefined} />}
+      {panel && <ClaudePanel st={claude} usage={usage} canControl={session.access === 'control'} onClose={() => setPanel(false)} run={runCommand} sendKeys={sendKeys} onRestart={restartClaude} />}
       <div class="scroller" ref={scroller} onScroll={onScroll}>
         <div class="messages">
           {page?.hasMore && (

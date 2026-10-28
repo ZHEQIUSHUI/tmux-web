@@ -1274,6 +1274,49 @@ a.btn {
   display: grid;
   opacity: 0.7;
 }
+/* this week's plan usage: a number in the bar, colored as it fills up */
+.cbar-quota {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.cbar-quota.mid {
+  color: var(--busy);
+}
+.cbar-quota.hi {
+  color: var(--danger);
+  font-weight: 600;
+}
+.cp-usages {
+  display: grid;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.cp-usage {
+  display: grid;
+  gap: 4px;
+}
+.cp-usage-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.cp-usage-pct {
+  font-variant-numeric: tabular-nums;
+}
+.cp-usage-pct.mid {
+  color: var(--busy);
+}
+.cp-usage-pct.hi {
+  color: var(--danger);
+}
+.cp-usage-meter {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
 .cpanel {
   display: grid;
   gap: 4px;

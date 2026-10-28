@@ -32,6 +32,7 @@ import {
   type Access,
   type LiveSession,
 } from './sessions.js';
+import { claudeUsage } from './claude-usage.js';
 import { claudeState, followLog, readFull, readImage, readPage } from './transcript.js';
 import { changes, diff, fileSize, imageFile, insideCwd, listDir, readPart, search, streamFile, streamPart } from './files.js';
 import { shrink, thumbWidth } from './thumb.js';
@@ -474,6 +475,13 @@ route('GET', '/_tw/api/sessions/:id/image', async (req, res, [id], url) => {
   const small = await shrink(`log:${file}:${url.searchParams.get('off')}:${url.searchParams.get('n')}`, body, img.mime, w);
   if (small) sendImage(res, 'image/webp', small, 'private, max-age=604800, immutable', undefined, body.length);
   else sendImage(res, img.mime, body, 'private, max-age=604800, immutable');
+});
+
+/** Plan limits (5-hour and weekly) of the Claude account the session's machine is logged in to. */
+route('GET', '/_tw/api/sessions/:id/claude-usage', async (req, res, [id], url) => {
+  const { row, live } = sessionFor(requireUser(req), id, 'view');
+  if (row.agent !== 'claude' || !live.host) return sendJson(req, res, 200, null);
+  sendJson(req, res, 200, await claudeUsage(live.host, url.searchParams.has('fresh')));
 });
 
 /** Claude Code's model and context usage, from the end of its log. */
