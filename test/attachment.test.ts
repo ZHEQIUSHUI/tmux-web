@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyPath, displayName, parseAttachments } from '../src/web/attachment.js';
+import { classifyPath, displayName, markdownForUpload, parseAttachments, withoutLeadingImageBang } from '../src/web/attachment.js';
 
 test('attachments: uploads and files with a directory become cards', () => {
   const r = parseAttachments('看看这个 .tmux-web/uploads/20261020010108-截图.png 和 "docs/说明.pdf"');
@@ -40,6 +40,34 @@ test('attachments: URLs and Markdown links are left alone', () => {
     assert.equal(r.text, text);
     assert.deepEqual(r.attachments, []);
   }
+});
+
+test('attachments: uploaded images become Markdown links, other files stay paths', () => {
+  const image = '.tmux-web/uploads/20261028055736-th.webp';
+  assert.equal(markdownForUpload('th.webp', image), `[th.webp](${image})`);
+  assert.equal(markdownForUpload('设计[1].png', image), `[设计\\[1\\].png](${image})`);
+  assert.equal(markdownForUpload('notes.md', '.tmux-web/uploads/20261028055736-notes.md'), '.tmux-web/uploads/20261028055736-notes.md');
+});
+
+test('attachments: upload links become image cards without a leading shell bang', () => {
+  const link = markdownForUpload('th.webp', '.tmux-web/uploads/20261028061411-th.webp');
+  assert.ok(!link.startsWith('!'));
+  const r = parseAttachments(`${link} 测试`);
+  assert.equal(r.text, '测试');
+  assert.deepEqual(r.attachments.map((a) => [a.path, a.name, a.kind]), [
+    ['.tmux-web/uploads/20261028061411-th.webp', 'th.webp', 'image'],
+  ]);
+  const image = parseAttachments('![截图](.tmux-web/uploads/20261028061411-th.webp)');
+  assert.equal(image.text, '');
+  assert.equal(image.attachments[0].kind, 'image');
+});
+
+test('attachments: old image drafts are made safe for agent shell shortcuts', () => {
+  const image = '.tmux-web/uploads/20261028061411-th.webp';
+  assert.equal(withoutLeadingImageBang(`![th.webp](${image}) 测试`), `[th.webp](${image}) 测试`);
+  assert.equal(withoutLeadingImageBang(`  ![th.webp](${image})`), `  [th.webp](${image})`);
+  assert.equal(withoutLeadingImageBang('![remote](https://example.com/a.png)'), '![remote](https://example.com/a.png)');
+  assert.equal(withoutLeadingImageBang('!ls -la'), '!ls -la');
 });
 
 test('attachments: classify and name common files', () => {

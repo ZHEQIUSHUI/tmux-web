@@ -35,6 +35,7 @@ const KNOWN = new Set([...IMAGE, ...AUDIO, ...VIDEO, ...PDF, ...ARCHIVE, ...DOCU
 const QUIET = /[\s,，。；;、:：]+/g;
 const QUOTED = /"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'/g;
 const UNQUOTED = /(^|\s)([^\s"'`<>()[\]{}，。；;]+)/gm;
+const MARKDOWN_LINK = /!?\[((?:\\.|[^\]\\\r\n])*)\]\(\s*(?:<([^>\r\n]+)>|([^)\s]+))(?:\s+"[^"\r\n]*")?\s*\)/g;
 
 const basename = (p: string) => p.split(/[\\/]/).pop() || p;
 const trimPath = (p: string) => p.replace(/^[<[{(（【]+/, '').replace(/[>\]})）】，。；;、,:：]+$/, '');
@@ -68,6 +69,24 @@ export function displayName(path: string): string {
   return /(?:^|\/)\.tmux-web\/uploads\//.test(path) ? name.replace(/^\d{14}-/, '') || name : name;
 }
 
+/**
+ * What an uploaded file becomes in the composer. Images use a Markdown link: image syntax would
+ * start with "!", which Codex and Claude treat as their shell-command shortcut.
+ */
+export function markdownForUpload(name: string, path: string): string {
+  if (classifyPath(path) !== 'image') return path;
+  const alt = name.replace(/[\\[\]]/g, '\\$&');
+  const dest = path.replace(/[()]/g, '\\$&');
+  return `[${alt}](${dest})`;
+}
+
+/** Old drafts may still start with image Markdown; an agent would run it as a shell command. */
+export function withoutLeadingImageBang(text: string): string {
+  const m = /^(\s*)!(\[((?:\\.|[^\]\\\r\n])*)\]\(\s*(?:<([^>\r\n]+)>|([^)\s]+))(?:\s+"[^"\r\n]*")?\s*\))/.exec(text);
+  if (!m || !isUpload(trimPath(unquote((m[4] ?? m[5] ?? '').trim())))) return text;
+  return m[1] + m[2] + text.slice(m[0].length);
+}
+
 const isUpload = (p: string) => /(?:^|\/)\.tmux-web\/uploads\/.+/.test(p);
 const isUrl = (p: string) => /^[a-z][a-z0-9+.-]*:\/\//i.test(p) || /^data:/i.test(p);
 const hasExt = (p: string) => KNOWN.has(extensionOf(p));
@@ -92,6 +111,7 @@ interface Candidate {
 export function parseAttachments(text: string): ParsedAttachments {
   const found: Candidate[] = [];
   const quotedRanges: [number, number][] = [];
+  const linkRanges: [number, number][] = [];
   const add = (start: number, end: number, path: string, safe: boolean) => {
     path = trimPath(unquote(path.trim()));
     if (!path || isUrl(path) || /[*?]/.test(path) || path.startsWith('-')) return;
@@ -103,8 +123,20 @@ export function parseAttachments(text: string): ParsedAttachments {
     else if (hasExt(path)) found.push({ start, end, path, safe: false });
   };
 
+  // Upload links written by the composer are Markdown; images use a link rather than "![]()" so
+  // an agent's "!" shell shortcut is not triggered. Show them as attachment cards.
+  for (const m of text.matchAll(MARKDOWN_LINK)) {
+    const path = trimPath(unquote((m[2] ?? m[3] ?? '').trim()));
+    if (!isUpload(path)) continue;
+    const start = m.index!;
+    const end = start + m[0].length;
+    linkRanges.push([start, end]);
+    add(start, end, path, true);
+  }
+
   for (const m of text.matchAll(QUOTED)) {
     quotedRanges.push([m.index!, m.index! + m[0].length]);
+    if (linkRanges.some(([s, e]) => m.index! >= s && m.index! < e)) continue;
     const before = text.slice(0, m.index!);
     // an HTML attribute or a value in markup is not an attachment of the message
     if (/=\s*$/.test(before) || before.lastIndexOf('<') > before.lastIndexOf('>')) continue;
@@ -115,7 +147,7 @@ export function parseAttachments(text: string): ParsedAttachments {
     const raw = m[2];
     const start = m.index! + m[1].length;
     // spaces inside a quoted path must not make its last part another attachment
-    if (quotedRanges.some(([s, e]) => start >= s && start < e)) continue;
+    if (quotedRanges.some(([s, e]) => start >= s && start < e) || linkRanges.some(([s, e]) => start >= s && start < e)) continue;
     add(start, start + raw.length, raw, false);
   }
   if (!found.length) return { text, attachments: [] };

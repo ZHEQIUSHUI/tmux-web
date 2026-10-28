@@ -144,8 +144,8 @@ export class Host {
   }
 
   /** Run a POSIX sh script with positional arguments. */
-  sh(script: string, args: string[] = [], input?: string | Buffer): Promise<Buffer> {
-    return this.exec(['sh', '-c', script, 'sh', ...args], input);
+  sh(script: string, args: string[] = [], input?: string | Buffer, timeoutMs = 20000): Promise<Buffer> {
+    return this.exec(['sh', '-c', script, 'sh', ...args], input, timeoutMs);
   }
 
   async shText(script: string, args: string[] = []): Promise<string> {

@@ -595,16 +595,17 @@ route('POST', '/_tw/api/sessions/:id/upload', async (req, res, [id]) => {
   const base = raw.split(/[\\/]/).pop()!.replace(/[^\w.\-\u4e00-\u9fff]+/g, '_').replace(/^\.+/, '').slice(-80) || 'file';
   const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
   try {
-    // inside the session's working directory, so the agent may read it without asking; in a git
-    // repo the folder goes into the local exclude list (.git/info/exclude, never committed)
+    // Inside the session's working directory, so the agent may read it without asking. A
+    // self-ignoring .tmux-web/.gitignore keeps uploads out of git without spawning git here:
+    // git must not sit between receiving the body and answering (large/worktree repos can be slow).
     const path = (
       await live.host.sh(
-        `d="$1/.tmux-web/uploads"; mkdir -p "$d" && f="$d/$2" && cat > "$f" || exit 1; ` +
-          `g=$(git -C "$1" rev-parse --git-dir 2>/dev/null) && { case $g in /*) ;; *) g="$1/$g";; esac; ` +
-          `grep -qxF '.tmux-web/' "$g/info/exclude" 2>/dev/null || { mkdir -p "$g/info" && echo '.tmux-web/' >> "$g/info/exclude"; }; }; ` +
-          `printf '%s' "$f"`,
+        `d="$1/.tmux-web/uploads" && mkdir -p "$d" || exit 1; ` +
+          `[ -e "$1/.tmux-web/.gitignore" ] || printf '*\\n' > "$1/.tmux-web/.gitignore" || exit 1; ` +
+          `f="$d/$2" && cat > "$f" || exit 1; printf '%s' "$f"`,
         [row.cwd, `${stamp}-${base}`],
         Buffer.concat(chunks),
+        60000,
       )
     ).toString();
     sendJson(req, res, 200, { path, rel: `.tmux-web/uploads/${stamp}-${base}`, name: base, size });

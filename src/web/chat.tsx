@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api, type ChatItem, type Page, type SessionInfo, type Status } from './api';
 import { mediaKind, renderMarkdown, shown, splitImages } from './markdown';
-import { parseAttachments } from './attachment';
+import { markdownForUpload, parseAttachments, withoutLeadingImageBang } from './attachment';
 import { ChatAttachments } from './attachments';
 import { hydrateMermaid } from './mermaid-lazy';
 import { MAX_SESSIONS, saveChat } from './chat-store';
@@ -1004,18 +1004,24 @@ export function Composer(props: {
       const xhr = new XMLHttpRequest();
       uploads.current.set(key, xhr);
       xhr.open('POST', `/_tw/api/sessions/${sessionId}/upload`);
+      // the body may be large, but once it is sent the saved path should come back promptly
+      xhr.timeout = 180000;
       xhr.setRequestHeader('X-File-Name', encodeURIComponent(name));
       xhr.upload.onprogress = (e) => set({ sent: e.loaded });
       xhr.onload = () => {
         uploads.current.delete(key);
-        let d: { path?: string; rel?: string; error?: string } = {};
+        let d: { path?: string; rel?: string; name?: string; error?: string } = {};
         try {
           d = JSON.parse(xhr.responseText);
         } catch {}
         if (xhr.status >= 200 && xhr.status < 300 && (d.rel || d.path)) {
           setFiles((fs) => fs.filter((f) => f.key !== key));
-          insertPaths([(d.rel || d.path)!]);
+          insertPaths([markdownForUpload(d.name || name, (d.rel || d.path)!)]);
         } else set({ error: d.error || `上传失败（HTTP ${xhr.status}）` });
+      };
+      xhr.ontimeout = () => {
+        uploads.current.delete(key);
+        set({ error: '服务器响应超时，请重试' });
       };
       xhr.onerror = () => {
         uploads.current.delete(key);
@@ -1098,7 +1104,9 @@ export function Composer(props: {
 
   // optimistic: clear the box and show the message at once, the request runs behind it
   const send = async () => {
-    const msg = text.trim() ? text : hint;
+    const raw = text.trim() ? text : hint;
+    // Codex and Claude switch to shell mode when a message starts with "!" (old image drafts)
+    const msg = props.agent === 'bash' ? raw : withoutLeadingImageBang(raw);
     if (!msg.trim() || sending || uploading) return;
     setSending(true);
     setErr('');
