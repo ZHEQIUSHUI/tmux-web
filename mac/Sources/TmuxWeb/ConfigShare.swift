@@ -35,6 +35,10 @@ struct SharedProfile: Codable, Equatable {
   var name = ""
   var mode = "ssh"
   var directUrl = ""
+  var easyTierNetwork = ""
+  var easyTierSecret = ""
+  var easyTierPeers = ""
+  var easyTierServerIP = ""
   var target = ""
   var sshPort = 22
   var remoteHost = "127.0.0.1"
@@ -49,13 +53,17 @@ struct SharedProfile: Codable, Equatable {
     name = p.name
     mode = p.mode
     directUrl = p.directURL
+    easyTierNetwork = p.easyTierNetwork
+    easyTierSecret = p.easyTierSecret
+    easyTierPeers = p.easyTierPeers
+    easyTierServerIP = p.easyTierServerIP
     target = p.target
     sshPort = p.sshPort
     remoteHost = p.remoteHost
     remotePort = p.remotePort
     self.keyId = keyId
-    self.password = p.isDirect ? "" : password
-    extraArgs = p.isDirect ? "" : p.extraArgs
+    self.password = p.mode == "ssh" ? password : ""
+    extraArgs = p.mode == "ssh" ? p.extraArgs : ""
   }
 
   init(from d: Decoder) throws {
@@ -63,6 +71,10 @@ struct SharedProfile: Codable, Equatable {
     name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
     mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "ssh"
     directUrl = try c.decodeIfPresent(String.self, forKey: .directUrl) ?? ""
+    easyTierNetwork = try c.decodeIfPresent(String.self, forKey: .easyTierNetwork) ?? ""
+    easyTierSecret = try c.decodeIfPresent(String.self, forKey: .easyTierSecret) ?? ""
+    easyTierPeers = try c.decodeIfPresent(String.self, forKey: .easyTierPeers) ?? ""
+    easyTierServerIP = try c.decodeIfPresent(String.self, forKey: .easyTierServerIP) ?? ""
     target = try c.decodeIfPresent(String.self, forKey: .target) ?? ""
     sshPort = try c.decodeIfPresent(Int.self, forKey: .sshPort) ?? 22
     remoteHost = try c.decodeIfPresent(String.self, forKey: .remoteHost) ?? "127.0.0.1"
@@ -251,12 +263,20 @@ enum ShareIdentity {
 
   static func profileIdentity(_ p: Profile, password: String, keyText: String?) -> String {
     if p.isDirect { return "direct|" + directIdentity(p.directURL) }
+    if p.isEasyTier { return easyTierIdentity(p.easyTierNetwork, secret: p.easyTierSecret, peers: p.easyTierPeers, serverIP: p.easyTierServerIP, remotePort: p.remotePort) }
     return sshIdentity(p.target, sshPort: p.sshPort, remoteHost: p.remoteHost, remotePort: p.remotePort, password: password, keyText: keyText, extraArgs: p.extraArgs)
   }
 
   static func profileIdentity(_ p: SharedProfile, keyText: String?) -> String {
     if p.mode == "direct" { return "direct|" + directIdentity(p.directUrl) }
+    if p.mode == "easytier" { return easyTierIdentity(p.easyTierNetwork, secret: p.easyTierSecret, peers: p.easyTierPeers, serverIP: p.easyTierServerIP, remotePort: p.remotePort) }
     return sshIdentity(p.target, sshPort: p.sshPort, remoteHost: p.remoteHost, remotePort: p.remotePort, password: p.password, keyText: keyText, extraArgs: p.extraArgs)
+  }
+
+  private static func easyTierIdentity(_ network: String, secret: String, peers: String, serverIP: String, remotePort: Int) -> String {
+    let names = EasyTierConfig.peers(from: peers).map { $0.lowercased() }.sorted()
+    return (["easytier", network.trimmingCharacters(in: .whitespacesAndNewlines), secret, names.joined(separator: ","), serverIP.trimmingCharacters(in: .whitespacesAndNewlines), String(remotePort)])
+      .joined(separator: "\u{0}")
   }
 
   private static func sshIdentity(_ target: String, sshPort: Int, remoteHost: String, remotePort: Int, password: String, keyText: String?, extraArgs: String) -> String {
@@ -348,7 +368,8 @@ extension ProfileStore {
         profilesSkipped += 1
         continue
       }
-      let direct = shared.mode == "direct"
+      let mode = ["direct", "ssh", "easytier"].contains(shared.mode) ? shared.mode : "ssh"
+      let direct = mode == "direct"
       var localPort = 18080
       if !direct {
         while usedPorts.contains(localPort) { localPort += 1 }
@@ -357,18 +378,22 @@ extension ProfileStore {
       var p = Profile()
       p.id = UUID()
       p.name = shared.name
-      p.mode = direct ? "direct" : "ssh"
+      p.mode = mode
       p.directURL = shared.directUrl
+      p.easyTierNetwork = shared.easyTierNetwork
+      p.easyTierSecret = shared.easyTierSecret
+      p.easyTierPeers = shared.easyTierPeers
+      p.easyTierServerIP = shared.easyTierServerIP
       p.target = shared.target
       p.sshPort = shared.sshPort
       p.remoteHost = shared.remoteHost
       p.remotePort = shared.remotePort
       p.localPort = localPort
       p.keyID = mappedKey
-      p.extraArgs = direct ? "" : shared.extraArgs
+      p.extraArgs = mode == "ssh" ? shared.extraArgs : ""
       nextProfiles.append(p)
       identities.insert(identity)
-      if !direct { Keychain.setPassword(shared.password, for: p.id) }
+      if mode == "ssh" { Keychain.setPassword(shared.password, for: p.id) }
       profilesAdded += 1
     }
     if profilesAdded > 0 || keysAdded > 0 { applyImport(keys: nextKeys, profiles: nextProfiles) }

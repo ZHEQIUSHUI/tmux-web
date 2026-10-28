@@ -44,6 +44,11 @@ data class SharedProfile(
   val keyId: String,
   val password: String,
   val extraArgs: String = "",
+  /** macOS 的内置 EasyTier；安卓端目前先保留字段，导入时明确跳过。 */
+  val easyTierNetwork: String = "",
+  val easyTierSecret: String = "",
+  val easyTierPeers: String = "",
+  val easyTierServerIP: String = "",
 )
 
 data class SharedPayload(
@@ -78,6 +83,10 @@ data class SharedPayload(
           put("keyId", p.keyId)
           put("password", p.password)
           put("extraArgs", p.extraArgs)
+          put("easyTierNetwork", p.easyTierNetwork)
+          put("easyTierSecret", p.easyTierSecret)
+          put("easyTierPeers", p.easyTierPeers)
+          put("easyTierServerIP", p.easyTierServerIP)
         })
       }
     })
@@ -113,6 +122,10 @@ data class SharedPayload(
             keyId = p.optString("keyId"),
             password = p.optString("password"),
             extraArgs = p.optString("extraArgs"),
+            easyTierNetwork = p.optString("easyTierNetwork"),
+            easyTierSecret = p.optString("easyTierSecret"),
+            easyTierPeers = p.optString("easyTierPeers"),
+            easyTierServerIP = p.optString("easyTierServerIP"),
           )
         },
       )
@@ -337,11 +350,13 @@ data class ShareImportSummary(
   val profilesSkipped: Int,
   val keysAdded: Int,
   val keysReused: Int,
+  val profilesUnsupported: Int = 0,
 ) {
   val text: String
     get() = buildString {
       append("新增 ${profilesAdded} 个服务器")
       if (profilesSkipped > 0) append("，跳过 ${profilesSkipped} 个重复配置")
+      if (profilesUnsupported > 0) append("，跳过 ${profilesUnsupported} 个当前安卓版暂不支持的 EasyTier 配置")
       if (keysAdded > 0) append("；新增 ${keysAdded} 把私钥")
       if (keysReused > 0) append("；复用 ${keysReused} 把已有私钥")
     }
@@ -383,7 +398,12 @@ fun ProfileStore.importShared(payload: SharedPayload): ShareImportSummary {
   val usedPorts = nextProfiles.filter { !it.isDirect }.map { it.localPort }.toMutableSet()
   var profilesAdded = 0
   var profilesSkipped = 0
+  var profilesUnsupported = 0
   for (p in payload.profiles) {
+    if (p.mode !in setOf("direct", "ssh")) {
+      profilesUnsupported++
+      continue
+    }
     val keyId = if (p.keyId.isEmpty()) "" else portableKeyIds[p.keyId] ?: ""
     val keyText = nextKeys.firstOrNull { it.id == keyId }?.privateKey
     val identity = ShareIdentity.profileIdentity(p, keyText)
@@ -416,7 +436,7 @@ fun ProfileStore.importShared(payload: SharedPayload): ShareImportSummary {
   if (profilesAdded > 0 || keysAdded > 0) {
     upsertImported(nextKeys, nextProfiles)
   }
-  return ShareImportSummary(profilesAdded, profilesSkipped, keysAdded, keysReused)
+  return ShareImportSummary(profilesAdded, profilesSkipped, keysAdded, keysReused, profilesUnsupported)
 }
 
 /** What the share server answers: metadata for clients, and the one encrypted bundle. */

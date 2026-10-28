@@ -86,8 +86,23 @@ final class AppModel: ObservableObject {
 }
 
 /// What a failure means and what to do about it, from ssh's or the network's words.
-func explain(_ raw: String, direct: Bool) -> (title: String, hint: String) {
+func explain(_ raw: String, direct: Bool, easyTier: Bool = false) -> (title: String, hint: String) {
   let t = raw.lowercased()
+  if easyTier && (t.contains("网络密钥") || t.contains("network secret")) {
+    return ("EasyTier 连接失败", "检查网络名称、网络密钥和公共节点是否与服务器一致，并确认服务器虚拟 IP 填的是 tmux-web 机器在 EasyTier 里的地址。")
+  }
+  if easyTier && (t.contains("timeout") || t.contains("超时")) {
+    return ("EasyTier 连接超时", "确认公共节点可达、服务器也在同一个 EasyTier 网络里，并且 tmux-web 正在监听填写的端口。")
+  }
+  if easyTier && (t.contains("connection refused") || t.contains("拒绝连接")) {
+    return ("tmux-web 拒绝连接", "EasyTier 的本地转发已经启动，但连不到服务器的 tmux-web：确认服务正在运行、端口填对了，且监听地址允许虚拟网络访问。")
+  }
+  if easyTier && (t.contains("没有找到内置") || t.contains("无法启动 easytier")) {
+    return ("EasyTier Core 不可用", "这个 App 没有可运行的 EasyTier Core：用最新的 mac/build.sh 重新构建，或安装 easytier-core 后重试。")
+  }
+  if t.contains("easytier") {
+    return ("EasyTier 没有连上", "检查网络名称、网络密钥、公共节点和服务器虚拟 IP；连接页的「详细信息」里有 Core 的输出。")
+  }
   if t.contains("permission denied") || t.contains("authentication") {
     return ("SSH 登录被拒绝", "检查用户名、密码或私钥。用私钥的话，确认服务器的 authorized_keys 里有对应的公钥。")
   }
@@ -115,5 +130,5 @@ func explain(_ raw: String, direct: Bool) -> (title: String, hint: String) {
   if t.contains("私钥") || t.contains("密钥") {
     return ("私钥有问题", "按下面的说明换一个私钥文件。")
   }
-  return (direct ? "打不开这个地址" : "连不上服务器", direct ? "检查网址和端口，确认 tmux-web 正在运行。" : "看看下面的详细信息；需要的话编辑服务器设置后重试。")
+  return (direct ? "打不开这个地址" : easyTier ? "EasyTier 没有连上" : "连不上服务器", direct ? "检查网址和端口，确认 tmux-web 正在运行。" : easyTier ? "检查 EasyTier 网络设置和服务器虚拟 IP；详细信息里有 Core 的输出。" : "看看下面的详细信息；需要的话编辑服务器设置后重试。")
 }

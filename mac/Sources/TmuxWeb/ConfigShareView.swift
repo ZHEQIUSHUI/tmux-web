@@ -96,7 +96,7 @@ struct ConfigShareView: View {
             HStack {
               VStack(alignment: .leading, spacing: 3) {
                 Text("选择要共享的服务器").font(.headline)
-                Text("会带上连接地址、账号、密码和所选的私钥。接收方会跳过完全相同的配置。")
+                Text("会带上连接地址、账号、密码、EasyTier 网络密钥和所选的私钥。接收方会跳过完全相同的配置。")
                   .font(.caption).foregroundStyle(.secondary)
               }
               Spacer()
@@ -108,7 +108,7 @@ struct ConfigShareView: View {
               Text("还没有服务器配置。").foregroundStyle(.secondary).padding(.vertical, 10)
             } else {
               ForEach(store.profiles) { p in
-                selectRow(selected: selectedProfiles.contains(p.id), title: p.title, subtitle: p.address, icon: p.isDirect ? "network" : "lock.shield") {
+                selectRow(selected: selectedProfiles.contains(p.id), title: p.title, subtitle: p.address, icon: p.isDirect ? "network" : p.isEasyTier ? "link.circle.fill" : "lock.shield") {
                   toggleProfile(p)
                 }
                 if p.id != store.profiles.last?.id { Divider() }

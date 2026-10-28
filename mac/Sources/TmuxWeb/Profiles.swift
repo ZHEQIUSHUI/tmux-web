@@ -5,9 +5,17 @@ import Foundation
 struct Profile: Codable, Identifiable, Equatable, Hashable {
   var id = UUID()
   var name = ""
-  /// "ssh": through an SSH port forward; "direct": open `directURL` as it is (EasyTier, LAN…)
+  /// "ssh": through an SSH port forward; "direct": open `directURL` as it is (LAN, an already
+  /// running EasyTier…); "easytier": start the bundled EasyTier Core and forward through it
   var mode = "direct"
   var directURL = ""
+  /// EasyTier: the network name and its shared secret
+  var easyTierNetwork = ""
+  var easyTierSecret = ""
+  /// one or more public relay nodes, e.g. `tcp://public.example.com:11010` (comma or newline separated)
+  var easyTierPeers = ""
+  /// the tmux-web server's address in the EasyTier virtual network (IPv4, for port forwarding)
+  var easyTierServerIP = ""
   /// user@host, or a Host alias from ~/.ssh/config
   var target = ""
   var sshPort = 22
@@ -26,18 +34,33 @@ struct Profile: Codable, Identifiable, Equatable, Hashable {
   var lastUsed: Date?
 
   var isDirect: Bool { mode == "direct" }
+  var isEasyTier: Bool { mode == "easytier" }
   var title: String {
     let n = name.trimmingCharacters(in: .whitespaces)
-    return !n.isEmpty ? n : isDirect ? (URL(string: directBase ?? "")?.host ?? directURL) : target
+    if !n.isEmpty { return n }
+    if isDirect { return URL(string: directBase ?? "")?.host ?? directURL }
+    if isEasyTier { return easyTierServerIP.isEmpty ? easyTierNetwork : easyTierServerIP }
+    return target
   }
   /// what the card shows under the name
   var address: String {
     if isDirect { return directBase ?? directURL }
+    if isEasyTier {
+      let network = easyTierNetwork.trimmingCharacters(in: .whitespaces)
+      let ip = easyTierServerIP.trimmingCharacters(in: .whitespaces)
+      return "EasyTier\(network.isEmpty ? "" : " · \(network)") → \(ip):\(remotePort)"
+    }
     let t = target.trimmingCharacters(in: .whitespaces)
     return "\(t)\(sshPort == 22 ? "" : ":\(sshPort)") → \(remotePort)"
   }
   var isComplete: Bool {
-    isDirect ? directBase != nil : !target.trimmingCharacters(in: .whitespaces).isEmpty && remotePort > 0 && localPort > 0
+    if isDirect { return directBase != nil }
+    if isEasyTier {
+      return !easyTierNetwork.trimmingCharacters(in: .whitespaces).isEmpty
+        && !easyTierServerIP.trimmingCharacters(in: .whitespaces).isEmpty
+        && remotePort > 0 && localPort > 0
+    }
+    return !target.trimmingCharacters(in: .whitespaces).isEmpty && remotePort > 0 && localPort > 0
   }
   /// The direct address as http(s)://host[:port], or nil when it isn't one ("10.0.0.2:8080" gets http://).
   var directBase: String? {
@@ -59,6 +82,10 @@ struct Profile: Codable, Identifiable, Equatable, Hashable {
     name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
     mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "ssh"
     directURL = try c.decodeIfPresent(String.self, forKey: .directURL) ?? ""
+    easyTierNetwork = try c.decodeIfPresent(String.self, forKey: .easyTierNetwork) ?? ""
+    easyTierSecret = try c.decodeIfPresent(String.self, forKey: .easyTierSecret) ?? ""
+    easyTierPeers = try c.decodeIfPresent(String.self, forKey: .easyTierPeers) ?? ""
+    easyTierServerIP = try c.decodeIfPresent(String.self, forKey: .easyTierServerIP) ?? ""
     target = try c.decodeIfPresent(String.self, forKey: .target) ?? ""
     sshPort = try c.decodeIfPresent(Int.self, forKey: .sshPort) ?? 22
     remoteHost = try c.decodeIfPresent(String.self, forKey: .remoteHost) ?? "127.0.0.1"

@@ -78,7 +78,7 @@ struct HomeView: View {
   }
 }
 
-/// No servers yet: what the app is, and the two ways to add one.
+/// No servers yet: what the app is, and the ways to add one.
 private struct Welcome: View {
   @ObservedObject var model: AppModel
   var body: some View {
@@ -90,10 +90,11 @@ private struct Welcome: View {
           .foregroundStyle(.secondary).multilineTextAlignment(.center)
       }
       HStack(spacing: 16) {
-        ModeChoice(icon: "network", color: .teal, title: "直接访问", text: "已经能直接打开服务器的地址：EasyTier 等组网、局域网、公网") { model.actions.edit(nil, "direct") }
+        ModeChoice(icon: "network", color: .teal, title: "直接访问", text: "已经能直接打开服务器的地址：局域网、公网、已连上的 EasyTier") { model.actions.edit(nil, "direct") }
+        ModeChoice(icon: "link.circle.fill", color: .blue, title: "内置 EasyTier", text: "App 自己启动 EasyTier，连进虚拟网络后打开网页") { model.actions.edit(nil, "easytier") }
         ModeChoice(icon: "lock.shield", color: .indigo, title: "SSH 转发", text: "通过 SSH 端口转发访问，服务器不用对外开放 tmux-web 的端口") { model.actions.edit(nil, "ssh") }
       }
-      .frame(maxWidth: 620)
+      .frame(maxWidth: 760)
     }
     .padding(40)
   }
@@ -143,7 +144,7 @@ struct Avatar: View {
       .font(.system(size: size * 0.42, weight: .semibold, design: .rounded))
       .foregroundStyle(.white)
       .frame(width: size, height: size)
-      .background(RoundedRectangle(cornerRadius: size * 0.26).fill((profile.isDirect ? Color.teal : Color.indigo).gradient))
+      .background(RoundedRectangle(cornerRadius: size * 0.26).fill((profile.isDirect ? Color.teal : profile.isEasyTier ? Color.blue : Color.indigo).gradient))
   }
 }
 
@@ -170,7 +171,7 @@ private struct ServerCard: View {
           .help("编辑、复制、删除")
       }
       HStack(spacing: 8) {
-        Chip(text: profile.isDirect ? "直接访问" : "SSH 转发", icon: profile.isDirect ? "network" : "lock.shield")
+        Chip(text: profile.isDirect ? "直接访问" : profile.isEasyTier ? "内置 EasyTier" : "SSH 转发", icon: profile.isDirect ? "network" : profile.isEasyTier ? "link.circle.fill" : "lock.shield")
         ProbeChip(probe: probe)
         Spacer()
         if hover {

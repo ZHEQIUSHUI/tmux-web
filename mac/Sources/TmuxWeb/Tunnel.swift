@@ -1,8 +1,8 @@
 import Darwin
 import Foundation
 
-/// The SSH port forward to tmux-web: the system's ssh (so ~/.ssh/config, keys, the agent and
-/// known_hosts all apply), asking for passwords / verification codes in a dialog.
+/// A connection to tmux-web: an SSH port forward, a direct address, or a bundled EasyTier Core that
+/// forwards one local port through its virtual network without a TUN device.
 final class Tunnel {
   enum State: Equatable {
     case idle
@@ -24,6 +24,11 @@ final class Tunnel {
   }
 
   private var proc: Process?
+  /// our bundled EasyTier, when the profile uses it
+  private var easyProc: Process?
+  private var easyConfig: String?
+  private var readyCheckInFlight = false
+  private var readyTicks = 0
   /// held open while we run; its closing ends the ssh
   private var lifeline: Pipe?
   /// our private copy of a too-open key: only on disk while ssh logs in
@@ -32,6 +37,11 @@ final class Tunnel {
   private func dropKeyCopy() {
     if let k = keyCopy { try? FileManager.default.removeItem(atPath: k) }
     keyCopy = nil
+  }
+
+  private func closeLifeline() {
+    try? lifeline?.fileHandleForWriting.close()
+    lifeline = nil
   }
   private var errText = ""
   private var profile: Profile?
@@ -47,6 +57,7 @@ final class Tunnel {
     everReady = false
     retry = 0
     if p.isDirect { return direct(p) }
+    if p.isEasyTier { return easyTier(p) }
     launch()
   }
 
@@ -72,12 +83,178 @@ final class Tunnel {
     wanted = false
     poll?.invalidate()
     poll = nil
-    try? lifeline?.fileHandleForWriting.close()
-    lifeline = nil
+    readyCheckInFlight = false
+    closeLifeline()
     dropKeyCopy()
     if let p = proc, p.isRunning { p.terminate() }
     proc = nil
+    let easy = easyProc
+    easyProc = nil
+    if let easy, easy.isRunning { easy.terminate() }
+    EasyTierFiles.remove(easyConfig)
+    easyConfig = nil
     state = .idle
+  }
+
+  // MARK: EasyTier
+
+  private func easyTier(_ p: Profile) {
+    guard wanted else { return }
+    closeLifeline()
+    let config: String
+    do {
+      config = try EasyTierConfig.make(for: p)
+    } catch {
+      state = .failed(error.localizedDescription)
+      return
+    }
+    guard let core = EasyTierCore.executable else {
+      state = .failed("这个 App 没有找到内置的 EasyTier Core。请用 mac/build.sh 重新构建，或安装 easytier-core 后重试。")
+      return
+    }
+
+    // an earlier run that crashed may still hold the local port and its config file
+    let configPath = EasyTierFiles.path(for: p.id)
+    killStaleEasyTier(configPath)
+    if portOpen(p.localPort) {
+      state = .failed("本地端口 \(p.localPort) 已被占用。换一个本地端口，或关掉占用它的程序。")
+      return
+    }
+    do {
+      easyConfig = try EasyTierFiles.write(config, for: p.id)
+    } catch {
+      state = .failed(error.localizedDescription)
+      return
+    }
+
+    state = everReady ? .reconnecting("EasyTier 正在重新连接…") : .connecting
+    errText = ""
+    readyTicks = 0
+
+    // The wrapper holds a lifeline from us, so the Core also goes away if this app crashes.
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/bin/sh")
+    task.arguments = [
+      "-c",
+      "exec 3<&0; \"$@\" < /dev/null & p=$!; (read _ <&3; kill $p 2>/dev/null) & w=$!; wait $p; s=$?; kill $w 2>/dev/null; exit $s",
+      "sh", core, "-c", configPath, "--console-log-level", "warn", "--file-log-level", "off",
+    ]
+    let lifeline = Pipe()
+    task.standardInput = lifeline
+    self.lifeline = lifeline
+    let output = Pipe()
+    task.standardOutput = output
+    task.standardError = output
+    output.fileHandleForReading.readabilityHandler = { [weak self] h in
+      let d = h.availableData
+      guard !d.isEmpty, let s = String(data: d, encoding: .utf8) else { return }
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.errText += s
+        if self.errText.utf8.count > 32 * 1024 { self.errText = String(self.errText.suffix(16 * 1024)) }
+      }
+    }
+    task.terminationHandler = { [weak self] t in
+      DispatchQueue.main.async { self?.easyEnded(t) }
+    }
+    do {
+      try task.run()
+    } catch {
+      closeLifeline()
+      EasyTierFiles.remove(easyConfig)
+      easyConfig = nil
+      state = .failed("无法启动 EasyTier Core：\(error.localizedDescription)")
+      return
+    }
+    easyProc = task
+
+    // A listening port can appear before the virtual network is reachable. An HTTP answer from
+    // tmux-web (401 included) is the first moment the page can really load.
+    poll?.invalidate()
+    poll = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] t in
+      guard let self, self.wanted, let pr = self.profile else { return t.invalidate() }
+      guard self.easyProc?.isRunning == true else { return t.invalidate() }
+      self.readyTicks += 1
+      self.checkEasyTierWeb(pr.localPort, task: task)
+      if self.readyTicks >= 120 {
+        t.invalidate()
+        self.finishEasyTierTimeout(task)
+      }
+    }
+  }
+
+  private func checkEasyTierWeb(_ port: Int, task: Process) {
+    guard !readyCheckInFlight, let url = URL(string: "http://127.0.0.1:\(port)/_tw/api/me") else { return }
+    readyCheckInFlight = true
+    var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 2)
+    req.httpMethod = "GET"
+    URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.readyCheckInFlight = false
+        guard self.wanted, self.easyProc === task, self.easyProc?.isRunning == true else { return }
+        if resp is HTTPURLResponse {
+          self.poll?.invalidate()
+          self.poll = nil
+          self.everReady = true
+          self.retry = 0
+          self.state = .ready(base: "http://127.0.0.1:\(port)")
+        }
+      }
+    }.resume()
+  }
+
+  private func finishEasyTierTimeout(_ task: Process) {
+    guard wanted, easyProc === task else { return }
+    let why = message()
+    easyProc = nil
+    closeLifeline()
+    if task.isRunning { task.terminate() }
+    EasyTierFiles.remove(easyConfig)
+    easyConfig = nil
+    if everReady {
+      retry += 1
+      let wait = min(30.0, pow(2.0, Double(min(retry, 5))))
+      state = .reconnecting("EasyTier 连接超时，\(Int(wait)) 秒后重连…")
+      DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+        guard let self, let p = self.profile else { return }
+        self.easyTier(p)
+      }
+    } else {
+      state = .failed(why.isEmpty ? "EasyTier 在 60 秒内没有连上 tmux-web。检查网络名称、密钥、公共节点和服务器虚拟 IP。" : why)
+    }
+  }
+
+  private func easyEnded(_ task: Process) {
+    guard task === easyProc else { return }
+    poll?.invalidate()
+    poll = nil
+    easyProc = nil
+    closeLifeline()
+    EasyTierFiles.remove(easyConfig)
+    easyConfig = nil
+    guard wanted else { return }
+    let why = message()
+    if everReady {
+      retry += 1
+      let wait = min(30.0, pow(2.0, Double(min(retry, 5))))
+      state = .reconnecting("EasyTier 连接断开，\(Int(wait)) 秒后重连…")
+      DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+        guard let self, let p = self.profile else { return }
+        self.easyTier(p)
+      }
+    } else {
+      state = .failed(why.isEmpty ? "EasyTier Core 退出了（代码 \(task.terminationStatus)）" : why)
+    }
+  }
+
+  private func killStaleEasyTier(_ configPath: String) {
+    let k = Process()
+    k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+    k.arguments = ["-f", configPath]
+    try? k.run()
+    k.waitUntilExit()
+    if k.terminationStatus == 0 { Thread.sleep(forTimeInterval: 0.2) }
   }
 
   private func launch() {
@@ -185,11 +362,12 @@ final class Tunnel {
 
   /// The useful lines of ssh's complaints.
   private func message() -> String {
-    errText.split(separator: "\n")
+    let text = errText.split(separator: "\n")
       .map { $0.trimmingCharacters(in: .whitespaces) }
       .filter { !$0.isEmpty && !$0.hasPrefix("Warning: Permanently added") }
       .suffix(4)
       .joined(separator: "\n")
+    return EasyTierLog.redact(text, secret: profile?.easyTierSecret ?? "")
   }
 
   /// Our own forward for this port, orphaned by an earlier run that didn't get to clean up.

@@ -17,6 +17,7 @@ struct SettingsView: View {
   /// what 添加… did, shown while that key stays picked
   @State private var keyMessage: (id: UUID, text: String)?
   @State private var showPassword = false
+  @State private var showEasyTierSecret = false
   @State private var advanced = false
   @State private var test: Probe?
   @State private var testing = false
@@ -35,9 +36,10 @@ struct SettingsView: View {
       Divider()
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
-          HStack(spacing: 12) {
-            ModeChoice(icon: "network", color: .teal, title: "直接访问", text: "EasyTier、局域网等能直接打开的地址", selected: draft.isDirect) { setMode("direct") }
-            ModeChoice(icon: "lock.shield", color: .indigo, title: "SSH 转发", text: "通过 SSH 端口转发，不用开放端口", selected: !draft.isDirect) { setMode("ssh") }
+          HStack(spacing: 10) {
+            ModeChoice(icon: "network", color: .teal, title: "直接访问", text: "局域网、公网，或已经连上的 EasyTier 地址", selected: draft.isDirect) { setMode("direct") }
+            ModeChoice(icon: "link.circle.fill", color: .blue, title: "内置 EasyTier", text: "App 自己加入网络，不用另开 EasyTier", selected: draft.isEasyTier) { setMode("easytier") }
+            ModeChoice(icon: "lock.shield", color: .indigo, title: "SSH 转发", text: "通过 SSH 端口转发，不用开放端口", selected: draft.mode == "ssh") { setMode("ssh") }
           }
           Card("服务器") {
             Row("名称", note: draft.name.isEmpty ? "不填就用地址" : nil) {
@@ -48,6 +50,13 @@ struct SettingsView: View {
               Row("网址", error: urlError) {
                 TextField("", text: $draft.directURL, prompt: Text("http://10.126.126.2:8080"))
               }
+            } else if draft.isEasyTier {
+              Divider()
+              Row("服务器虚拟 IP", note: "tmux-web 这台机器在 EasyTier 网络里的 IPv4 地址", error: serverIPError) {
+                TextField("", text: $draft.easyTierServerIP, prompt: Text("10.144.144.30"))
+              }
+              Divider()
+              Row("tmux-web 端口", note: "服务器上 tmux-web 监听的端口", error: portError(draft.remotePort)) { number($draft.remotePort) }
             } else {
               Divider()
               Row("SSH 目标", note: "user@host，或 ~/.ssh/config 里的别名", error: targetError) {
@@ -59,7 +68,41 @@ struct SettingsView: View {
               Row("tmux-web 端口", note: "服务器上 tmux-web 监听的端口", error: portError(draft.remotePort)) { number($draft.remotePort) }
             }
           }
-          if !draft.isDirect {
+          if draft.isEasyTier {
+            Card("EasyTier 网络") {
+              Row("网络名称", note: "和 EasyTier 客户端里填的 Network Name 一致", error: networkError) {
+                TextField("", text: $draft.easyTierNetwork, prompt: Text("my-network"))
+              }
+              Divider()
+              Row("网络密钥", note: "只写入权限 0600 的临时配置，不出现在进程参数里") {
+                HStack(spacing: 6) {
+                  if showEasyTierSecret {
+                    TextField("", text: $draft.easyTierSecret, prompt: Text("可留空"))
+                  } else {
+                    SecureField("", text: $draft.easyTierSecret, prompt: Text("可留空"))
+                  }
+                  Button { showEasyTierSecret.toggle() } label: { Image(systemName: showEasyTierSecret ? "eye.slash" : "eye").frame(width: 18) }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .help(showEasyTierSecret ? "隐藏网络密钥" : "显示网络密钥")
+                }
+              }
+              Divider()
+              Row("公共节点", note: "一个或多个，用逗号或换行分隔", error: peerError) {
+                TextField("", text: $draft.easyTierPeers, prompt: Text("tcp://public.example.com:11010"))
+              }
+            }
+            VStack(alignment: .leading, spacing: 10) {
+              Button { withAnimation(.easeOut(duration: 0.15)) { advanced.toggle() } } label: {
+                Label("高级", systemImage: advanced ? "chevron.down" : "chevron.right").font(.subheadline.weight(.semibold))
+              }
+              .buttonStyle(.plain).foregroundStyle(.secondary)
+              if advanced || portTaken != nil {
+                Card(nil) {
+                  Row("本地端口", note: "网页登录状态属于这个端口；换一台服务器就用另一个端口", error: portTaken ?? portError(draft.localPort)) { number($draft.localPort) }
+                }
+              }
+            }
+          } else if draft.mode == "ssh" {
             Card("登录") {
               Row("私钥", note: keyNote, error: keyError) {
                 HStack(spacing: 6) {
@@ -142,8 +185,8 @@ struct SettingsView: View {
       .controlSize(.large)
       .padding(.horizontal, 22).padding(.vertical, 14)
     }
-    // direct needs much less room than SSH
-    .frame(width: 620, height: draft.isDirect ? 560 : 720)
+    // direct needs much less room than a forwarded connection
+    .frame(width: 700, height: draft.isDirect ? 560 : 760)
     .onChange(of: draft.mode) { _ in test = nil }
   }
 
@@ -162,6 +205,9 @@ struct SettingsView: View {
     p.name = p.name.trimmingCharacters(in: .whitespaces)
     p.target = p.target.trimmingCharacters(in: .whitespaces)
     p.directURL = p.directURL.trimmingCharacters(in: .whitespaces)
+    p.easyTierNetwork = p.easyTierNetwork.trimmingCharacters(in: .whitespaces)
+    p.easyTierPeers = p.easyTierPeers.trimmingCharacters(in: .whitespacesAndNewlines)
+    p.easyTierServerIP = p.easyTierServerIP.trimmingCharacters(in: .whitespaces)
     return p
   }
 
@@ -170,6 +216,20 @@ struct SettingsView: View {
   }
   private var targetError: String? {
     draft.target.trimmingCharacters(in: .whitespaces).contains(" ") ? "不能有空格；端口填在下面" : nil
+  }
+  private var networkError: String? {
+    draft.easyTierNetwork.trimmingCharacters(in: .whitespaces).isEmpty ? "填写 EasyTier 网络名称" : nil
+  }
+  private var serverIPError: String? {
+    let ip = draft.easyTierServerIP.trimmingCharacters(in: .whitespaces)
+    if ip.isEmpty { return "填写服务器的 EasyTier 虚拟 IP" }
+    return EasyTierConfig.validIPv4(ip) ? nil : "要填 IPv4 地址，比如 10.144.144.30"
+  }
+  private var peerError: String? {
+    let peers = EasyTierConfig.peers(from: draft.easyTierPeers)
+    if peers.isEmpty { return "至少填一个公共节点" }
+    if let bad = peers.first(where: { !EasyTierConfig.validPeer($0) }) { return "格式不对：\(bad)" }
+    return nil
   }
   private func portError(_ p: Int) -> String? { (1...65535).contains(p) ? nil : "端口在 1–65535 之间" }
   private var portTaken: String? {
@@ -189,6 +249,7 @@ struct SettingsView: View {
   private var canSave: Bool {
     guard draft.isComplete else { return false }
     if draft.isDirect { return urlError == nil }
+    if draft.isEasyTier { return EasyTierConfig.problem(draft) == nil && portTaken == nil }
     return targetError == nil && keyError == nil && portTaken == nil && [draft.sshPort, draft.remotePort, draft.localPort].allSatisfy { portError($0) == nil }
   }
 

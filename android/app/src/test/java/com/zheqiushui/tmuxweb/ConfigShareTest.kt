@@ -57,6 +57,28 @@ class ConfigShareTest {
   }
 
   @Test
+  fun sharedPayloadKeepsEasyTierFieldsForNewerReceivers() {
+    val p = SharedProfile(
+      name = "Mac", mode = "easytier", directUrl = "", target = "", sshPort = 22,
+      remoteHost = "127.0.0.1", remotePort = 18090, keyId = "", password = "",
+      easyTierNetwork = "home", easyTierSecret = "secret",
+      easyTierPeers = "tcp://public.example.com:11010", easyTierServerIP = "10.144.144.30",
+    )
+    val back = SharedPayload.fromJson(SharedPayload(emptyList(), listOf(p)).toJson()).profiles.single()
+    assertEquals("easytier", back.mode)
+    assertEquals("home", back.easyTierNetwork)
+    assertEquals("secret", back.easyTierSecret)
+    assertEquals("tcp://public.example.com:11010", back.easyTierPeers)
+    assertEquals("10.144.144.30", back.easyTierServerIP)
+  }
+
+  @Test
+  fun summaryExplainsSkippedEasyTierProfiles() {
+    val text = ShareImportSummary(1, 0, 0, 0, 2).text
+    assertEquals(true, text.contains("2 个当前安卓版暂不支持的 EasyTier 配置"))
+  }
+
+  @Test
   fun serverOnlyReturnsTheEnvelopeAfterThePassword() {
     val port = ServerSocket(0).use { it.localPort }
     val salt = ByteArray(16) { it.toByte() }

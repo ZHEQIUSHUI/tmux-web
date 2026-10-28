@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
   private var active: Connection? { model.activeID.flatMap { conns[$0] } }
 
   func applicationDidFinishLaunching(_ n: Notification) {
+    EasyTierFiles.removeStale()
     main = WebWindow(model: model)
     main.connection = { [weak self] w in self?.conns.values.first { $0.web === w } }
     main.pageEvent = { [weak self] c, e in self?.page(c, e) }

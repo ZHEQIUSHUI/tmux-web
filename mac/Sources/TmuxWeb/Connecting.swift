@@ -16,7 +16,7 @@ struct ConnectingView: View {
           Text(profile.address).font(.callout).foregroundStyle(.secondary)
         }
         if case .failed(let raw) = info.state {
-          Failure(raw: raw, direct: profile.isDirect, actions: actions)
+          Failure(raw: raw, direct: profile.isDirect, easyTier: profile.isEasyTier, actions: actions)
         } else {
           steps
           TimelineView(.periodic(from: info.started, by: 1)) { t in
@@ -36,8 +36,8 @@ struct ConnectingView: View {
     return VStack(alignment: .leading, spacing: 0) {
       Step(
         state: up ? .done : .running,
-        title: profile.isDirect ? "连接服务器" : "建立 SSH 连接和端口转发",
-        detail: profile.isDirect ? profile.address : "需要密码或验证码时会弹出对话框"
+        title: profile.isDirect ? "连接服务器" : profile.isEasyTier ? "启动 EasyTier 并连接" : "建立 SSH 连接和端口转发",
+        detail: profile.isDirect ? profile.address : profile.isEasyTier ? "不需要 TUN，也不用管理员权限" : "需要密码或验证码时会弹出对话框"
       )
       Divider().padding(.leading, 44)
       Step(state: up ? .running : .waiting, title: "打开网页", detail: up ? "正在加载 tmux-web…" : nil)
@@ -76,11 +76,12 @@ private struct Step: View {
 private struct Failure: View {
   let raw: String
   let direct: Bool
+  let easyTier: Bool
   let actions: ServerActions
   @State private var details = false
 
   var body: some View {
-    let (title, hint) = explain(raw, direct: direct)
+    let (title, hint) = explain(raw, direct: direct, easyTier: easyTier)
     VStack(spacing: 16) {
       VStack(spacing: 8) {
         Label(title, systemImage: "exclamationmark.triangle.fill")

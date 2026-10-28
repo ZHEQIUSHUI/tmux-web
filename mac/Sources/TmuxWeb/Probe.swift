@@ -19,6 +19,11 @@ enum Prober {
       guard let base = p.directBase, let url = URL(string: base + "/_tw/api/me") else { return .offline("网址不对") }
       return await http(url)
     }
+    if p.isEasyTier {
+      if let problem = EasyTierConfig.problem(p) { return .offline(problem) }
+      if EasyTierCore.executable == nil { return .offline("这个 App 没有内置 EasyTier Core") }
+      return .unknown("由 App 内置的 EasyTier 负责连接")
+    }
     let target = p.target.trimmingCharacters(in: .whitespaces)
     if target.isEmpty { return .offline("没填 SSH 目标") }
     let (host, port, jump) = await sshDestination(target, port: p.sshPort)
