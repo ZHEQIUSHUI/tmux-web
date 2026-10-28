@@ -11,6 +11,7 @@ import {
   accessOf,
   adoptSession,
   backend,
+  canManageSession,
   claudeHistory,
   claudeHistoryCached,
   codexHistoryCached,
@@ -49,7 +50,15 @@ function folderView(f: FolderRow) {
 }
 
 function publicUser(u: UserRow) {
-  return { id: u.id, username: u.username, role: u.role, disabled: !!u.disabled, groups: groupIdsOf(u.id), defaults: { codexArgs: config.codexArgs } };
+  return {
+    id: u.id,
+    username: u.username,
+    role: u.role,
+    disabled: !!u.disabled,
+    seeAllSessions: !!u.see_all_sessions,
+    groups: groupIdsOf(u.id),
+    defaults: { codexArgs: config.codexArgs },
+  };
 }
 
 function requireUser(req: IncomingMessage): UserRow {
@@ -165,7 +174,7 @@ route('PATCH', '/_tw/api/sessions/:id', async (req, res, [id]) => {
   }
   const changesMore = b.name !== undefined || b.groupId !== undefined || b.share !== undefined;
   if (!changesMore) return sendJson(req, res, 200, { ok: true });
-  if (row.owner_id !== user.id && user.role !== 'admin') throw new HttpError(403, '只有创建者可以修改');
+  if (!canManageSession(user, row)) throw new HttpError(403, '只有创建者可以修改');
   updateSession(row.id, {
     name: typeof b.name === 'string' && b.name.trim() ? b.name.trim().slice(0, 60) : undefined,
     groupId: b.groupId === undefined ? undefined : b.groupId ? Number(b.groupId) : null,
@@ -232,7 +241,7 @@ route('DELETE', '/_tw/api/folders/:id', (req, res, [id]) => {
 route('DELETE', '/_tw/api/sessions/:id', async (req, res, [id]) => {
   const user = requireUser(req);
   const { row } = sessionFor(user, id, 'control');
-  if (row.owner_id !== user.id && user.role !== 'admin') throw new HttpError(403, '只有创建者可以删除');
+  if (!canManageSession(user, row)) throw new HttpError(403, '只有创建者可以删除');
   await deleteSession(row.id);
   sendJson(req, res, 200, { ok: true });
 });
@@ -692,7 +701,14 @@ route('PATCH', '/_tw/api/users/:id', async (req, res, [id]) => {
     qUpdatePassword(user.id, hashPassword(validPassword(b.password)));
     q.deleteUserTokens.run(user.id);
   }
-  if (b.role && user.id !== admin.id) qSetRole(user.id, b.role === 'admin' ? 'admin' : 'member');
+  if (b.role && user.id !== admin.id) {
+    const role = b.role === 'admin' ? 'admin' : 'member';
+    qSetRole(user.id, role);
+    if (role !== 'admin') qSetSeeAllSessions(user.id, 0);
+  }
+  if (typeof b.seeAllSessions === 'boolean' && q.userById.get(user.id)!.role === 'admin') {
+    qSetSeeAllSessions(user.id, b.seeAllSessions ? 1 : 0);
+  }
   if (typeof b.disabled === 'boolean' && user.id !== admin.id) {
     qSetDisabled(user.id, b.disabled);
     if (b.disabled) q.deleteUserTokens.run(user.id);
@@ -795,6 +811,12 @@ function hostView(h: HostRow, withStatus: boolean) {
 route('GET', '/_tw/api/hosts', (req, res) => {
   const user = requireUser(req);
   sendJson(req, res, 200, q.hosts.all().filter((h) => canUseHost(user, h)).map((h) => hostView(h, true)));
+});
+
+/** Admin management view: every host, without granting ordinary cross-account host access. */
+route('GET', '/_tw/api/admin/hosts', (req, res) => {
+  requireAdmin(req);
+  sendJson(req, res, 200, q.hosts.all().map((h) => hostView(h, true)));
 });
 
 route('GET', '/_tw/api/hosts/:id/dirs', async (req, res, [id]) => {
@@ -966,6 +988,7 @@ route('GET', '/_tw/api/ssh-key', (req, res) => {
 const qUpdatePassword = (id: number, hash: string) => db.prepare('update users set password_hash = ? where id = ?').run(hash, id);
 const qSetRole = (id: number, role: Role) => db.prepare('update users set role = ? where id = ?').run(role, id);
 const qSetDisabled = (id: number, disabled: boolean) => db.prepare('update users set disabled = ? where id = ?').run(disabled ? 1 : 0, id);
+const qSetSeeAllSessions = (id: number, seeAll: number) => db.prepare('update users set see_all_sessions = ? where id = ?').run(seeAll, id);
 
 // ---------- app preview (reverse proxy to ports on hosts) ----------
 

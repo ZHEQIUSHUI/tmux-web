@@ -491,13 +491,19 @@ export function getLive(id: number): LiveSession | undefined {
 export type Access = 'none' | 'view' | 'control';
 
 export function accessOf(user: UserRow, row: SessionRow, groups = groupIdsOf(user.id)): Access {
-  if (user.role === 'admin' || row.owner_id === user.id) return 'control';
+  if (row.owner_id === user.id) return 'control';
+  if (user.role === 'admin' && user.see_all_sessions) return 'control';
   if (row.group_id !== null && row.share !== 'none' && groups.includes(row.group_id)) return row.share;
   return 'none';
 }
 
 export function canUseHost(user: UserRow, h: HostRow): boolean {
-  return user.role === 'admin' || h.owner_id === null || h.owner_id === user.id;
+  return h.owner_id === null || h.owner_id === user.id || (user.role === 'admin' && !!user.see_all_sessions);
+}
+
+/** Renaming and deleting are reserved for the creator, or an admin who explicitly opted in. */
+export function canManageSession(user: UserRow, row: SessionRow): boolean {
+  return row.owner_id === user.id || (user.role === 'admin' && !!user.see_all_sessions);
 }
 
 export function sessionView(user: UserRow) {
@@ -522,6 +528,7 @@ export function sessionView(user: UserRow) {
       adopted: !!row.adopted,
       note: row.note,
       folderId: folderOf.get(row.id) ?? null,
+      canManage: canManageSession(user, row),
       tmux: row.adopted ? `${row.tmux_socket === 'default' ? '' : `-L ${row.tmux_socket} `}${row.tmux_name}` : null,
       access,
       status: live.get(row.id)?.status ?? 'dead',

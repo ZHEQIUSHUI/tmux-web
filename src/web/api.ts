@@ -5,6 +5,8 @@ export interface Me {
   username: string;
   role: 'admin' | 'member';
   disabled: boolean;
+  /** admin only: explicitly enabled cross-account session/host access */
+  seeAllSessions: boolean;
   groups: number[];
   /** server-side launch defaults, shown in the new-session dialog */
   defaults?: { codexArgs?: string };
@@ -24,6 +26,8 @@ export interface SessionInfo {
   note: string;
   /** your folder for it (folders are personal) */
   folderId: number | null;
+  /** creator, or an admin who explicitly enabled cross-account access */
+  canManage: boolean;
   /** for adopted sessions: the user's tmux session (and -L socket if not default) */
   tmux: string | null;
   access: 'view' | 'control';

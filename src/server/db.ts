@@ -13,6 +13,8 @@ export interface UserRow {
   password_hash: string;
   role: Role;
   disabled: number;
+  /** admin only: explicitly opt in to seeing and operating other accounts' sessions and hosts */
+  see_all_sessions: number;
   created_at: number;
 }
 
@@ -78,6 +80,7 @@ create table if not exists users (
   password_hash text not null,
   role text not null default 'member',
   disabled integer not null default 0,
+  see_all_sessions integer not null default 0,
   created_at integer not null
 );
 create table if not exists groups (
@@ -144,6 +147,17 @@ create table if not exists auth_tokens (
 );
 `);
 
+function addColumn(table: string, col: string, ddl: string) {
+  const cols = (db.prepare(`pragma table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+  if (cols.includes(col)) return;
+  try {
+    db.exec(ddl);
+  } catch (e: any) {
+    // two processes may start together (the service and a test): the column still ends up present
+    if (!String(e?.message).includes('duplicate column name')) throw e;
+  }
+}
+
 // columns added after the first release
 for (const [col, ddl] of [
   ['tmux_socket', 'alter table sessions add column tmux_socket text'],
@@ -151,9 +165,10 @@ for (const [col, ddl] of [
   ['adopted', 'alter table sessions add column adopted integer not null default 0'],
   ['note', "alter table sessions add column note text not null default ''"],
 ]) {
-  const cols = (db.prepare('pragma table_info(sessions)').all() as { name: string }[]).map((c) => c.name);
-  if (!cols.includes(col)) db.exec(ddl);
+  addColumn('sessions', col, ddl);
 }
+
+addColumn('users', 'see_all_sessions', 'alter table users add column see_all_sessions integer not null default 0');
 
 export const q = {
   userById: db.prepare<[number], UserRow>('select * from users where id = ?'),

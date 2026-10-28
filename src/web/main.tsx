@@ -86,12 +86,17 @@ function App() {
   const [me, setMe] = useState<Me | null | false>(null);
   useEffect(() => {
     api<Me>('GET', '/_tw/api/me').then(signedIn).then(setMe, () => setMe(false));
+    const refreshMe = () => api<Me>('GET', '/_tw/api/me').then(setMe, () => {});
     const out = () => {
       signedOut();
       setMe(false);
     };
+    addEventListener('tw:me', refreshMe);
     addEventListener('tw:logout', out);
-    return () => removeEventListener('tw:logout', out);
+    return () => {
+      removeEventListener('tw:me', refreshMe);
+      removeEventListener('tw:logout', out);
+    };
   }, []);
   if (me === null) return null;
   if (me === false) return <Login onLogin={(m) => void signedIn(m).then(setMe)} />;

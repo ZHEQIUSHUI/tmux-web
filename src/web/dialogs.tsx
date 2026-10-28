@@ -39,11 +39,13 @@ export function ShareFields({ groups, groupId, share }: { groups: Group[]; group
   );
 }
 
-export function useHosts() {
+export function useHosts(path = '/_tw/api/hosts') {
   const [hosts, setHosts] = useState<HostInfo[] | null>(null);
-  const load = useCallback(() => api<HostInfo[]>('GET', '/_tw/api/hosts').then(setHosts, () => setHosts([])), []);
+  const load = useCallback(() => api<HostInfo[]>('GET', path).then(setHosts, () => setHosts([])), [path]);
   useEffect(() => {
     load();
+    addEventListener('tw:me', load);
+    return () => removeEventListener('tw:me', load);
   }, [load]);
   return [hosts, load] as const;
 }
@@ -357,7 +359,7 @@ export function NewSession({ me, at, onClose, onCreated }: { me: Me; at?: { host
 export function SessionSettings({ me, session, folders, onClose }: { me: Me; session: SessionInfo; folders: Folder[]; onClose: () => void }) {
   const [err, setErr] = useState('');
   const groups = useGroups(me);
-  const owner = me.role === 'admin' || session.owner === me.username;
+  const owner = session.canManage ?? (session.owner === me.username || (me.role === 'admin' && me.seeAllSessions));
   const save = async (e: Event) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target as HTMLFormElement)) as Record<string, string>;
@@ -568,7 +570,7 @@ export function PasswordModal({ onClose }: { onClose: () => void }) {
 export function AdminModal({ me, onClose }: { me: Me; onClose: () => void }) {
   const [users, setUsers] = useState<Me[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
-  const [hosts, loadHosts] = useHosts();
+  const [hosts, loadHosts] = useHosts('/_tw/api/admin/hosts');
   const [key, setKey] = useState('');
   const [err, setErr] = useState('');
   const load = () => {
@@ -616,6 +618,11 @@ export function AdminModal({ me, onClose }: { me: Me; onClose: () => void }) {
   const copyKey = () => copyText(`echo '${key}' >> ~/.ssh/authorized_keys`);
   const toggleGroup = (u: Me, gid: number) =>
     run(() => api('PATCH', `/_tw/api/users/${u.id}`, { groups: u.groups.includes(gid) ? u.groups.filter((g) => g !== gid) : [...u.groups, gid] }));
+  const toggleSeeAll = (u: Me) =>
+    run(async () => {
+      await api('PATCH', `/_tw/api/users/${u.id}`, { seeAllSessions: !u.seeAllSessions });
+      if (u.id === me.id) dispatchEvent(new Event('tw:me'));
+    });
   const resetPassword = (u: Me) => {
     const p = prompt(`为 ${u.username} 设置新密码（至少 6 位）`);
     if (p) run(() => api('PATCH', `/_tw/api/users/${u.id}`, { password: p }));
@@ -703,8 +710,17 @@ export function AdminModal({ me, onClose }: { me: Me; onClose: () => void }) {
             <div>
               <b>{u.username}</b> {u.role === 'admin' && <span class="tag">管理员</span>}
               {u.disabled && <span class="tag warn">已停用</span>}
-              {groups.length > 0 && (
+              {(groups.length > 0 || u.role === 'admin') && (
                 <div class="chips">
+                  {u.role === 'admin' && (
+                    <button
+                      class={`chip ${u.seeAllSessions ? 'on' : ''}`}
+                      onClick={() => toggleSeeAll(u)}
+                      title="默认关闭。开启后可查看并操作其他账号的会话，并使用他们的主机。"
+                    >
+                      跨账号访问：{u.seeAllSessions ? '开' : '关'}
+                    </button>
+                  )}
                   {groups.map((g) => (
                     <button key={g.id} class={`chip ${u.groups.includes(g.id) ? 'on' : ''}`} onClick={() => toggleGroup(u, g.id)}>
                       {g.name}

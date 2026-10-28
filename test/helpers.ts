@@ -4,7 +4,7 @@ import path from 'node:path';
 
 /** A throwaway directory; modules that open the database read DATA_DIR at import time. */
 export const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tw-test-'));
-process.env.DATA_DIR ||= path.join(tmp, 'data');
+process.env.DATA_DIR = path.join(tmp, 'data');
 
 export function writeLines(name: string, lines: unknown[]): string {
   const f = path.join(tmp, name);

@@ -84,6 +84,7 @@
 | GET | `me` | 当前账号 |
 | GET/POST/DELETE | `tokens`, `tokens/:id` | 列出 / 新建 `{name}`（响应里的 `token` 只出现这一次）/ 吊销 API 令牌 |
 | GET/POST/PATCH/DELETE | `folders`, `folders/:id` | 你的文件夹 `{name, note, position}` |
+| GET | `admin/hosts` | 管理员管理全部主机时使用；普通的主机接口仍然只返回当前账号可用的主机 |
 | GET | `hosts`, `hosts/:id/dirs`, `hosts/:id/ports`, `hosts/:id/tmux`, `hosts/:id/claude-history`, `hosts/:id/codex-history`, `hosts/:id/codex-profiles` | 主机、目录建议、监听中的端口、已有的 tmux 会话、Claude / Codex 历史对话，以及可用的 Codex profile（来自 `~/.codex/*.config.toml`） |
 | GET | `hosts/:id/stats` | 资源占用：CPU（采样半秒）、内存和交换分区、显卡（有 `nvidia-smi` 时）、磁盘、当前最占 CPU 的进程。结果缓存 2 秒 |
 | GET | `app/version.json` | App 的最新版本信息（转发自 GitHub 最新 Release 的 version.json，缓存 10 分钟）。不需要登录 |
