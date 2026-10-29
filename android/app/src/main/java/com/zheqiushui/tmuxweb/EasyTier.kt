@@ -45,7 +45,11 @@ object EasyTierConfig {
     return "tmux-web-android-$id"
   }
 
-  /** A complete no-TUN configuration with one local TCP forward. */
+  /**
+   * A complete no-TUN configuration with one local TCP forward. The node needs a virtual IP (dhcp):
+   * without one EasyTier has no userspace stack for the forward and dials the server IP directly,
+   * outside the network.
+   */
   fun make(p: Profile): String {
     val issue = problem(p)
     if (issue != null) throw EasyTierException(issue)
@@ -53,7 +57,7 @@ object EasyTierConfig {
     val instance = instanceName(p)
     val text = StringBuilder()
       .append("instance_name = ").append(string(instance)).append('\n')
-      .append("dhcp = false\n")
+      .append("dhcp = true\n")
       .append("listeners = []\n")
       .append("mapped_listeners = []\n")
       .append("exit_nodes = []\n")

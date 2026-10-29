@@ -39,7 +39,9 @@ enum EasyTierConfig {
   }
 
   /// A complete no-TUN configuration. Secrets are TOML strings here; `EasyTierFiles` is the only
-  /// thing that writes it, with 0600 permissions.
+  /// thing that writes it, with 0600 permissions. The node needs a virtual IP (dhcp): without one
+  /// EasyTier has no userspace stack for the forward and dials the server IP directly, outside the
+  /// network.
   static func make(for p: Profile) throws -> String {
     if let problem = problem(p) { throw EasyTierError(problem) }
     let peers = peers(from: p.easyTierPeers)
@@ -47,7 +49,7 @@ enum EasyTierConfig {
     let instance = "tmux-web-\(p.id.uuidString.prefix(8).lowercased())"
     var text = """
       instance_name = \(string(instance))
-      dhcp = false
+      dhcp = true
       listeners = []
       mapped_listeners = []
       exit_nodes = []
