@@ -1389,14 +1389,14 @@ export function Composer(props: {
             {!coarse && '停止'}
           </button>
         )}
-        {running && props.agent === 'claude' && text.trim() && (
+        {running && props.agent === 'claude' && (
           <button
             class={`now ${coarse ? 'round' : ''}`}
             aria-label="立即插入"
             title="立即插入对话，不等这一轮做完（Ctrl+X Ctrl+S）"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => send(true)}
-            disabled={sending || uploading}
+            disabled={sending || uploading || !text.trim()}
           >
             {coarse ? <Icon.zap /> : '立即插入'}
           </button>
