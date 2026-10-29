@@ -66,6 +66,8 @@ class AppModel {
   val probes = mutableStateMapOf<String, Probe.Result>()
   var probing by mutableIntStateOf(0)
   var resumed by mutableStateOf(false)
+  /** a share link opened from outside the app, for the share screen to fill in */
+  var incomingShare by mutableStateOf<ShareLink?>(null)
   val active: Profile? get() = profiles.firstOrNull { it.id == activeId }
 }
 
@@ -129,6 +131,7 @@ class MainActivity : ComponentActivity(), Actions {
       store.upsert(Profile.fromJson(org.json.JSONObject(String(android.util.Base64.decode(it, android.util.Base64.DEFAULT)))))
     }
     reloadProfiles()
+    openShareLink(intent)
     // always the servers first; one still connected (the app came back) shows as such on its card
     model.activeId = Hub.activeId.takeIf { Hub.state !is TunnelState.Idle }
     Hub.listen(onState)
@@ -165,6 +168,14 @@ class MainActivity : ComponentActivity(), Actions {
     super.onNewIntent(intent)
     val sid = intent.getIntExtra("sessionId", -1)
     if (sid >= 0) openSession(sid)
+    openShareLink(intent)
+  }
+
+  /** tmuxweb://share?… (the camera app scanned a share code): to the receiving side, filled in */
+  private fun openShareLink(intent: Intent) {
+    val link = intent.data?.toString()?.let(ShareLink::parse) ?: return
+    model.incomingShare = link
+    model.screen = Screen.Share
   }
 
   private fun openSession(id: Int) {

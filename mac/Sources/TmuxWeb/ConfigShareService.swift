@@ -8,6 +8,8 @@ final class ConfigShareService: ObservableObject {
   @Published private(set) var running: ShareRunningInfo?
   @Published private(set) var starting = false
   @Published var error: String?
+  /// for the QR code; holds the password, in memory only
+  @Published private(set) var link: ShareLink?
 
   private var server: ConfigShareServer?
   private var generation = 0
@@ -32,6 +34,7 @@ final class ConfigShareService: ObservableObject {
             guard let self, run == self.generation else { return }
             self.starting = false
             self.running = info
+            self.link = info.addresses.isEmpty ? nil : ShareLink(hosts: info.addresses, port: info.port, password: password)
             self.error = nil
           }
           server.onFailure = { [weak self] message in
@@ -64,6 +67,7 @@ final class ConfigShareService: ObservableObject {
     server?.stop()
     server = nil
     running = nil
+    link = nil
     starting = false
   }
 }

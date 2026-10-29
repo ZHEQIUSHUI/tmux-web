@@ -111,6 +111,42 @@ struct SharedPayload: Codable {
   }
 }
 
+/// Everything a receiver needs in one line, for the QR code: scanning it is enough.
+/// tmuxweb://share?h=192.168.1.23,10.126.126.5&p=48620&k=<password>
+struct ShareLink: Equatable {
+  static let prefix = "tmuxweb://share"
+  var hosts: [String]
+  var port: Int
+  var password: String
+
+  init(hosts: [String], port: Int, password: String) {
+    self.hosts = hosts
+    self.port = port
+    self.password = password
+  }
+
+  init?(_ text: String) {
+    let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard s.hasPrefix(Self.prefix + "?") else { return nil }
+    var q: [String: String] = [:]
+    for pair in s.dropFirst(Self.prefix.count + 1).split(separator: "&") {
+      let kv = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+      // "+" is a space, as Java's URLEncoder writes it
+      guard kv.count == 2, let v = String(kv[1]).replacingOccurrences(of: "+", with: " ").removingPercentEncoding else { return nil }
+      q[String(kv[0])] = v
+    }
+    let hosts = (q["h"] ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    guard !hosts.isEmpty, let port = q["p"].flatMap({ Int($0) }), (1024...65535).contains(port),
+          let password = q["k"], password.count >= ShareProtocol.minPassword else { return nil }
+    self.init(hosts: hosts, port: port, password: password)
+  }
+
+  var text: String {
+    let k = password.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+    return "\(Self.prefix)?h=\(hosts.joined(separator: ","))&p=\(port)&k=\(k)"
+  }
+}
+
 enum ShareProtocol {
   static let format = "tmux-web-config-share"
   static let version = 1

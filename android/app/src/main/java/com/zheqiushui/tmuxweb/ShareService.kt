@@ -12,6 +12,8 @@ data class ShareRunning(
   val addresses: List<String>,
   val profileCount: Int,
   val keyCount: Int,
+  /** for the QR code; holds the password, in memory only */
+  val link: ShareLink?,
 )
 
 /** The one outgoing share. It stays up when the screen closes, until stopped or the app exits. */
@@ -38,7 +40,8 @@ object ShareRuntime {
         throw ShareException("共享服务启动失败：${e.message ?: e.javaClass.simpleName}", e)
       }
       server = next
-      running = ShareRunning(port, localShareAddresses(), payload.profiles.size, payload.keys.size)
+      val addresses = localShareAddresses()
+      running = ShareRunning(port, addresses, payload.profiles.size, payload.keys.size, if (addresses.isEmpty()) null else ShareLink(addresses, port, password))
     } finally {
       starting = false
     }

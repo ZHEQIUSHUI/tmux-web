@@ -65,6 +65,9 @@ dependencies {
   implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
   implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
   implementation("org.slf4j:slf4j-nop:2.0.13")
+  // QR codes for sharing configs: drawing (zxing core) and scanning with the camera
+  implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+  implementation("com.google.zxing:core:3.5.3")
   testImplementation("junit:junit:4.13.2")
   testImplementation("org.json:json:20240303")
 }

@@ -1,6 +1,10 @@
 package com.zheqiushui.tmuxweb
 
+import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +54,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -58,6 +67,12 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import java.security.SecureRandom
 
 /** Share selected servers and keys over the LAN, or receive them from another device. */
@@ -65,7 +80,9 @@ import java.security.SecureRandom
 @Composable
 fun ShareScreen(m: AppModel, a: Actions) {
   BackHandler { a.home() }
-  var tab by remember { mutableIntStateOf(0) }
+  // a share link opened from outside (the camera app scanned the code): to the receiving side
+  var tab by remember { mutableIntStateOf(if (m.incomingShare != null) 1 else 0) }
+  LaunchedEffect(m.incomingShare) { if (m.incomingShare != null) tab = 1 }
   Scaffold(
     topBar = {
       TopAppBar(
@@ -79,7 +96,7 @@ fun ShareScreen(m: AppModel, a: Actions) {
         Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("共享给其他设备") })
         Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("从其他设备获取") })
       }
-      if (tab == 0) ShareSender(m) else ShareReceiver(a)
+      if (tab == 0) ShareSender(m) else ShareReceiver(m, a)
     }
   }
 }
@@ -119,7 +136,21 @@ private fun ShareSender(m: AppModel) {
             }
           }
           Spacer(Modifier.size(16.dp))
-          Text("在另一台设备打开 tmux-web App → 共享配置 → 从其他设备获取，填入下面的地址和端口，再输入刚才设置的密码。", style = MaterialTheme.typography.bodyMedium)
+          running.link?.let { link ->
+            Text("在另一台手机打开 tmux-web App → 共享配置 → 从其他设备获取 → 扫码导入，扫下面的二维码就行。", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.size(14.dp))
+            val qr = remember(link) { qrBitmap(link.toString()) }
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+              // white around it whatever the theme: scanners want dark modules on light
+              Image(qr, "共享二维码", Modifier.background(Color.White, RoundedCornerShape(12.dp)).padding(12.dp).size(220.dp), filterQuality = FilterQuality.None)
+            }
+            Spacer(Modifier.size(6.dp))
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+              TextButton(onClick = { clipboard.setText(AnnotatedString(link.toString())) }) { Text("复制共享链接（含密码）") }
+            }
+            Spacer(Modifier.size(8.dp))
+          }
+          Text("也可以在对方那里手动填下面的地址和端口，再输入刚才设置的密码。", style = MaterialTheme.typography.bodyMedium)
           Spacer(Modifier.size(14.dp))
           Text("本机地址", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
           if (running.addresses.isEmpty()) {
@@ -237,7 +268,7 @@ private fun ShareSender(m: AppModel) {
 }
 
 @Composable
-private fun ShareReceiver(a: Actions) {
+private fun ShareReceiver(m: AppModel, a: Actions) {
   val scope = rememberCoroutineScope()
   var host by remember { mutableStateOf("") }
   var port by remember { mutableStateOf(ShareProtocol.DEFAULT_PORT.toString()) }
@@ -245,6 +276,47 @@ private fun ShareReceiver(a: Actions) {
   var busy by remember { mutableStateOf(false) }
   var error by remember { mutableStateOf<String?>(null) }
   var result by remember { mutableStateOf<ShareImportSummary?>(null) }
+
+  fun receive(fetch: () -> SharedPayload) {
+    error = null
+    busy = true
+    scope.launch {
+      try {
+        val payload = withContext(Dispatchers.IO) { fetch() }
+        result = a.importShared(payload)
+        a.probeAll()
+      } catch (e: Exception) {
+        error = e.message ?: e.javaClass.simpleName
+      } finally {
+        busy = false
+      }
+    }
+  }
+  // the fields show what the link says, so a failure can be fixed by hand (another address)
+  fun fill(link: ShareLink) {
+    host = link.hosts.first()
+    port = link.port.toString()
+    password = link.password
+  }
+  val scan = rememberLauncherForActivityResult(ScanContract()) { r ->
+    val text = r.contents ?: return@rememberLauncherForActivityResult
+    val link = ShareLink.parse(text)
+    if (link == null) {
+      error = "这不是 tmux-web 的共享二维码"
+      return@rememberLauncherForActivityResult
+    }
+    fill(link)
+    receive { ShareClient.fetch(link) }
+  }
+  // opened from outside the app (any page can open a link): filled in, imported only on a tap
+  LaunchedEffect(m.incomingShare) {
+    m.incomingShare?.let {
+      fill(it)
+      m.incomingShare = null
+      result = null
+      error = null
+    }
+  }
 
   LazyColumn(
     Modifier.fillMaxSize().navigationBarsPadding(),
@@ -270,9 +342,24 @@ private fun ShareReceiver(a: Actions) {
     item {
       ShareCard {
         Text("从另一台设备获取", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text("让对方打开 tmux-web App 的「共享配置」，开始共享后，把显示的 IP 和端口填在这里。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("让对方打开 tmux-web App 的「共享配置」并开始共享，扫它显示的二维码就能导入。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.size(14.dp))
-        OutlinedTextField(host, { host = it }, Modifier.fillMaxWidth(), label = { Text("对方 IP") }, placeholder = { Text("比如 192.168.1.23") }, singleLine = true)
+        Button(
+          onClick = {
+            error = null
+            scan.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt("扫描另一台设备上的共享二维码").setBeepEnabled(false).setOrientationLocked(false))
+          },
+          enabled = !busy,
+          modifier = Modifier.fillMaxWidth(),
+        ) { Text("扫码导入") }
+        Spacer(Modifier.size(16.dp))
+        Text("或者手动填写（也可以把共享链接粘贴到「对方 IP」）", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.size(8.dp))
+        OutlinedTextField(
+          host,
+          { v -> ShareLink.parse(v)?.let { fill(it) } ?: run { host = v } },
+          Modifier.fillMaxWidth(), label = { Text("对方 IP") }, placeholder = { Text("比如 192.168.1.23") }, singleLine = true,
+        )
         Spacer(Modifier.size(10.dp))
         OutlinedTextField(
           port, { port = it.filter(Char::isDigit).take(5) }, Modifier.fillMaxWidth(),
@@ -287,22 +374,8 @@ private fun ShareReceiver(a: Actions) {
           LabeledError(it)
         }
         Spacer(Modifier.size(14.dp))
-        Button(
-          onClick = {
-            error = null
-            busy = true
-            scope.launch {
-              try {
-                val payload = withContext(Dispatchers.IO) { ShareClient.fetch(host, port.toInt(), password) }
-                result = a.importShared(payload)
-                a.probeAll()
-              } catch (e: Exception) {
-                error = e.message ?: e.javaClass.simpleName
-              } finally {
-                busy = false
-              }
-            }
-          },
+        OutlinedButton(
+          onClick = { receive { ShareClient.fetch(host, port.toInt(), password) } },
           enabled = !busy && host.isNotBlank() && port.toIntOrNull() in 1024..65535 && password.isNotEmpty(),
           modifier = Modifier.fillMaxWidth(),
         ) {
@@ -366,6 +439,14 @@ private fun LabeledError(text: String) {
     Spacer(Modifier.size(7.dp))
     Text(text, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
   }
+}
+
+/** The QR code at one pixel per module: drawn scaled up without smoothing. */
+private fun qrBitmap(text: String): ImageBitmap {
+  val hints = mapOf(EncodeHintType.MARGIN to 1, EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M, EncodeHintType.CHARACTER_SET to "UTF-8")
+  val m = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 0, 0, hints)
+  val pixels = IntArray(m.width * m.height) { i -> if (m[i % m.width, i / m.width]) android.graphics.Color.BLACK else android.graphics.Color.WHITE }
+  return Bitmap.createBitmap(pixels, m.width, m.height, Bitmap.Config.ARGB_8888).asImageBitmap()
 }
 
 private fun randomPassword(): String {

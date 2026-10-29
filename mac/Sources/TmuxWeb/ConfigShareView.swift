@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage.CIFilterBuiltins
 import SwiftUI
 
 /// Share selected servers and keys over the LAN, or receive them from another device.
@@ -60,7 +61,28 @@ struct ConfigShareView: View {
             Spacer()
             Text("\(running.profileCount) 个服务器 · \(running.keyCount) 把私钥").font(.callout).foregroundStyle(.secondary)
           }
-          Text("在另一台设备打开 tmux-web App → 共享配置 → 从其他设备获取，填入地址、端口和刚才设置的密码。")
+          if let link = service.link {
+            HStack(alignment: .center, spacing: 18) {
+              if let qr = qrImage(link.text) {
+                Image(nsImage: qr).interpolation(.none).resizable()
+                  .frame(width: 190, height: 190)
+                  .padding(10)
+                  .background(RoundedRectangle(cornerRadius: 10).fill(Color.white))
+              }
+              VStack(alignment: .leading, spacing: 10) {
+                Text("用手机扫码").font(.headline)
+                Text("在手机上打开 tmux-web App → 共享配置 → 从其他设备获取 → 扫码导入，对准左边的二维码。")
+                  .font(.callout).fixedSize(horizontal: false, vertical: true)
+                Text("另一台 Mac：复制共享链接，粘贴到它的「对方 IP」一栏。")
+                  .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button("复制共享链接（含密码）") {
+                  NSPasteboard.general.clearContents()
+                  NSPasteboard.general.setString(link.text, forType: .string)
+                }
+              }
+            }
+          }
+          Text("也可以在对方那里手动填地址、端口和刚才设置的密码。")
             .font(.callout)
           VStack(alignment: .leading, spacing: 7) {
             Text("本机地址").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -243,11 +265,18 @@ struct ConfigShareView: View {
         } else {
           card {
             Text("从另一台设备获取").font(.headline)
-            Text("让对方开始共享，把显示的 IP 和端口填在这里，再输入对方设置的密码。")
+            Text("让对方开始共享，把显示的 IP 和端口填在这里，再输入对方设置的密码。也可以把对方复制的共享链接直接粘贴到「对方 IP」，会自动填好并导入。")
               .font(.caption).foregroundStyle(.secondary)
             HStack {
               Text("对方 IP").frame(width: 120, alignment: .leading)
-              TextField("", text: $host, prompt: Text("比如 192.168.1.23")).textFieldStyle(.roundedBorder)
+              TextField("", text: $host, prompt: Text("比如 192.168.1.23，或 tmuxweb://share?… 链接")).textFieldStyle(.roundedBorder)
+                .onChange(of: host) { value in
+                  guard let link = ShareLink(value) else { return }
+                  host = link.hosts[0]
+                  receivePort = String(link.port)
+                  receivePassword = link.password
+                  receive(link)
+                }
             }
             HStack {
               Text("端口").frame(width: 120, alignment: .leading)
@@ -282,12 +311,19 @@ struct ConfigShareView: View {
 
   private var validReceivePort: Bool { Int(receivePort).map { (1024...65535).contains($0) } ?? false }
 
-  private func receive() {
+  /// with a link: the sender's addresses in turn, the first that answers
+  private func receive(_ link: ShareLink? = nil) {
     receiveError = nil
     busy = true
     Task {
       do {
-        let payload = try await fetchShared()
+        let payload: SharedPayload
+        if let link {
+          payload = try await fetchShared(link)
+        } else {
+          let (target, targetPort) = parseTarget(host, fallback: Int(receivePort) ?? ShareProtocol.defaultPort)
+          payload = try await fetchShared(host: target, port: targetPort, password: receivePassword)
+        }
         let summary = store.importShared(payload)
         imported = summary
         receivePassword = ""
@@ -298,12 +334,23 @@ struct ConfigShareView: View {
     }
   }
 
-  private func fetchShared() async throws -> SharedPayload {
-    let (target, targetPort) = parseTarget(host, fallback: Int(receivePort) ?? ShareProtocol.defaultPort)
+  private func fetchShared(_ link: ShareLink) async throws -> SharedPayload {
+    var last: Error = ShareError("链接里没有地址")
+    for h in link.hosts {
+      do {
+        return try await fetchShared(host: h, port: link.port, password: link.password, timeout: link.hosts.count > 1 ? 4 : 12)
+      } catch let e as URLError {
+        last = ShareError("连不上 \(h):\(link.port)：\(e.localizedDescription)")
+      }
+    }
+    throw last
+  }
+
+  private func fetchShared(host target: String, port targetPort: Int, password: String, timeout: TimeInterval = 12) async throws -> SharedPayload {
     guard let url = URL(string: "http://\(target):\(targetPort)/api/bundle") else { throw ShareError("地址不对") }
     var request = URLRequest(url: url)
-    request.timeoutInterval = 12
-    request.setValue(Data(receivePassword.utf8).base64EncodedString(), forHTTPHeaderField: "X-Share-Password-B64")
+    request.timeoutInterval = timeout
+    request.setValue(Data(password.utf8).base64EncodedString(), forHTTPHeaderField: "X-Share-Password-B64")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     let (data, response) = try await URLSession.shared.data(for: request)
     guard let http = response as? HTTPURLResponse else { throw ShareError("对方没有返回配置") }
@@ -311,7 +358,7 @@ struct ConfigShareView: View {
     if http.statusCode == 429 { throw ShareError("尝试次数太多，请等一分钟再试") }
     guard (200..<300).contains(http.statusCode) else { throw ShareError("对方拒绝连接（HTTP \(http.statusCode)）") }
     guard data.count <= 8 * 1024 * 1024 else { throw ShareError("共享配置太大") }
-    return try ShareProtocol.open(String(decoding: data, as: UTF8.self), password: receivePassword)
+    return try ShareProtocol.open(String(decoding: data, as: UTF8.self), password: password)
   }
 
   private func parseTarget(_ input: String, fallback: Int) -> (String, Int) {
@@ -350,6 +397,15 @@ struct ConfigShareView: View {
     }
     .buttonStyle(.plain)
   }
+}
+
+/// The QR code, one pixel per module: shown scaled up without smoothing.
+func qrImage(_ text: String) -> NSImage? {
+  let f = CIFilter.qrCodeGenerator()
+  f.message = Data(text.utf8)
+  f.correctionLevel = "M"
+  guard let out = f.outputImage, let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
+  return NSImage(cgImage: cg, size: NSSize(width: out.extent.width, height: out.extent.height))
 }
 
 private func randomPassword() -> String {

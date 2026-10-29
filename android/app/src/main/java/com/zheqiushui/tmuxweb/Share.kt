@@ -12,6 +12,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
 import java.net.URLDecoder
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -626,12 +627,27 @@ class ConfigShareServer(
 object ShareClient {
   private const val MAX_RESPONSE = 8 * 1024 * 1024
 
-  fun fetch(hostInput: String, port: Int, password: String): SharedPayload {
+  /** A scanned link: the sender's addresses in turn, the first one that answers. */
+  fun fetch(link: ShareLink): SharedPayload {
+    var last: ShareException? = null
+    for (h in link.hosts) {
+      try {
+        return fetch(h, link.port, link.password, if (link.hosts.size > 1) 3_000 else 8_000)
+      } catch (e: ShareException) {
+        // a wrong password or a refusal: the same from every address
+        if (e.cause == null) throw e
+        last = e
+      }
+    }
+    throw last ?: ShareException("二维码里没有地址")
+  }
+
+  fun fetch(hostInput: String, port: Int, password: String, connectTimeout: Int = 8_000): SharedPayload {
     ShareProtocol.checkPassword(password)
     val (host, actualPort) = parseHost(hostInput, port)
     val url = java.net.URL("http://$host:$actualPort/api/bundle")
     val c = url.openConnection() as java.net.HttpURLConnection
-    c.connectTimeout = 8_000
+    c.connectTimeout = connectTimeout
     c.readTimeout = 12_000
     c.instanceFollowRedirects = false
     c.setRequestProperty("X-Share-Password-B64", Base64.getEncoder().encodeToString(password.toByteArray(StandardCharsets.UTF_8)))
@@ -681,6 +697,32 @@ object ShareClient {
       }
       if (out.size() >= MAX_RESPONSE) throw ShareException("对方返回的内容太大")
       return out.toByteArray()
+    }
+  }
+}
+
+/**
+ * Everything a receiver needs in one line, for the QR code: scanning it is enough.
+ * tmuxweb://share?h=192.168.1.23,10.126.126.5&p=48620&k=<password>
+ */
+data class ShareLink(val hosts: List<String>, val port: Int, val password: String) {
+  override fun toString() = "$PREFIX?h=${hosts.joinToString(",")}&p=$port&k=${URLEncoder.encode(password, "UTF-8")}"
+
+  companion object {
+    const val PREFIX = "tmuxweb://share"
+
+    fun parse(text: String): ShareLink? {
+      val s = text.trim()
+      if (!s.startsWith("$PREFIX?")) return null
+      val q = s.substringAfter('?').split('&').mapNotNull { kv ->
+        val parts = kv.split('=', limit = 2)
+        if (parts.size != 2) null else parts[0] to (try { URLDecoder.decode(parts[1], "UTF-8") } catch (_: Exception) { return null })
+      }.toMap()
+      val hosts = q["h"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }
+      val port = q["p"]?.toIntOrNull() ?: return null
+      val password = q["k"].orEmpty()
+      if (hosts.isEmpty() || port !in 1024..65535 || password.length < ShareProtocol.MIN_PASSWORD) return null
+      return ShareLink(hosts, port, password)
     }
   }
 }

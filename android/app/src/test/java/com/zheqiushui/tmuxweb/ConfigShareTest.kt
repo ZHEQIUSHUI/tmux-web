@@ -2,6 +2,7 @@ package com.zheqiushui.tmuxweb
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.net.HttpURLConnection
 import java.net.ServerSocket
@@ -95,6 +96,45 @@ class ConfigShareTest {
     } finally {
       server.stop()
     }
+  }
+
+  @Test
+  fun shareLinkRoundTripsThroughAQRCode() {
+    val link = ShareLink(listOf("192.168.1.23", "10.126.126.5"), 48620, "a b&c=d+e%你好")
+    assertEquals(link, ShareLink.parse(link.toString()))
+    // what a scanner reads back from the code the sender draws
+    val m = com.google.zxing.qrcode.QRCodeWriter().encode(link.toString(), com.google.zxing.BarcodeFormat.QR_CODE, 0, 0, mapOf(com.google.zxing.EncodeHintType.MARGIN to 1, com.google.zxing.EncodeHintType.CHARACTER_SET to "UTF-8"))
+    val scale = 4
+    val w = m.width * scale
+    val pixels = IntArray(w * w) { i -> if (m[i % w / scale, i / w / scale]) 0xFF000000.toInt() else -1 }
+    val bitmap = com.google.zxing.BinaryBitmap(com.google.zxing.common.HybridBinarizer(com.google.zxing.RGBLuminanceSource(w, w, pixels)))
+    val read = com.google.zxing.qrcode.QRCodeReader().decode(bitmap, mapOf(com.google.zxing.DecodeHintType.CHARACTER_SET to "UTF-8")).text
+    assertEquals(link, ShareLink.parse(read))
+  }
+
+  @Test
+  fun scannedLinkTriesEachAddressButNotAnotherPassword() {
+    val port = ServerSocket(0).use { it.localPort }
+    val server = ConfigShareServer(port, ShareProtocol.seal(SharedPayload(emptyList(), emptyList()), "right-password"), 0)
+    server.start()
+    try {
+      // the first address is gone (another network): the next one answers
+      val got = ShareClient.fetch(ShareLink(listOf("no-such-host.invalid", "127.0.0.1"), port, "right-password"))
+      assertEquals(0, got.profiles.size)
+      val wrong = runCatching { ShareClient.fetch(ShareLink(listOf("127.0.0.1", "no-such-host.invalid"), port, "wrong-password")) }.exceptionOrNull()
+      assertEquals("密码不对", wrong?.message)
+    } finally {
+      server.stop()
+    }
+  }
+
+  @Test
+  fun shareLinkRejectsOtherText() {
+    assertNull(ShareLink.parse("https://example.com"))
+    assertNull(ShareLink.parse("tmuxweb://share?h=&p=48620&k=abcdefgh"))
+    assertNull(ShareLink.parse("tmuxweb://share?h=1.2.3.4&p=80&k=abcdefgh"))
+    assertNull(ShareLink.parse("tmuxweb://share?h=1.2.3.4&p=48620&k=abc"))
+    assertEquals(ShareLink(listOf("1.2.3.4"), 48620, "abcdefgh"), ShareLink.parse("  tmuxweb://share?h=1.2.3.4&p=48620&k=abcdefgh\n"))
   }
 
   private companion object {
