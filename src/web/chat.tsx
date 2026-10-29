@@ -1183,7 +1183,8 @@ export function Composer(props: {
   };
 
   // optimistic: clear the box and show the message at once, the request runs behind it
-  const send = async () => {
+  // now: Claude Code's "send now" (Ctrl+X Ctrl+S), into the conversation instead of queued
+  const send = async (now = false) => {
     const raw = text.trim() ? text : hint;
     // Codex and Claude switch to shell mode when a message starts with "!" (old image drafts)
     const msg = props.agent === 'bash' ? raw : withoutLeadingImageBang(raw);
@@ -1197,7 +1198,7 @@ export function Composer(props: {
     const isCommand = /^\s*(!|\/[\w:-]+(\s|$))/.test(msg);
     const done = isCommand ? () => {} : onPending(msg);
     try {
-      await api('POST', `/_tw/api/sessions/${sessionId}/input`, { text: msg });
+      await api('POST', `/_tw/api/sessions/${sessionId}/input`, now ? { text: msg, now } : { text: msg });
       done(true);
       // menus like /model or /usage are operated in the TUI itself
       if (props.slash && isInteractive(msg)) props.onInteractive?.();
@@ -1221,7 +1222,25 @@ export function Composer(props: {
   const running = status === 'busy';
   const stop = () => key(props.agent === 'bash' ? ['C-c'] : ['Escape']);
 
+  // when the first key of Ctrl+X Ctrl+S came; Ctrl+X with text selected is still cut
+  const chord = useRef(0);
   const onKeyDown = (e: KeyboardEvent) => {
+    if (props.agent === 'claude' && e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing) {
+      const k = e.key.toLowerCase();
+      const el = e.target as HTMLTextAreaElement;
+      if (k === 'x' && el.selectionStart === el.selectionEnd) {
+        e.preventDefault();
+        chord.current = Date.now();
+        return;
+      }
+      if ((k === 's' && Date.now() - chord.current < 2000) || e.key === 'Enter') {
+        e.preventDefault();
+        chord.current = 0;
+        send(true);
+        return;
+      }
+    }
+    chord.current = 0;
     if (e.key === 'Escape' && running && !e.isComposing) {
       e.preventDefault();
       stop();
@@ -1360,7 +1379,7 @@ export function Composer(props: {
           onPaste={onPaste}
           value={text}
           class={hint ? 'has-hint' : ''}
-          placeholder={hint ? (coarse ? hint : `${hint}　（Enter 发送这条建议，Tab 填入修改）`) : coarse ? '输入消息' : '输入消息，Enter 发送，Shift+Enter 换行'}
+          placeholder={hint ? (coarse ? hint : `${hint}　（Enter 发送这条建议，Tab 填入修改）`) : coarse ? '输入消息' : running && props.agent === 'claude' ? '输入消息，Enter 发送（排队），Ctrl+X Ctrl+S 立即插入对话' : '输入消息，Enter 发送，Shift+Enter 换行'}
           onInput={(e) => update((e.target as HTMLTextAreaElement).value)}
           onKeyDown={onKeyDown}
         />
@@ -1370,7 +1389,7 @@ export function Composer(props: {
             {!coarse && '停止'}
           </button>
         )}
-        <button class={`primary send ${coarse ? 'round' : ''}`} aria-label="发送" onMouseDown={(e) => e.preventDefault()} onClick={send} disabled={sending || uploading || (!text.trim() && !hint)}>
+        <button class={`primary send ${coarse ? 'round' : ''}`} aria-label="发送" onMouseDown={(e) => e.preventDefault()} onClick={() => send()} disabled={sending || uploading || (!text.trim() && !hint)}>
           {sending ? '…' : coarse ? <Icon.send /> : '发送'}
         </button>
       </div>

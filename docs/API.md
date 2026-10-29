@@ -38,7 +38,7 @@
 | GET | `sessions/:id/claude-state` | 模型、上下文用量、权限模式 |
 | GET | `sessions/:id/image?off=<偏移>&n=<序号>&w=<宽度>` | 对话里嵌入的图片。消息里嵌入的 base64 图片会被替换成 `tw-img:<序号>`，`off` 是条目 `id` 的前半部分。带 `w` 时大图会压缩成适合这个宽度的 WebP |
 | GET | `sessions/:id/file-image?path=<路径>&w=<宽度>` | 主机上的图片文件（相对路径从会话的工作目录算起；工作目录以外的路径需要操作权限；最大 20MB）。`w` 同上 |
-| POST | `sessions/:id/input` | 发送文字并回车：`{text, submit?: true}` |
+| POST | `sessions/:id/input` | 发送文字并回车：`{text, submit?: true, now?: false}`；`now` 只对 Claude 会话有效，用 Ctrl+X Ctrl+S 立即插入对话而不是排队 |
 | POST | `sessions/:id/keys` | 发送按键：`{keys: ["Escape"]}`。允许的键：Enter Escape Tab BTab Up Down Left Right Space BSpace C-c C-d C-l y n 1–9 |
 | POST | `sessions/:id/upload` | 上传文件（请求体是文件内容，文件名放在 `X-File-Name` 头里，需 URL 编码）。返回 `{path, rel, name, size}`，`rel` 是相对工作目录的路径 |
 | WS | `sessions/:id/term` | 终端：服务端发来的二进制帧是终端原始输出（第一帧是屏幕快照），文本帧是 JSON（`hello`/`size`/`pong`）。客户端发二进制帧是按键，文本帧是 `{type:"resize",cols,rows}` / `{type:"ping"}` |

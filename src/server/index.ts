@@ -580,13 +580,15 @@ route('GET', '/_tw/api/streams', (req, res, _p, url) => {
 
 route('POST', '/_tw/api/sessions/:id/input', async (req, res, [id]) => {
   const { live } = sessionFor(requireUser(req), id, 'control');
-  const { text, submit = true } = await readJson(req);
+  const { text, submit = true, now = false } = await readJson(req);
   if (typeof text !== 'string') throw new HttpError(400, 'text required');
   if (!live.alive) throw new HttpError(409, 'session 已停止');
   if (text) await live.clearPromptInput();
   if (text && submit) {
-    await backend.submit(live.target, text);
-    await live.confirmSubmitted();
+    // Claude Code's Ctrl+X Ctrl+S: into the conversation right away, not queued behind the current turn
+    const keys = now && live.row.agent === 'claude' ? ['C-x', 'C-s'] : ['Enter'];
+    await backend.submit(live.target, text, keys);
+    await live.confirmSubmitted(keys);
   } else if (text) await backend.paste(live.target, text);
   else if (submit) await backend.keys(live.target, ['Enter']);
   sendJson(req, res, 200, { ok: true });

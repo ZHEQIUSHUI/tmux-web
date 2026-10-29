@@ -390,14 +390,14 @@ export class LiveSession extends EventEmitter {
    * Enter came before the TUI had taken the paste in, and became a new line), press Enter again,
    * so it isn't left there unsent (and cleared by the next message). Not over a menu.
    */
-  async confirmSubmitted(): Promise<void> {
+  async confirmSubmitted(keys = ['Enter']): Promise<void> {
     if (this.row.agent !== 'claude' || !this.screen) return;
     for (const wait of [400, 700, 1200]) {
       await new Promise((r) => setTimeout(r, wait));
       await this.screen?.flush();
       if (!this.screen || this.status === 'waiting' || !this.screen.hasPromptInput()) return;
-      console.warn(`session ${this.row.id}: message still in Claude's input box, pressing Enter again`);
-      await backend.keys(this.target, ['Enter']);
+      console.warn(`session ${this.row.id}: message still in Claude's input box, pressing ${keys.join(' ')} again`);
+      await backend.keys(this.target, keys);
     }
   }
 

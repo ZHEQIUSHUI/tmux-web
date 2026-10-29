@@ -156,16 +156,16 @@ export class TmuxBackend implements SessionBackend {
     await run(t, ['load-buffer', '-b', buf, '-', ';', 'paste-buffer', '-p', '-d', '-b', buf, '-t', target(t)], text);
   }
 
-  async submit(t: PaneTarget, text: string) {
+  async submit(t: PaneTarget, text: string, keys = ['Enter']) {
     const buf = `tw-in-${process.pid}-${Date.now()}`;
     // one tmux invocation: paste, give the TUI a moment to take the paste in (run-shell blocks
-    // tmux's command queue, so the pause happens inside tmux), then Enter
+    // tmux's command queue, so the pause happens inside tmux), then Enter (or the given keys)
     // prettier-ignore
     await run(t, [
       'load-buffer', '-b', buf, '-', ';',
       'paste-buffer', '-p', '-d', '-b', buf, '-t', target(t), ';',
       'run-shell', 'sleep 0.1', ';',
-      'send-keys', '-t', target(t), 'Enter',
+      'send-keys', '-t', target(t), ...keys,
     ], text);
   }
 
