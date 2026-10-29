@@ -37,6 +37,18 @@ grep -q 'with_max_level(log::LevelFilter::Warn)' "$JNI_SOURCE" || {
   exit 1
 }
 
+# The port forward listens on 127.0.0.1, and EasyTier then binds the socket to "lo" with
+# SO_BINDTODEVICE. Kernels before 5.7 require CAP_NET_RAW for that, so on older phones
+# (Android 9-11 era, kernel 4.x/5.4) the listener never comes up. Loopback needs no device.
+SOCKET_SOURCE="$SRC/easytier/src/tunnel/common.rs"
+sed 's/    if bind_addr.ip().is_unspecified() {$/    if bind_addr.ip().is_unspecified() || bind_addr.ip().is_loopback() {/' \
+  "$SOCKET_SOURCE" > "$SOCKET_SOURCE.tmp"
+mv "$SOCKET_SOURCE.tmp" "$SOCKET_SOURCE"
+grep -q 'if bind_addr.ip().is_unspecified() || bind_addr.ip().is_loopback() {' "$SOCKET_SOURCE" || {
+  echo "could not skip device binding for loopback sockets" >&2
+  exit 1
+}
+
 if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -z "${ANDROID_NDK_ROOT:-}" ]; then
   ANDROID_NDK_HOME="$(ls -d "${ANDROID_HOME:?ANDROID_HOME is not set}"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
   export ANDROID_NDK_HOME
@@ -118,6 +130,9 @@ for abi in $ABIS; do
     echo "could not link $abi JNI library to libeasytier_ffi.so" >&2
     exit 1
   }
+  # cargo-ndk also copies dylib dependencies (boringtun, tun, rustls_platform_verifier) that are
+  # statically linked into the two libraries above; nothing loads them.
+  find "$OUT/$abi" -maxdepth 1 -name '*.so' ! -name libeasytier_ffi.so ! -name libeasytier_android_jni.so -delete
 done
 
 echo "EasyTier JNI built in $OUT"
