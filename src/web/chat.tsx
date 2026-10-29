@@ -1389,6 +1389,18 @@ export function Composer(props: {
             {!coarse && '停止'}
           </button>
         )}
+        {running && props.agent === 'claude' && text.trim() && (
+          <button
+            class={`now ${coarse ? 'round' : ''}`}
+            aria-label="立即插入"
+            title="立即插入对话，不等这一轮做完（Ctrl+X Ctrl+S）"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => send(true)}
+            disabled={sending || uploading}
+          >
+            {coarse ? <Icon.zap /> : '立即插入'}
+          </button>
+        )}
         <button class={`primary send ${coarse ? 'round' : ''}`} aria-label="发送" onMouseDown={(e) => e.preventDefault()} onClick={() => send()} disabled={sending || uploading || (!text.trim() && !hint)}>
           {sending ? '…' : coarse ? <Icon.send /> : '发送'}
         </button>

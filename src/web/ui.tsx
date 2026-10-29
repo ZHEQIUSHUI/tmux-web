@@ -66,6 +66,11 @@ export const Icon = {
       <path d="M12 19V5M6 11l6-6 6 6" />
     </svg>
   ),
+  zap: () => (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13 3L5 14h6l-1 7 8-11h-6z" />
+    </svg>
+  ),
   keys: () => (
     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
       <rect x="2" y="6" width="20" height="12" rx="2" />

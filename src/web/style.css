@@ -805,6 +805,20 @@ label select {
   border-color: color-mix(in srgb, var(--danger) 45%, transparent);
   color: var(--danger);
 }
+.now {
+  height: 36px;
+  flex: none;
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+.now.round {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
 .stop.round {
   width: 40px;
   height: 40px;
