@@ -30,6 +30,56 @@ struct BannerView: View {
   }
 }
 
+/// The servers in use, a tab each in the toolbar (no menu to open): a click brings one to the
+/// front, a right click edits or disconnects it.
+struct ServerTabs: View {
+  @ObservedObject var model: AppModel
+  @ObservedObject var store = ProfileStore.shared
+
+  var body: some View {
+    HStack(spacing: 4) {
+      ForEach(model.order.compactMap { id in store.profiles.first { $0.id == id } }) { p in
+        ServerTab(title: p.title, info: model.conns[p.id], selected: !model.showHome && model.activeID == p.id) {
+          model.actions.connect(p)
+        }
+        .contextMenu {
+          Button("编辑此服务器…") { model.actions.edit(p, nil) }
+          Button("断开") { model.actions.disconnect(p.id) }
+        }
+      }
+    }
+    .fixedSize()
+  }
+}
+
+private struct ServerTab: View {
+  let title: String
+  let info: ConnInfo?
+  let selected: Bool
+  let action: () -> Void
+  @State private var hover = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 6) {
+        Circle().fill(Color(nsColor: WebWindow.color(info))).frame(width: 7, height: 7)
+        Text(title).lineLimit(1).truncationMode(.middle).frame(maxWidth: 160)
+      }
+      .font(.system(size: 12, weight: selected ? .semibold : .regular))
+      .foregroundStyle(selected ? Color.primary : Color.secondary)
+      .padding(.horizontal, 10).frame(height: 24)
+      .background(
+        RoundedRectangle(cornerRadius: 6)
+          .fill(selected ? Color.primary.opacity(0.1) : hover ? Color.primary.opacity(0.05) : .clear)
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { hover = $0 }
+    .help(title)
+  }
+}
+
 /// What happened to a page.
 enum PageEvent {
   case loaded
@@ -49,7 +99,6 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
   // the app's side of things
   var connection: (WKWebView) -> Connection? = { _ in nil }
   var pageEvent: (Connection, PageEvent) -> Void = { _, _ in }
-  var switcherMenu: () -> NSMenu = { NSMenu() }
   var moreMenu: () -> NSMenu = { NSMenu() }
 
   init(model: AppModel) {
@@ -142,20 +191,18 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     if model.showHome { for v in pages.subviews { v.isHidden = true } }
     let p = model.activeID.flatMap { id in ProfileStore.shared.profiles.first { $0.id == id } }
     window.title = model.showHome || p == nil ? "tmux-web" : "tmux-web · \(p!.title)"
-    updateSwitcher(p)
     reloadItem?.isEnabled = live
   }
 
-  // MARK: toolbar: 首页, the server switcher … ⟳ ⋯
+  // MARK: toolbar: 首页, the tabs of the servers in use … ⟳ ⋯
 
   private static let homeID = NSToolbarItem.Identifier("home")
-  private static let switcherID = NSToolbarItem.Identifier("switcher")
+  private static let tabsID = NSToolbarItem.Identifier("tabs")
   private static let reloadID = NSToolbarItem.Identifier("reload")
   private static let moreID = NSToolbarItem.Identifier("more")
   private weak var reloadItem: NSToolbarItem?
-  private let switcher = NSButton(title: "", target: nil, action: nil)
 
-  func toolbarDefaultItemIdentifiers(_ t: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.homeID, Self.switcherID, .flexibleSpace, Self.reloadID, Self.moreID] }
+  func toolbarDefaultItemIdentifiers(_ t: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.homeID, Self.tabsID, .flexibleSpace, Self.reloadID, Self.moreID] }
   func toolbarAllowedItemIdentifiers(_ t: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(t) }
 
   func toolbar(_ t: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar: Bool) -> NSToolbarItem? {
@@ -169,15 +216,10 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
       item.action = #selector(homeAction)
       item.isBordered = true
       return item
-    case Self.switcherID:
+    case Self.tabsID:
       let item = NSToolbarItem(itemIdentifier: id)
       item.label = "服务器"
-      switcher.bezelStyle = .texturedRounded
-      switcher.imagePosition = .imageLeading
-      switcher.target = self
-      switcher.action = #selector(switcherAction)
-      switcher.toolTip = "切换服务器"
-      item.view = switcher
+      item.view = NSHostingView(rootView: ServerTabs(model: model))
       return item
     case Self.reloadID:
       let item = NSToolbarItem(itemIdentifier: id)
@@ -207,10 +249,6 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
   var homeTapped: () -> Void = {}
   @objc private func homeAction() { homeTapped() }
   @objc private func reloadAction() { reload() }
-  @objc private func switcherAction() {
-    let menu = switcherMenu()
-    menu.popUp(positioning: nil, at: NSPoint(x: 0, y: switcher.bounds.height + 4), in: switcher)
-  }
 
   /// the ⋯ menu, made fresh as it opens
   func menuNeedsUpdate(_ menu: NSMenu) {
@@ -219,16 +257,6 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     let items = fresh.items
     fresh.removeAllItems()
     items.forEach(menu.addItem)
-  }
-
-  private func updateSwitcher(_ p: Profile?) {
-    let title = model.showHome || p == nil ? "选择服务器" : p!.title
-    // the state's dot as colored text: a toolbar button grays its image out
-    let t = NSMutableAttributedString(string: "● ", attributes: [.foregroundColor: Self.color(model.showHome ? nil : model.active), .font: NSFont.systemFont(ofSize: 10)])
-    t.append(NSAttributedString(string: title + "  ▾", attributes: [.foregroundColor: NSColor.labelColor, .font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .medium)]))
-    switcher.attributedTitle = t
-    switcher.image = nil
-    switcher.sizeToFit()
   }
 
   /// the colored dot of a connection's state (gray: none)

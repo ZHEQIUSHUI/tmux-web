@@ -52,6 +52,18 @@ final class EasyTierTests: XCTestCase {
       return p
     }())) ?? ""
     XCTAssertEqual(text.components(separatedBy: "[[peer]]").count - 1, 2)
+    XCTAssertEqual(EasyTierConfig.peers(from: "tcp://one:11010，tcp://two:11010；tcp://three:11010"), ["tcp://one:11010", "tcp://two:11010", "tcp://three:11010"])
+  }
+
+  func testEditorRowsSplitAPastedList() {
+    XCTAssertEqual(EasyTierConfig.peerRows(""), [""])
+    XCTAssertEqual(EasyTierConfig.peerRows("tcp://a:1\n"), ["tcp://a:1", ""])
+    // typing in a row
+    XCTAssertEqual(EasyTierConfig.peerText("tcp://a:1\n", row: 1, value: "tcp://b"), "tcp://a:1\ntcp://b")
+    // a pasted list: a row per node, the rows after it kept
+    XCTAssertEqual(EasyTierConfig.peerText("x\ny", row: 0, value: "tcp://a:1, tcp://b:2"), "tcp://a:1\ntcp://b:2\ny")
+    // a comma typed at the end: the next row, empty
+    XCTAssertEqual(EasyTierConfig.peerText("", row: 0, value: "tcp://a:1，"), "tcp://a:1\n")
   }
 
   func testValidationWantsALiteralIPv4AndARealPeer() {

@@ -24,9 +24,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -64,6 +66,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -93,7 +96,8 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
   var url by remember(e) { mutableStateOf(start.directUrl) }
   var easyNetwork by remember(e) { mutableStateOf(start.easyTierNetwork) }
   var easySecret by remember(e) { mutableStateOf(start.easyTierSecret) }
-  var easyPeers by remember(e) { mutableStateOf(start.easyTierPeers) }
+  // a row per node (a list saved with commas too)
+  var easyPeers by remember(e) { mutableStateOf(EasyTierConfig.peers(start.easyTierPeers).joinToString("\n")) }
   var easyServerIP by remember(e) { mutableStateOf(start.easyTierServerIP) }
   var target by remember(e) { mutableStateOf(start.target) }
   var sshPort by remember(e) { mutableStateOf(start.sshPort.toString()) }
@@ -196,13 +200,7 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
             supportingText = { Text(easyNetworkError ?: "和 EasyTier 客户端里的 Network Name 一致") },
           )
           SecretField(easySecret, { easySecret = it }, "网络密钥", supporting = "可留空；加密保存在手机里，不写入日志")
-          OutlinedTextField(
-            easyPeers, { easyPeers = it }, Modifier.fillMaxWidth(), label = { Text("公共节点") },
-            placeholder = { Text("tcp://public.example.com:11010") }, isError = easyPeerError != null,
-            minLines = 2, singleLine = false,
-            supportingText = { Text(easyPeerError ?: "一个或多个，用逗号或换行分隔") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-          )
+          PeerRows(easyPeers, { easyPeers = it }, easyPeerError)
         } else {
           OutlinedTextField(
             target, { target = it }, Modifier.fillMaxWidth(), label = { Text("SSH 目标") }, placeholder = { Text("user@host") },
@@ -308,6 +306,61 @@ fun EditorScreen(m: AppModel, a: Actions, e: Screen.Editor) {
   // a new key on the spot: saved to the key list at once, and this server's from then on
   if (addingKey) KeyEditor(null, m.keys, onDismiss = { addingKey = false }) { k -> a.saveKey(k); keyId = k.id; addingKey = false }
   if (deleting && original != null) ConfirmDelete(original, { deleting = false }) { deleting = false; a.remove(original) }
+}
+
+/**
+ * The EasyTier nodes, a field each: 添加节点 adds one, × takes one away. A list pasted or typed
+ * into a field ("a, b") becomes a row per node.
+ */
+@Composable
+private fun PeerRows(text: String, onChange: (String) -> Unit, error: String?) {
+  val rows = EasyTierConfig.peerRows(text)
+  // one per row, kept across changes so the field being typed in keeps its focus
+  val focus = remember { mutableListOf<FocusRequester>() }
+  while (focus.size < rows.size) focus.add(FocusRequester())
+  // the row to type in next: a new one, or the one after a separator just typed
+  var focusRow by remember { mutableStateOf(-1) }
+  LaunchedEffect(focusRow, rows.size) {
+    if (focusRow in rows.indices) { focus[focusRow].requestFocus(); focusRow = -1 }
+  }
+  fun add() {
+    if (rows.last().isNotBlank()) onChange(text + "\n")
+    focusRow = if (rows.last().isNotBlank()) rows.size else rows.size - 1
+  }
+  fun edit(i: Int, value: String) {
+    val next = EasyTierConfig.peerText(text, i, value)
+    val grown = EasyTierConfig.peerRows(next).size - rows.size
+    onChange(next)
+    if (grown > 0) focusRow = i + grown
+  }
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    rows.forEachIndexed { i, row ->
+      val bad = row.isNotBlank() && !EasyTierConfig.validPeer(row.trim())
+      OutlinedTextField(
+        row, { edit(i, it) }, Modifier.fillMaxWidth().focusRequester(focus[i]),
+        label = { Text(if (rows.size == 1) "公共节点" else "公共节点 ${i + 1}") },
+        placeholder = { Text("tcp://public.example.com:11010") }, singleLine = true,
+        isError = bad || (i == 0 && error != null && EasyTierConfig.peers(text).isEmpty()),
+        supportingText = if (bad) ({ Text("格式不对，比如 tcp://public.example.com:11010") }) else null,
+        trailingIcon = if (rows.size > 1) ({
+          IconButton({ onChange(rows.filterIndexed { j, _ -> j != i }.joinToString("\n")) }) { Icon(Icons.Filled.Close, "去掉这个节点") }
+        }) else null,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+        keyboardActions = KeyboardActions(onNext = { add() }),
+      )
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      TextButton({ add() }) {
+        Icon(Icons.Filled.Add, null, Modifier.size(18.dp)); Spacer(Modifier.size(6.dp)); Text("添加节点")
+      }
+      Spacer(Modifier.size(4.dp))
+      Text(
+        if (EasyTierConfig.peers(text).isEmpty()) "至少填一个公共节点" else "多填几个，一个不通时还能用别的",
+        style = MaterialTheme.typography.bodySmall,
+        color = if (EasyTierConfig.peers(text).isEmpty() && error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+  }
 }
 
 @Composable

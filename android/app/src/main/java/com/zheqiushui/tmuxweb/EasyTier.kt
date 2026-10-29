@@ -21,9 +21,30 @@ object EasyTierConfig {
     return null
   }
 
-  fun peers(from: String): List<String> = from.split(',', '\n', '\r')
-    .map { it.trim() }
-    .filter { it.isNotEmpty() }
+  /** What may separate nodes: commas and semicolons (also full-width ones), spaces, line breaks. */
+  private val separators = Regex("[,，;；\\s]")
+
+  fun peers(from: String): List<String> = from.split(separators).filter { it.isNotEmpty() }
+
+  /** The node list as the editor's rows, one node a line (empty lines are rows being typed). */
+  fun peerRows(text: String): List<String> = text.split('\n')
+
+  /** Row [i] set to [value]. A pasted or typed list ("a, b") becomes a row per node there. */
+  fun peerText(text: String, i: Int, value: String): String {
+    val rows = peerRows(text).toMutableList()
+    if (i !in rows.indices) return text
+    val parts = value.split(separators)
+    if (parts.size > 1) {
+      // the nodes, and an empty row after a trailing separator for the next one
+      val nodes = parts.filter { it.isNotEmpty() }.toMutableList()
+      if (parts.last().isEmpty() || nodes.isEmpty()) nodes.add("")
+      rows.removeAt(i)
+      rows.addAll(i, nodes)
+    } else {
+      rows[i] = value
+    }
+    return rows.joinToString("\n")
+  }
 
   fun validIPv4(text: String): Boolean {
     val parts = text.trim().split('.')

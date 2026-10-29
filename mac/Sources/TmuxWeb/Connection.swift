@@ -79,6 +79,8 @@ final class AppModel: ObservableObject {
   /// the server whose page (or connecting screen) is in front
   @Published var activeID: UUID?
   @Published var conns: [UUID: ConnInfo] = [:]
+  /// the servers in use, in the order they were connected (the toolbar's tabs)
+  @Published var order: [UUID] = []
   @Published var probes: [UUID: Probe] = [:]
   var actions = ServerActions()
 

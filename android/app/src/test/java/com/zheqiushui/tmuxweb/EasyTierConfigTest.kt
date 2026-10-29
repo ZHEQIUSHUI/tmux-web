@@ -55,6 +55,22 @@ class EasyTierConfigTest {
     )
     val text = EasyTierConfig.make(profile().copy(easyTierPeers = "tcp://one:11010,tcp://two:11010"))
     assertEquals(2, text.split("[[peer]]").size - 1)
+    assertEquals(
+      listOf("tcp://one:11010", "tcp://two:11010", "tcp://three:11010"),
+      EasyTierConfig.peers("tcp://one:11010，tcp://two:11010；tcp://three:11010"),
+    )
+  }
+
+  @Test
+  fun editorRowsSplitAPastedList() {
+    assertEquals(listOf(""), EasyTierConfig.peerRows(""))
+    assertEquals(listOf("tcp://a:1", ""), EasyTierConfig.peerRows("tcp://a:1\n"))
+    // typing in a row
+    assertEquals("tcp://a:1\ntcp://b", EasyTierConfig.peerText("tcp://a:1\n", 1, "tcp://b"))
+    // a pasted list: a row per node, the rows after it kept
+    assertEquals("tcp://a:1\ntcp://b:2\ny", EasyTierConfig.peerText("x\ny", 0, "tcp://a:1, tcp://b:2"))
+    // a comma typed at the end: the next row, empty
+    assertEquals("tcp://a:1\n", EasyTierConfig.peerText("", 0, "tcp://a:1，"))
   }
 
   @Test

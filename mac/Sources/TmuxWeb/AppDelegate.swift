@@ -19,7 +19,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     main = WebWindow(model: model)
     main.connection = { [weak self] w in self?.conns.values.first { $0.web === w } }
     main.pageEvent = { [weak self] c, e in self?.page(c, e) }
-    main.switcherMenu = { [weak self] in self?.switcherMenu() ?? NSMenu() }
     main.moreMenu = { [weak self] in self?.moreMenu() ?? NSMenu() }
     main.homeTapped = { [weak self] in self?.goHome() }
     model.actions = ServerActions(
@@ -80,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         self.tunnelChanged(c, s)
       }
       conns[p.id] = c
+      model.order.append(p.id)
       c.start(p)
     }
     model.activeID = p.id
@@ -148,6 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     c.stop()
     main.dropWebView(c.web)
     model.conns[id] = nil
+    model.order.removeAll { $0 == id }
     if model.activeID == id {
       model.activeID = nil
       goHome()
@@ -353,27 +354,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     item.image = WebWindow.dot(conns[p.id]?.info)
     item.state = p.id == model.activeID && !model.showHome ? .on : .off
     return item
-  }
-
-  /// the title bar's server switcher
-  private func switcherMenu() -> NSMenu {
-    let m = NSMenu()
-    m.autoenablesItems = false
-    let used = store.sorted.filter { conns[$0.id] != nil }
-    let rest = store.sorted.filter { conns[$0.id] == nil }
-    if !used.isEmpty {
-      m.addItem(header("已连接"))
-      used.forEach { m.addItem(serverItem($0)) }
-    }
-    if !rest.isEmpty {
-      if !used.isEmpty { m.addItem(.separator()) }
-      m.addItem(header(used.isEmpty ? "服务器" : "其他服务器"))
-      rest.forEach { m.addItem(serverItem($0)) }
-    }
-    m.addItem(.separator())
-    m.addItem(item("全部服务器", #selector(homeAction), "l"))
-    m.addItem(item("新建服务器…", #selector(newServer), "n"))
-    return m
   }
 
   /// the title bar's ⋯

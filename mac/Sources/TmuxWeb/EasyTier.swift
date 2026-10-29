@@ -22,10 +22,34 @@ enum EasyTierConfig {
     return nil
   }
 
+  /// what may separate nodes: commas and semicolons (also full-width ones), spaces, line breaks
+  static let peerSeparators = CharacterSet(charactersIn: ",，;；").union(.whitespacesAndNewlines)
+
   static func peers(from text: String) -> [String] {
-    text.components(separatedBy: CharacterSet(charactersIn: ",\n"))
-      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-      .filter { !$0.isEmpty }
+    text.components(separatedBy: peerSeparators).filter { !$0.isEmpty }
+  }
+
+  /// The node list as the editor's rows, one node a line (empty lines are rows being typed);
+  /// always at least one row.
+  static func peerRows(_ text: String) -> [String] {
+    let rows = text.components(separatedBy: "\n")
+    return rows.isEmpty ? [""] : rows
+  }
+
+  /// Row `i` set to `value`. A pasted or typed list ("a, b") becomes a row per node there.
+  static func peerText(_ text: String, row i: Int, value: String) -> String {
+    var rows = peerRows(text)
+    guard rows.indices.contains(i) else { return text }
+    let parts = value.components(separatedBy: peerSeparators)
+    if parts.count > 1 {
+      // the nodes, and an empty row after a trailing separator for the next one
+      var nodes = parts.filter { !$0.isEmpty }
+      if parts.last == "" || nodes.isEmpty { nodes.append("") }
+      rows.replaceSubrange(i...i, with: nodes)
+    } else {
+      rows[i] = value
+    }
+    return rows.joined(separator: "\n")
   }
 
   static func validIPv4(_ text: String) -> Bool {

@@ -87,8 +87,8 @@ struct SettingsView: View {
                 }
               }
               Divider()
-              Row("公共节点", note: "一个或多个，用逗号或换行分隔", error: peerError) {
-                TextField("", text: $draft.easyTierPeers, prompt: Text("tcp://public.example.com:11010"))
+              Row("公共节点", note: "一行一个；多填几个，一个不通时还能用别的", error: peerError) {
+                PeerRows(text: $draft.easyTierPeers)
               }
             }
             VStack(alignment: .leading, spacing: 10) {
@@ -188,6 +188,8 @@ struct SettingsView: View {
     // direct needs much less room than a forwarded connection
     .frame(width: 700, height: draft.isDirect ? 560 : 760)
     .onChange(of: draft.mode) { _ in test = nil }
+    // a list saved with commas: a row per node
+    .onAppear { draft.easyTierPeers = EasyTierConfig.peers(from: draft.easyTierPeers).joined(separator: "\n") }
   }
 
   private func setMode(_ m: String) {
@@ -268,6 +270,47 @@ struct SettingsView: View {
     let k = store.addKey(path)
     draft.keyID = k.id
     keyMessage = (k.id, store.keys.count == known ? "这个文件已经登记过，选的是「\(k.name)」" : "已登记为「\(k.name)」，别的服务器也可以选它")
+  }
+}
+
+/// The EasyTier nodes, a field each: + adds one, − takes one away. A list pasted into a field
+/// ("a, b") becomes a row per node.
+private struct PeerRows: View {
+  @Binding var text: String
+  @FocusState private var focused: Int?
+
+  var body: some View {
+    let rows = EasyTierConfig.peerRows(text)
+    VStack(alignment: .leading, spacing: 6) {
+      ForEach(rows.indices, id: \.self) { i in
+        HStack(spacing: 6) {
+          TextField("", text: Binding(get: { rows[i] }, set: { text = EasyTierConfig.peerText(text, row: i, value: $0) }), prompt: Text("tcp://public.example.com:11010"))
+            .focused($focused, equals: i)
+            .onSubmit { add() }
+          Button { remove(i) } label: { Image(systemName: "minus.circle").frame(width: 18) }
+            .buttonStyle(.plain).foregroundStyle(.secondary)
+            .help("去掉这个节点")
+            .opacity(rows.count > 1 ? 1 : 0).disabled(rows.count <= 1)
+        }
+      }
+      Button { add() } label: { Label("添加节点", systemImage: "plus.circle") }
+        .buttonStyle(.borderless).controlSize(.small)
+    }
+  }
+
+  /// a new empty row at the end (or the empty one there), ready to type in
+  private func add() {
+    var rows = EasyTierConfig.peerRows(text)
+    if rows.last?.trimmingCharacters(in: .whitespaces).isEmpty != true { rows.append("") }
+    text = rows.joined(separator: "\n")
+    focused = rows.count - 1
+  }
+
+  private func remove(_ i: Int) {
+    var rows = EasyTierConfig.peerRows(text)
+    guard rows.count > 1, rows.indices.contains(i) else { return }
+    rows.remove(at: i)
+    text = rows.joined(separator: "\n")
   }
 }
 
