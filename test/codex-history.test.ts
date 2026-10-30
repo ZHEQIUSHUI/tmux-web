@@ -43,14 +43,17 @@ test('codex: injected context is not shown as the latest user prompt', () => {
 test('codex: default launch args are used, Claude is unchanged', () => {
   const base = { id: 1, name: 'x', owner_id: 1, group_id: null, share: 'none', cwd: '/x', transcript_path: null, host_id: 1, tmux_socket: null, tmux_name: null, adopted: 0, note: '', created_at: 0 } as const;
   const codex = agentCommand({ ...base, agent: 'codex', agent_session_id: null, args: '' } as any, false);
-  assert.match(codex, /codex --yolo/);
+  assert.match(codex, /codex --no-alt-screen --yolo/);
   assert.doesNotMatch(codex, /--profile/);
   const resumed = agentCommand({ ...base, agent: 'codex', agent_session_id: id, args: '' } as any, true);
-  assert.match(resumed, new RegExp(`codex resume ${id} --yolo`));
+  assert.match(resumed, new RegExp(`codex resume ${id} --no-alt-screen --yolo`));
   assert.doesNotMatch(resumed, /--profile/);
   const custom = agentCommand({ ...base, agent: 'codex', agent_session_id: id, args: '--search' } as any, true);
-  assert.match(custom, new RegExp(`codex resume ${id} --search`));
+  assert.match(custom, new RegExp(`codex resume ${id} --no-alt-screen --search`));
   assert.doesNotMatch(custom, /--profile/);
+  // asked for already: not twice
+  const inline = agentCommand({ ...base, agent: 'codex', agent_session_id: null, args: '--no-alt-screen' } as any, false);
+  assert.equal(inline.match(/--no-alt-screen/g)?.length, 1);
   const claude = agentCommand({ ...base, agent: 'claude', agent_session_id: id, args: '' } as any, false);
   assert.match(claude, new RegExp(`claude --session-id ${id}`));
   assert.doesNotMatch(claude, /--yolo|--profile xx/);

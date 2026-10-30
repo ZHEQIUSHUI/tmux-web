@@ -76,12 +76,15 @@ const NOISE = [/tmux detected · scroll with/];
  * Server-side terminal emulator mirroring a pane. Gives us the exact current screen without
  * asking tmux, which feeds both the live preview of the chat view and the web terminal snapshot.
  */
+/** Lines above the screen kept for the web terminal to scroll back to. */
+export const SCROLLBACK = 1000;
+
 export class Screen {
   private term;
   private serializer;
 
   constructor(cols: number, rows: number) {
-    this.term = new Terminal({ cols, rows, scrollback: 500, allowProposedApi: true });
+    this.term = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true });
     this.serializer = new SerializeAddon();
     this.term.loadAddon(this.serializer);
   }
@@ -93,7 +96,10 @@ export class Screen {
     return this.term.rows;
   }
 
-  /** Start from what tmux currently shows; control mode only reports output from now on. */
+  /**
+   * Start from what tmux currently shows (with the lines above it, written first so they scroll
+   * into the scrollback); control mode only reports output from now on.
+   */
   seed(cap: PaneCapture) {
     if (cap.cols !== this.cols || cap.rows !== this.rows) this.term.resize(cap.cols, cap.rows);
     const body = cap.text.replace(/\n$/, '').split('\n').join('\r\n');
@@ -108,9 +114,9 @@ export class Screen {
     if (cols !== this.cols || rows !== this.rows) this.term.resize(cols, rows);
   }
 
-  /** ANSI snapshot of the visible screen that a fresh xterm.js can render as-is. */
+  /** ANSI snapshot that a fresh xterm.js can render as-is: the screen and the lines above it. */
   snapshot(): string {
-    return this.serializer.serialize({ scrollback: 0 });
+    return this.serializer.serialize({ scrollback: SCROLLBACK });
   }
 
   /** Writes are async in xterm; resolve once everything written so far is parsed. */

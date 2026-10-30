@@ -173,9 +173,10 @@ export class TmuxBackend implements SessionBackend {
     await run(t, ['send-keys', '-t', target(t), ...keys]);
   }
 
-  async capture(t: PaneTarget): Promise<PaneCapture> {
+  async capture(t: PaneTarget, history = 0): Promise<PaneCapture> {
     const SEP = '\u001fTW\u001f';
-    const out = await run(t, ['display-message', '-p', '-t', target(t), `#{pane_width} #{pane_height} #{cursor_x} #{cursor_y}${SEP}`, ';', 'capture-pane', '-p', '-e', '-t', target(t)]);
+    const from = history ? ['-S', String(-history)] : [];
+    const out = await run(t, ['display-message', '-p', '-t', target(t), `#{pane_width} #{pane_height} #{cursor_x} #{cursor_y}${SEP}`, ';', 'capture-pane', '-p', '-e', ...from, '-t', target(t)]);
     const i = out.indexOf(SEP);
     const [cols, rows, cursorX, cursorY] = out.slice(0, i).trim().split(' ').map(Number);
     return { text: out.slice(i + SEP.length + 1), cols, rows, cursorX, cursorY };

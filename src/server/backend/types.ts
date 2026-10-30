@@ -10,7 +10,7 @@ export interface PaneTarget {
 }
 
 export interface PaneCapture {
-  /** visible screen with SGR escapes, lines separated by \n */
+  /** visible screen with SGR escapes, lines separated by \n (after the history lines asked for) */
   text: string;
   cols: number;
   rows: number;
@@ -43,7 +43,7 @@ export interface SessionBackend {
   submit(t: PaneTarget, text: string, keys?: string[]): Promise<void>;
   /** named keys, e.g. Enter, Escape, C-c, Up */
   keys(t: PaneTarget, keys: string[]): Promise<void>;
-  capture(t: PaneTarget): Promise<PaneCapture>;
+  capture(t: PaneTarget, history?: number): Promise<PaneCapture>;
   /** live output + input channel; 'exit' also fires when the connection to the host drops */
   stream(t: PaneTarget): PaneStream;
 }

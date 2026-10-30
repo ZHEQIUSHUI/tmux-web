@@ -5,7 +5,7 @@ import { db, groupIdsOf, q, type Agent, type HostRow, type SessionRow, type Shar
 import { TmuxBackend } from './backend/tmux.js';
 import type { PaneStream, PaneTarget, SessionBackend } from './backend/types.js';
 import { getHost, shq, type Host } from './host.js';
-import { Screen, type AgentStatus, type Choices } from './screen.js';
+import { SCROLLBACK, Screen, type AgentStatus, type Choices } from './screen.js';
 import { claudeTranscript, codexTranscript, codexUserText, findCodexRollout } from './transcript.js';
 
 export const backend: SessionBackend = new TmuxBackend();
@@ -40,7 +40,9 @@ export function agentCommand(row: SessionRow, resume: boolean, fork = false): st
       ? `if ls "$HOME"/.claude/projects/*/${id}.jsonl >/dev/null 2>&1; then ${resumeCmd}; else claude --session-id ${id}${extra}; fi`
       : `claude --session-id ${id}${extra}`;
   } else if (row.agent === 'codex') {
-    cmd = resume && row.agent_session_id ? `codex ${fork ? 'fork' : 'resume'} ${row.agent_session_id}${extra}` : `codex${extra}`;
+    // inline, not full screen: what scrolls off stays in the terminal, so it can be scrolled back to
+    const inline = /--no-alt-screen\b/.test(args) ? '' : ' --no-alt-screen';
+    cmd = resume && row.agent_session_id ? `codex ${fork ? 'fork' : 'resume'} ${row.agent_session_id}${inline}${extra}` : `codex${inline}${extra}`;
   }
   if (cmd) cmd = `if command -v ${row.agent} >/dev/null; then ${cmd}; else printf '%s\\n' ${INSTALL_HINT[row.agent].map(shq).join(' ')}; fi; `;
   return `exec bash -lc ${shq(`export LANG="\${LANG:-C.UTF-8}"; ${cmd}exec bash -l`)}`;
@@ -207,7 +209,7 @@ export class LiveSession extends EventEmitter {
     this.stream = stream;
     this.screen = screen;
     backend
-      .capture(t)
+      .capture(t, SCROLLBACK)
       .then((cap) => {
         screen.seed(cap);
         for (const b of early) screen.write(b);
