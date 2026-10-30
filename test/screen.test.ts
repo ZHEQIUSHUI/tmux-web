@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Screen } from '../src/server/screen.js';
+import { Screen, steadyPreview } from '../src/server/screen.js';
 
 /** Draw lines (with optional SGR codes) on a fresh 100x20 screen. */
 async function screen(lines: string[]) {
@@ -145,4 +145,12 @@ test('typed text in the box: not the queue hint, not queued messages above the b
   // something typed in the box
   s = await box([SEP, '❯ 还没发出去的字', SEP]);
   assert.equal(s.hasPromptInput(), true);
+});
+
+test('the live preview does not change with the blinking tool dot or the spinner glyph', () => {
+  const a = '● Bash(sleep 3 && echo 1)\n  ⎿  Running…\n\n✢ Befuddling… (4s · ↓ 20 tokens)';
+  const b = '  Bash(sleep 3 && echo 1)\n  ⎿  Running…\n\n· Befuddling… (4s · ↓ 20 tokens)';
+  assert.equal(steadyPreview(a), steadyPreview(b));
+  // indented output and plain text stay as they are
+  assert.equal(steadyPreview('  ⎿  1\n  some output\n* a list item'), '  ⎿  1\n  some output\n* a list item');
 });

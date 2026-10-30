@@ -611,6 +611,9 @@ export function prefetchAll(list: SessionInfo[]): () => void {
   };
 }
 
+const sameState = (a: { status: Status; preview: string; error?: string; choices?: Choices | null; suggestion?: string }, b: typeof a) =>
+  a.status === b.status && a.preview === b.preview && a.error === b.error && a.suggestion === b.suggestion && JSON.stringify(a.choices ?? null) === JSON.stringify(b.choices ?? null);
+
 export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; onOpenTerminal: () => void }) {
   // a cache that is behind is still shown at once, then brought up to date
   const cached = useMemo(() => chatCache.get(session.id), [session.id]);
@@ -628,8 +631,12 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
   const [state, setState] = useState<{ status: Status; preview: string; error?: string; choices?: Choices | null; suggestion?: string }>({ status: session.status, preview: '' });
   // the live screen grows at the bottom: keep its end in view
   const livePre = useRef<HTMLPreElement>(null);
+  // and it doesn't shrink back while it is up: a line coming and going made the chat jump
+  const liveBox = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (livePre.current) livePre.current.scrollTop = livePre.current.scrollHeight;
+    const box = liveBox.current;
+    if (box && box.offsetHeight > parseFloat(box.style.minHeight || '0')) box.style.minHeight = `${box.offsetHeight}px`;
   }, [state.preview]);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState('');
@@ -691,9 +698,10 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
               setPage((pg) => (pg && pg.pending ? { ...pg, pending: false } : pg));
             },
             state: (st: { status: Status; preview: string; error?: string; mode?: string; update?: boolean; choices?: Choices | null; suggestion?: string }) => {
-              setState(st);
+              // only what really changed: a redraw of the whole chat otherwise
+              setState((cur) => (sameState(cur, st) ? cur : st));
               setUpdate(!!st.update);
-              if (st.mode !== undefined) setClaude((c) => (c ? { ...c, mode: st.mode } : c));
+              if (st.mode !== undefined) setClaude((c) => (c && c.mode !== st.mode ? { ...c, mode: st.mode } : c));
             },
             reset: () => {
               dropCache(id);
@@ -951,7 +959,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
             </div>
           ) : (
             live && (
-              <div class={`live ${state.status}`}>
+              <div class={`live ${state.status}`} ref={liveBox}>
                 <div class="live-head">
                   <span class={`dot ${state.status}`} />
                   {state.status === 'waiting' ? '等待你确认（可用下方快捷键，或切到终端）' : '实时画面'}

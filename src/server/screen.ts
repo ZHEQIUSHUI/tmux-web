@@ -254,10 +254,18 @@ export class Screen {
     while (tail.length && !tail[0].trim()) tail.shift();
     // background work Claude Code is keeping alive ("1 shell, 1 monitor"); "← 1 agent" is just a hint
     const background = BACKGROUND.exec(footer)?.[0] ?? '';
-    return { status, preview: tail.join('\n'), mode, update, background, choices: waiting ? choices : null, suggestion: status === 'idle' ? this.promptSuggestion() : '' };
+    return { status, preview: steadyPreview(tail.join('\n')), mode, update, background, choices: waiting ? choices : null, suggestion: status === 'idle' ? this.promptSuggestion() : '' };
   }
 
   dispose() {
     this.term.dispose();
   }
+}
+
+/**
+ * The screen without its animation: Claude Code blinks the ● in front of a running tool and turns
+ * its spinner glyph several times a second. Passed on as is, the chat redrew (and jumped) each time.
+ */
+export function steadyPreview(text: string): string {
+  return text.replace(/^ {2}(?=[A-Z]\w*\()/gm, '● ').replace(/^[·✢✳✶✻✽*] (?=\S[^\n]*…)/gm, '✻ ');
 }
