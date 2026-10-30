@@ -228,6 +228,12 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   };
   const back = () => {
     const go = () => {
+      // Some phone browsers also take a sideways swipe as their own back. When that already closed
+      // the session, a second step back would leave the page (and load it again from scratch).
+      if (!/^#\/(s\/|files)/.test(location.hash)) {
+        fromList.current = false;
+        return;
+      }
       if (fromList.current) {
         fromList.current = false;
         history.back();
