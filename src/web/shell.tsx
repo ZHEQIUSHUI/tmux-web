@@ -234,10 +234,10 @@ export function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
         fromList.current = false;
         return;
       }
-      if (fromList.current) {
-        fromList.current = false;
-        history.back();
-      } else setCurrent(null);
+      const fresh = fromList.current;
+      fromList.current = false;
+      if (fresh && prevIsThisPage()) history.back();
+      else setCurrent(null);
     };
     // phones: slide the session view out first, like the swipe does
     const pushed = document.querySelector<HTMLElement>('.m-push');
@@ -450,6 +450,18 @@ function GlobalFiles({ narrow, onBack, onNewAt }: { narrow: boolean; onBack: () 
       {hosts && !hosts.length && <p class="dim pad">没有可用的主机。</p>}
     </section>
   );
+}
+
+/**
+ * Whether the step back lands in this same page. After the browser restores a tab (reopened, or
+ * the tab was put to sleep), the entries from before belong to the old page, and stepping back
+ * into one loads the whole page again; then the list is opened forward instead.
+ */
+function prevIsThisPage(): boolean {
+  const nav = (window as any).navigation;
+  if (!nav?.currentEntry || typeof nav.entries !== 'function') return true;
+  const prev = nav.entries()[nav.currentEntry.index - 1];
+  return !!prev?.sameDocument;
 }
 
 function SwipeBack({ onBack, children }: { onBack: () => void; children: any }) {
