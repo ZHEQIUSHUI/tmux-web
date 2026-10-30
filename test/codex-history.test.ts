@@ -63,3 +63,16 @@ test('codex: profile files below ~/.codex are indexed and validated', () => {
     { name: 'xx', mtime: 1000, size: 2 },
   ]);
 });
+
+test('a Codex pane gets the rollout it started, not an older one still being written', async () => {
+  const { pickCodexRollout } = await import('../src/server/transcript.js');
+  const pane = Date.parse('2026-10-28T11:54:51Z');
+  const c = (name: string, ts: string) => ({ name, ts });
+  // what 4090 had: Codex in VS Code (same folder) started before the pane and kept writing,
+  // our Codex started a second after the pane, and VS Code started another thread two days later
+  const list = [c('vscode-older', '2026-10-28T11:42:29Z'), c('ours', '2026-10-28T11:54:52Z'), c('vscode-later', '2026-10-30T07:10:14Z')];
+  assert.equal(pickCodexRollout(list, pane)?.name, 'ours');
+  // an adopted pane, Codex started in it much later: the newest after the pane
+  assert.equal(pickCodexRollout([c('a', '2026-10-29T01:00:00Z'), c('b', '2026-10-29T03:00:00Z')], pane)?.name, 'b');
+  assert.equal(pickCodexRollout([c('before', '2026-10-28T11:42:29Z')], pane), null);
+});

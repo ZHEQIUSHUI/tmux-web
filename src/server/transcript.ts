@@ -387,8 +387,11 @@ export async function codexTranscript(host: Host, sessionId: string): Promise<st
 }
 
 /**
- * Codex picks its own session id, so find the rollout file it created for our pane: newest first,
- * started after the pane, same cwd, not already claimed by another session.
+ * Codex picks its own session id, so find the rollout file it created for our pane: same cwd, not
+ * already claimed by another session, started after the pane. Codex writes it as it starts, so the
+ * first one within a minute of the pane is ours; another Codex in the same directory (VS Code,
+ * another terminal) that started earlier is still being written to and must not be taken for it.
+ * Without one that close (an adopted pane, Codex restarted in it later): the newest.
  */
 export async function findCodexRollout(host: Host, cwd: string, since: number, claimed: Set<string>): Promise<{ id: string; file: string } | null> {
   const minutes = Math.ceil((Date.now() - since) / 60000) + 1;
@@ -411,8 +414,13 @@ export async function findCodexRollout(host: Host, cwd: string, since: number, c
       /* partial or unrelated file */
     }
   }
-  candidates.sort((a, b) => (a.ts < b.ts ? 1 : -1));
-  return candidates[0] ?? null;
+  return pickCodexRollout(candidates, since);
+}
+
+export function pickCodexRollout<T extends { ts: string }>(candidates: T[], since: number): T | null {
+  const at = (c: T) => Date.parse(c.ts);
+  const after = candidates.filter((c) => at(c) >= since - 5000).sort((a, b) => at(a) - at(b));
+  return after.find((c) => at(c) <= since + 60_000) ?? after[after.length - 1] ?? null;
 }
 
 // ---------- Claude Code state (model, context usage) ----------
