@@ -157,17 +157,68 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
   // pinch to zoom the font, like a native terminal app
   let pinch: { dist: number; size: number } | null = null;
   const dist = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  // one finger up or down scrolls back through the output (xterm.js has no touch scrolling), and
+  // keeps gliding a little when let go
+  let swipe: { x: number; y: number; on: boolean; rest: number; v: number; t: number } | null = null;
+  let glide = 0;
+  const rowHeight = () => (el.querySelector('.xterm-screen')?.clientHeight || 0) / term.rows || 16;
+  const scrollBy = (px: number) => {
+    if (!swipe) return;
+    const h = rowHeight();
+    swipe.rest += px;
+    const n = Math.trunc(swipe.rest / h);
+    if (n) {
+      term.scrollLines(n);
+      swipe.rest -= n * h;
+    }
+  };
   const onTouchStart = (e: TouchEvent) => {
+    cancelAnimationFrame(glide);
+    swipe = null;
     if (e.touches.length === 2) pinch = { dist: dist(e.touches), size: term.options.fontSize! };
+    else if (e.touches.length === 1) swipe = { x: e.touches[0].clientX, y: e.touches[0].clientY, on: false, rest: 0, v: 0, t: e.timeStamp };
   };
   const onTouchMove = (e: TouchEvent) => {
-    if (!pinch || e.touches.length !== 2) return;
+    if (pinch && e.touches.length === 2) {
+      e.preventDefault();
+      const target = pinch.size * (dist(e.touches) / pinch.dist);
+      if (Math.abs(target - term.options.fontSize!) >= 0.5) zoom(target - term.options.fontSize!);
+      return;
+    }
+    if (!swipe || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dx = t.clientX - swipe.x;
+    const dy = t.clientY - swipe.y;
+    if (!swipe.on) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      // sideways is the page's (a wider adopted terminal pans, the edge swipe goes back); so is
+      // up and down while a taller adopted terminal can still move that way
+      const pans = fixedSize && el.scrollHeight > el.clientHeight;
+      if (Math.abs(dx) > Math.abs(dy) || pans) return void (swipe = null);
+      swipe.on = true;
+    }
     e.preventDefault();
-    const target = pinch.size * (dist(e.touches) / pinch.dist);
-    if (Math.abs(target - term.options.fontSize!) >= 0.5) zoom(target - term.options.fontSize!);
+    const dt = Math.max(1, e.timeStamp - swipe.t);
+    swipe.v = -dy / dt;
+    swipe.x = t.clientX;
+    swipe.y = t.clientY;
+    swipe.t = e.timeStamp;
+    // finger down: earlier output
+    scrollBy(-dy);
   };
   const onTouchEnd = (e: TouchEvent) => {
     if (e.touches.length < 2) pinch = null;
+    if (!swipe?.on || e.touches.length) return;
+    let v = swipe.v;
+    let last = performance.now();
+    const step = (now: number) => {
+      const dt = now - last;
+      last = now;
+      scrollBy(v * dt);
+      v *= Math.pow(0.995, dt);
+      if (Math.abs(v) > 0.05) glide = requestAnimationFrame(step);
+    };
+    if (Math.abs(v) > 0.3) glide = requestAnimationFrame(step);
   };
   el.addEventListener('touchstart', onTouchStart, { passive: true });
   el.addEventListener('touchmove', onTouchMove, { passive: false });
@@ -191,6 +242,7 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
       removeEventListener('online', onVisible);
       clearTimeout(pongTimer);
       ws?.close();
+      cancelAnimationFrame(glide);
       term.dispose();
     },
     focus: () => term.focus(),
