@@ -126,7 +126,7 @@ function Time({ at }: { at?: number }) {
 
 export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: ChatItem; onExpand: (it: ChatItem) => void; onRewind?: () => void }) {
   const [actions, setActions] = useState(false);
-  const [md, setMd] = useState(false);
+  const [md, setMd] = useState(true);
   const more = it.truncated && (
     <button class="link" onClick={() => onExpand(it)}>
       展开全文
