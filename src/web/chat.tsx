@@ -38,12 +38,12 @@ function Images({ list }: { list: { url: string; alt: string }[] }) {
 const imageCtx = (sid: number, it: ChatItem) => ({ api: `/_tw/api/sessions/${sid}`, off: it.id.split(':')[0] });
 
 /** A plain-text chat item: Markdown images first, then the file paths the composer inserted. */
-function ChatContent({ sid, text, off = '' }: { sid: number; text: string; off?: string }) {
+function ChatContent({ sid, text, off = '', md = false }: { sid: number; text: string; off?: string; md?: boolean }) {
   const media = splitImages(text, { api: `/_tw/api/sessions/${sid}`, off });
   const body = parseAttachments(media.text);
   return (
     <>
-      {body.text}
+      {md ? <Markdown sid={sid} id={`${off}:sent`} text={body.text} /> : body.text}
       <Images list={media.images} />
       <ChatAttachments sid={sid} list={body.attachments} />
     </>
@@ -126,6 +126,7 @@ function Time({ at }: { at?: number }) {
 
 export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: ChatItem; onExpand: (it: ChatItem) => void; onRewind?: () => void }) {
   const [actions, setActions] = useState(false);
+  const [md, setMd] = useState(false);
   const more = it.truncated && (
     <button class="link" onClick={() => onExpand(it)}>
       展开全文
@@ -136,12 +137,21 @@ export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: Chat
       // tap (phones) or hover (desktop) shows what can be done with your own message
       <div class={`msg user ${actions ? 'show-actions' : ''}`} onClick={() => setActions((v) => !v)}>
         <div class="bubble">
-          <ChatContent sid={sid} text={it.text} off={it.id.split(':')[0]} />
+          <ChatContent sid={sid} text={it.text} off={it.id.split(':')[0]} md={md} />
           {more}
           <Time at={it.at} />
         </div>
         <div class="msg-actions">
           <CopyBtn class="link" label="复制" text={it.truncated ? () => fullText(sid, it) : it.text} />
+          <button
+            class="link md-toggle"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMd((v) => !v);
+            }}
+          >
+            {md ? '显示原文' : '按 Markdown 显示'}
+          </button>
           {onRewind && (
             <button
               class="link"

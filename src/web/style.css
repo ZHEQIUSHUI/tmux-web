@@ -580,6 +580,9 @@ label select {
 .bubble .link {
   display: block;
 }
+.bubble .md {
+  white-space: normal;
+}
 .msg.meta {
   font-size: 12px;
   color: var(--dim);
@@ -2842,6 +2845,9 @@ a.btn {
   .msg-tools .copy-btn.ok {
     opacity: 1;
   }
+}
+.msg-actions .md-toggle {
+  padding-right: 10px;
 }
 .msg-actions .copy-btn.link {
   border: 0;
