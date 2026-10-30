@@ -154,10 +154,16 @@ final class WebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     refresh()
   }
 
-  /// A page for a server: logins and settings persist, the page's alerts reach us.
-  func makeWebView() -> WKWebView {
+  /// A page for a server: logins and settings persist, the page's alerts reach us. Each server
+  /// keeps its own (cookies don't tell ports apart: every forwarded server is 127.0.0.1, and a
+  /// copy of a server was logged in, and out, together with the original).
+  func makeWebView(for profile: UUID) -> WKWebView {
     let config = WKWebViewConfiguration()
-    config.websiteDataStore = .default()
+    if #available(macOS 14.0, *) {
+      config.websiteDataStore = WKWebsiteDataStore(forIdentifier: profile)
+    } else {
+      config.websiteDataStore = .default()
+    }
     config.userContentController.add(self, name: "twNotify")
     config.preferences.setValue(true, forKey: "developerExtrasEnabled")
     let web = WKWebView(frame: .zero, configuration: config)

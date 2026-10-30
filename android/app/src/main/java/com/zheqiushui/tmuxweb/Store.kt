@@ -276,3 +276,45 @@ object Crypto {
     return String(c.doFinal(all, 12, all.size - 12))
   }
 }
+
+/**
+ * Each server keeps its own login. WebView has one cookie jar for the whole app, and cookies don't
+ * tell ports apart: every forwarded server (127.0.0.1) shared one login, and a copy of a server was
+ * logged in as the original's account (logging out of one logged out of both). So the jar is
+ * swapped when another server opens: the leaving server's cookies are put away (sealed), the
+ * opening one's put back.
+ */
+object Logins {
+  private const val OWNER = "owner"
+
+  private fun url(p: Profile) = if (p.isDirect) p.directBase ?: p.directUrl else "http://127.0.0.1"
+
+  /** Make the jar [p]'s, then [then] (on the main thread). */
+  fun use(context: Context, p: Profile, all: List<Profile>, then: () -> Unit) {
+    val prefs = context.getSharedPreferences("logins", Context.MODE_PRIVATE)
+    val owner = prefs.getString(OWNER, null)
+    if (owner == p.id) return then()
+    // the first time: the logins so far stay with the server opened now
+    if (owner == null) {
+      prefs.edit().putString(OWNER, p.id).apply()
+      return then()
+    }
+    val cm = android.webkit.CookieManager.getInstance()
+    val e = prefs.edit().putString(OWNER, p.id)
+    all.firstOrNull { it.id == owner }?.let { o -> e.putString(o.id, Crypto.seal(cm.getCookie(url(o)) ?: "")) }
+    e.apply()
+    val saved = prefs.getString(p.id, null)?.let { runCatching { Crypto.open(it) }.getOrNull() } ?: ""
+    cm.removeAllCookies {
+      for (c in saved.split(';').map { it.trim() }.filter { it.contains('=') }) {
+        cm.setCookie(url(p), "$c; Path=/; HttpOnly; SameSite=Strict; Max-Age=${30 * 24 * 3600}")
+      }
+      cm.flush()
+      then()
+    }
+  }
+
+  /** A deleted server's login goes with it. */
+  fun forget(context: Context, id: String) {
+    context.getSharedPreferences("logins", Context.MODE_PRIVATE).edit().remove(id).apply()
+  }
+}

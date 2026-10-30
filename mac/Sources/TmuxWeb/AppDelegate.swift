@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UserNotifications
+import WebKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
   private let model = AppModel()
@@ -73,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
       if case .failed = c.state { c.start(p) }
       if case .idle = c.state { c.start(p) }
     } else {
-      c = Connection(profile: p, web: main.makeWebView())
+      c = Connection(profile: p, web: main.makeWebView(for: p.id))
       c.tunnel.onState = { [weak self, weak c] s in
         guard let self, let c else { return }
         self.tunnelChanged(c, s)
@@ -231,6 +232,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
       self.disconnect(p.id)
       self.store.remove(p.id)
       self.model.probes[p.id] = nil
+      // its login goes too (once its page is gone)
+      if #available(macOS 14.0, *) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { WKWebsiteDataStore.remove(forIdentifier: p.id) { _ in } }
+      }
     }
   }
 

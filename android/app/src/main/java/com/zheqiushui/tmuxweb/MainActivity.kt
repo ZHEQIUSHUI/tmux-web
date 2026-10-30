@@ -243,7 +243,8 @@ class MainActivity : ComponentActivity(), Actions {
     model.startedAt = System.currentTimeMillis()
     model.tunnel = TunnelState.Connecting(0)
     model.screen = Screen.Page
-    TunnelService.start(this)
+    // this server's own login, not the last one's
+    Logins.use(this, p, model.profiles) { if (model.activeId == p.id) TunnelService.start(this) }
   }
 
   override fun retry() {
@@ -319,6 +320,7 @@ class MainActivity : ComponentActivity(), Actions {
   override fun remove(p: Profile) {
     if (model.activeId == p.id) disconnect()
     store.remove(p.id)
+    Logins.forget(this, p.id)
     reloadProfiles()
     model.probes.remove(p.id)
     model.screen = Screen.Home
