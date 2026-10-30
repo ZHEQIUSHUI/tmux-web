@@ -1569,9 +1569,41 @@ a.btn {
   align-items: center;
   border-radius: 7px;
 }
-.folder-head.drop {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  outline: 1px dashed var(--accent);
+/* a session dragged over a folder */
+.folder.drop,
+.m-section.drop {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: 1.5px dashed var(--accent);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+/* touch screens: a row is held to drag it, so no text selection or callout on the hold */
+.m-row,
+.session-item {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.m-row.dragging,
+.session-item.dragging {
+  opacity: 0.4;
+}
+.drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1000;
+  pointer-events: none;
+  max-width: 70vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  font-size: 14px;
 }
 .folder-toggle {
   flex: 1;

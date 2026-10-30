@@ -189,9 +189,8 @@ export interface SessionGroup {
   sessions: SessionInfo[];
 }
 
-/** Sessions by folder (folders in their order, unfiled last). Without folders: one plain group. */
+/** Sessions by folder (folders in their order, 未分组 last, there even without folders). */
 export function groupByFolder(sessions: SessionInfo[], folders: Folder[]): SessionGroup[] {
-  if (!folders.length) return [{ folder: null, sessions }];
   const ids = new Set(folders.map((f) => f.id));
   const groups: SessionGroup[] = folders.map((f) => ({ folder: f, sessions: sessions.filter((s) => s.folderId === f.id) }));
   groups.push({ folder: null, sessions: sessions.filter((s) => s.folderId === null || !ids.has(s.folderId)) });
@@ -218,28 +217,14 @@ export function useCollapsed(): [Set<string>, (key: string) => void] {
   return [set, toggle];
 }
 
-/** A collapsible folder header: arrow, name, count, note; drop target for dragged sessions. */
-export function FolderHeader(props: { group: SessionGroup; open: boolean; onToggle: () => void; onEdit?: () => void; onDropSession?: (id: number) => void; big?: boolean; label?: string; note?: string }) {
+/** A collapsible folder header: arrow, name, count, note. */
+export function FolderHeader(props: { group: SessionGroup; open: boolean; onToggle: () => void; onEdit?: () => void; big?: boolean; label?: string; note?: string }) {
   const { folder, sessions } = props.group;
-  const [over, setOver] = useState(false);
   const waiting = sessions.filter((s) => s.status === 'waiting').length;
   // the two built-in groups look different from your own folders
   const kind = props.label === '最近' ? 'recent' : folder ? 'folder' : 'ungrouped';
   return (
-    <div
-      class={`folder-head ${props.big ? 'big' : ''} ${over ? 'drop' : ''} kind-${kind}`}
-      onDragOver={(e) => {
-        if (!props.onDropSession) return;
-        e.preventDefault();
-        setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(e) => {
-        setOver(false);
-        const id = Number(e.dataTransfer?.getData('text/tw-session'));
-        if (id && props.onDropSession) props.onDropSession(id);
-      }}
-    >
+    <div class={`folder-head ${props.big ? 'big' : ''} kind-${kind}`}>
       <button class="folder-toggle" onClick={props.onToggle} aria-expanded={props.open}>
         <Chevron open={props.open} />
         <span class="folder-kind">{kind === 'recent' ? <Icon.clock /> : kind === 'ungrouped' ? <Icon.inbox /> : <Icon.folder />}</span>
@@ -264,6 +249,116 @@ export function FolderHeader(props: { group: SessionGroup; open: boolean; onTogg
 }
 
 export const moveToFolder = (sessionId: number, folderId: number | null) => api('PUT', `/_tw/api/sessions/${sessionId}/folder`, { folderId }).catch((e) => alert(e.message));
+
+/** A folder's key in the list: its id, or "u" for 未分组. */
+const folderKey = (folder: Folder | null) => (folder ? String(folder.id) : 'u');
+
+/**
+ * Dragging sessions into folders. A whole folder (header and rows) takes a drop: with a mouse by
+ * dragging, on touch screens by holding a row until it lifts, then moving it there.
+ */
+function useFolderDrop() {
+  const [drop, setDrop] = useState<string | null>(null);
+  const land = (id: number, key: string) => moveToFolder(id, key === 'u' ? null : Number(key));
+  const zone = (key: string) => ({
+    'data-folder': key,
+    onDragOver: (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes('text/tw-session')) return;
+      e.preventDefault();
+      setDrop(key);
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (!(e.currentTarget as Node).contains(e.relatedTarget as Node | null)) setDrop((d) => (d === key ? null : d));
+    },
+    onDrop: (e: DragEvent) => {
+      e.preventDefault();
+      setDrop(null);
+      const id = Number(e.dataTransfer?.getData('text/tw-session'));
+      if (id) land(id, key);
+    },
+  });
+  const drag = (s: SessionInfo) =>
+    coarsePointer
+      ? { onTouchStart: (e: TouchEvent) => touchDrag(e, s, setDrop, land), onContextMenu: (e: Event) => e.preventDefault() }
+      : // to a folder, or onto the chat to show it side by side
+        { draggable: true, onDragStart: (e: DragEvent) => e.dataTransfer?.setData('text/tw-session', String(s.id)) };
+  return { drop, zone, drag };
+}
+
+/** Hold a row (a short buzz, the row lifts) and move it: the folder under the finger takes it. */
+function touchDrag(e: TouchEvent, s: SessionInfo, setDrop: (key: string | null) => void, land: (id: number, key: string) => void) {
+  if (e.touches.length !== 1) return;
+  const row = e.currentTarget as HTMLElement;
+  const scroller = row.closest<HTMLElement>('.m-list, .session-list');
+  const x0 = e.touches[0].clientX;
+  const y0 = e.touches[0].clientY;
+  let x = x0;
+  let y = y0;
+  let ghost: HTMLElement | null = null;
+  let target: string | null = null;
+  let raf = 0;
+  const place = () => {
+    ghost!.style.transform = `translate(${x}px, ${y}px) translate(-50%, -140%)`;
+    target = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-folder]')?.dataset.folder ?? null;
+    setDrop(target);
+  };
+  // near the top or bottom of the list, scroll it so far-away folders can be reached
+  const edgeScroll = () => {
+    if (scroller) {
+      const r = scroller.getBoundingClientRect();
+      const step = y < r.top + 56 ? -8 : y > r.bottom - 56 ? 8 : 0;
+      if (step) {
+        scroller.scrollTop += step;
+        place();
+      }
+    }
+    raf = requestAnimationFrame(edgeScroll);
+  };
+  const timer = setTimeout(() => {
+    navigator.vibrate?.(15);
+    ghost = document.createElement('div');
+    ghost.className = 'drag-ghost';
+    ghost.textContent = s.name;
+    document.body.appendChild(ghost);
+    row.classList.add('dragging');
+    place();
+    raf = requestAnimationFrame(edgeScroll);
+  }, 450);
+  const move = (ev: TouchEvent) => {
+    const t = ev.touches[0];
+    if (!ghost) {
+      // moved before the hold: an ordinary scroll
+      if (Math.hypot(t.clientX - x0, t.clientY - y0) > 10) end();
+      return;
+    }
+    ev.preventDefault();
+    x = t.clientX;
+    y = t.clientY;
+    place();
+  };
+  const end = (ev?: Event) => {
+    clearTimeout(timer);
+    cancelAnimationFrame(raf);
+    document.removeEventListener('touchmove', move);
+    document.removeEventListener('touchend', end);
+    document.removeEventListener('touchcancel', end);
+    if (!ghost) return;
+    ghost.remove();
+    row.classList.remove('dragging');
+    setDrop(null);
+    if (ev?.type === 'touchend' && target !== null && target !== String(s.folderId ?? 'u')) land(s.id, target);
+    // the lifted finger would also count as a tap on the row
+    const eat = (c: Event) => {
+      c.stopPropagation();
+      c.preventDefault();
+    };
+    window.addEventListener('click', eat, true);
+    setTimeout(() => window.removeEventListener('click', eat, true), 400);
+  };
+  document.addEventListener('touchmove', move, { passive: false });
+  document.addEventListener('touchend', end);
+  document.addEventListener('touchcancel', end);
+}
 
 /** The agent's letter on its color, the status dot on its corner: the same on phones and computers. */
 function AgentBadge({ s, small }: { s: SessionInfo; small?: boolean }) {
@@ -304,6 +399,7 @@ export function Sidebar(props: {
   const { me, sessions, current } = props;
   const multiHost = new Set(sessions.map((s) => s.hostId)).size > 1;
   const [collapsed, toggle] = useCollapsed();
+  const { drop, zone, drag } = useFolderDrop();
   const groups = groupByFolder(sortSessions(sessions), props.folders);
   const [recentMin, setRecentMin] = useRecentMinutes();
   const [recentDlg, setRecentDlg] = useState(false);
@@ -349,8 +445,7 @@ export function Sidebar(props: {
       onPointerDown={() => prefetchChat(s)}
       onMouseEnter={() => prefetchChat(s)}
       onClick={() => props.onPick(s.id)}
-      draggable={!coarsePointer}
-      onDragStart={(e) => e.dataTransfer?.setData('text/tw-session', String(s.id))}
+      {...drag(s)}
       title={s.title || undefined}
     >
       <AgentBadge s={s} small />
@@ -374,9 +469,7 @@ export function Sidebar(props: {
       onPointerDown={() => prefetchChat(s)}
       onMouseEnter={() => prefetchChat(s)}
       onClick={() => props.onPick(s.id)}
-      // to a folder, or onto the chat to show it side by side
-      draggable={!coarsePointer}
-      onDragStart={(e) => e.dataTransfer?.setData('text/tw-session', String(s.id))}
+      {...drag(s)}
       title={s.note || undefined}
     >
       <AgentBadge s={s} small />
@@ -429,20 +522,14 @@ export function Sidebar(props: {
           </div>
         )}
         {groups.map((g) => {
-          const key = g.folder ? String(g.folder.id) : 'u';
+          const key = folderKey(g.folder);
           const open = !collapsed.has(key);
-          if (!g.folder && groups.length === 1) return g.sessions.map(item);
-          if (!g.folder && !g.sessions.length) return null;
           return (
-            <div class={`folder ${g.folder ? 'kind-folder' : 'kind-ungrouped'}`} key={key}>
-              <FolderHeader
-                group={g}
-                open={open}
-                onToggle={() => toggle(key)}
-                onEdit={g.folder ? () => props.onEditFolder(g.folder) : undefined}
-                onDropSession={(id) => moveToFolder(id, g.folder?.id ?? null)}
-              />
-              {open && <div class="folder-body">{g.sessions.length ? g.sessions.map(item) : <p class="dim small folder-empty">空文件夹。拖动会话到这里，或在会话设置里选择文件夹。</p>}</div>}
+            <div class={`folder ${g.folder ? 'kind-folder' : 'kind-ungrouped'} ${drop === key ? 'drop' : ''}`} key={key} {...zone(key)}>
+              <FolderHeader group={g} open={open} onToggle={() => toggle(key)} onEdit={g.folder ? () => props.onEditFolder(g.folder) : undefined} />
+              {open && (g.sessions.length || g.folder) && (
+                <div class="folder-body">{g.sessions.length ? g.sessions.map(item) : <p class="dim small folder-empty">空文件夹。把会话拖到这里，或在会话设置里选择文件夹。</p>}</div>
+              )}
             </div>
           );
         })}
@@ -481,6 +568,7 @@ export function MobileHome(props: {
   const { sessions } = props;
   const multiHost = new Set((sessions || []).map((s) => s.hostId)).size > 1;
   const [collapsed, toggle] = useCollapsed();
+  const { drop, zone, drag } = useFolderDrop();
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
   const shown = (sessions || []).filter((s) => !q || `${s.name} ${s.note} ${s.cwd} ${s.host}`.toLowerCase().includes(q));
@@ -490,7 +578,7 @@ export function MobileHome(props: {
   const [recentDlg, setRecentDlg] = useState(false);
   const recent = q ? [] : recentSessions(sessions || [], recentMin);
   const recentRow = (s: SessionInfo) => (
-    <button key={`r${s.id}`} class={`m-row ${s.status}`} onPointerDown={() => prefetchChat(s)} onClick={() => props.onPick(s.id)}>
+    <button key={`r${s.id}`} class={`m-row ${s.status}`} onPointerDown={() => prefetchChat(s)} onClick={() => props.onPick(s.id)} {...drag(s)}>
       <AgentBadge s={s} />
       <span class="m-main">
         <span class="m-name">
@@ -521,7 +609,7 @@ export function MobileHome(props: {
     return prefetchAll([...sorted.filter((x) => props.unread.has(x.id)), ...sorted.filter((x) => !props.unread.has(x.id))]);
   }, [activityKey]);
   const row = (s: SessionInfo) => (
-    <button key={s.id} class={`m-row ${s.status}`} onPointerDown={() => prefetchChat(s)} onClick={() => props.onPick(s.id)}>
+    <button key={s.id} class={`m-row ${s.status}`} onPointerDown={() => prefetchChat(s)} onClick={() => props.onPick(s.id)} {...drag(s)}>
       <AgentBadge s={s} />
       <span class="m-main">
         <span class="m-name">
@@ -589,14 +677,26 @@ export function MobileHome(props: {
           </div>
         )}
         {groups.map((g) => {
-          const key = g.folder ? String(g.folder.id) : 'u';
-          const open = q ? true : !collapsed.has(key);
-          const plain = !g.folder && groups.length === 1;
-          if (!g.sessions.length && (plain || !g.folder)) return null;
+          const key = folderKey(g.folder);
+          // search results: one plain list
+          if (q)
+            return (
+              g.sessions.length > 0 && (
+                <div class="m-section" key={key}>
+                  <div class="m-group">{g.sessions.map(row)}</div>
+                </div>
+              )
+            );
+          const open = !collapsed.has(key);
           return (
-            <div class={`m-section ${g.folder ? 'kind-folder' : 'kind-ungrouped'}`} key={key}>
-              {!plain && <FolderHeader big group={g} open={open} onToggle={() => toggle(key)} onEdit={g.folder ? () => props.onEditFolder(g.folder) : undefined} />}
-              {open && (g.sessions.length ? <div class="m-group">{g.sessions.map(row)}</div> : <p class="dim small folder-empty">空文件夹。在会话设置里可以把会话放进来。</p>)}
+            <div class={`m-section ${g.folder ? 'kind-folder' : 'kind-ungrouped'} ${drop === key ? 'drop' : ''}`} key={key} {...zone(key)}>
+              <FolderHeader big group={g} open={open} onToggle={() => toggle(key)} onEdit={g.folder ? () => props.onEditFolder(g.folder) : undefined} />
+              {open &&
+                (g.sessions.length ? (
+                  <div class="m-group">{g.sessions.map(row)}</div>
+                ) : (
+                  g.folder && <p class="dim small folder-empty">空文件夹。长按会话拖到这里，或在会话设置里选择文件夹。</p>
+                ))}
             </div>
           );
         })}
