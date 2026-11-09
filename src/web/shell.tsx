@@ -29,7 +29,11 @@ export function SessionPane({ me, session, folders, narrow, onBack, onNewAt, onC
   const initialTab = (): Tab => (store.get(tabKey) as Tab) || (session.agent === 'bash' ? 'term' : 'chat');
   const [tab, setTab] = useState<Tab>(initialTab);
   const [settings, setSettings] = useState(false);
-  useEffect(() => setTab(initialTab()), [session.id]);
+  const [search, setSearch] = useState(false);
+  useEffect(() => {
+    setTab(initialTab());
+    setSearch(false);
+  }, [session.id]);
   const pick = (t: Tab) => {
     setTab(t);
     store.set(tabKey, t);
@@ -73,6 +77,11 @@ export function SessionPane({ me, session, folders, narrow, onBack, onNewAt, onC
             ))}
           </div>
         )}
+        {tab === 'chat' && session.agent !== 'bash' && (
+          <button class={`icon-btn ${search ? 'on' : ''}`} onClick={() => setSearch((v) => !v)} aria-label="搜索聊天记录" title="搜索聊天记录">
+            <Icon.search />
+          </button>
+        )}
         <button class="icon-btn" onClick={() => setSettings(true)} aria-label="设置">
           <Icon.more />
         </button>
@@ -82,7 +91,7 @@ export function SessionPane({ me, session, folders, narrow, onBack, onNewAt, onC
           </button>
         )}
       </header>
-      {tab === 'chat' && <ChatView key={session.id} session={session} onOpenTerminal={() => pick('term')} />}
+      {tab === 'chat' && <ChatView key={session.id} session={session} onOpenTerminal={() => pick('term')} search={search} onSearchClose={() => setSearch(false)} />}
       {tab === 'term' && <TerminalView key={session.id} sessionId={session.id} canWrite={session.access === 'control'} />}
       {tab === 'files' && (
         <FilesView

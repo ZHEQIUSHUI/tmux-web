@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cc, writeLines } from './helpers.js';
 import { Host } from '../src/server/host.js';
-import { claudeState, followLog, parseLine, readFull, readPage } from '../src/server/transcript.js';
+import { claudeState, followLog, parseLine, readFull, readPage, searchLog } from '../src/server/transcript.js';
 
 const items = (o: unknown, agent: 'claude' | 'codex' = 'claude') => parseLine(agent, JSON.stringify(o), 0).map(({ role, text, tool }) => ({ role, text, ...(tool ? { tool } : {}) }));
 const local = new Host({ id: 0, name: 'local', kind: 'local', address: '', port: 0, ssh_user: '', owner_id: null, created_at: 0 });
@@ -87,6 +87,33 @@ test('readPage: newest first page, older pages chain without gaps or duplicates'
   assert.equal(seen.length, 250);
   assert.deepEqual(seen.slice(0, 3), ['u0', 'a1', 'u2']);
   assert.equal(new Set(seen).size, 250);
+});
+
+test('searchLog: finds messages (not tool output), newest first, case-insensitive; readPage reads back to a hit', async () => {
+  const lines: unknown[] = [];
+  for (let i = 0; i < 200; i++) lines.push(i % 2 ? cc.assistant([{ type: 'text', text: `回复 ${i}` }]) : cc.user(`问题 ${i}`));
+  lines[10] = cc.user('部署到 4090 "Prod" 服务器');
+  lines[151] = cc.assistant([{ type: 'text', text: '已经部署好了（prod）' }, { type: 'tool_use', id: 't', name: 'Bash', input: { command: 'echo prod' } }]);
+  const f = writeLines('search.jsonl', lines);
+  const hits = await searchLog('claude', local, f, 'PROD');
+  assert.deepEqual(
+    hits.map((h) => [h.role, h.snippet]),
+    [
+      ['assistant', '已经部署好了（prod）'],
+      ['user', '部署到 4090 "Prod" 服务器'],
+    ],
+  );
+  assert.equal((await searchLog('claude', local, f, '"Prod"')).length, 1);
+  assert.deepEqual(await searchLog('claude', local, f, '没有这个'), []);
+  // the newest page doesn't reach line 10; `until` reads back far enough
+  const tail = await readPage('claude', local, f, null, 30);
+  const off = Number(hits[1].id.split(':')[0]);
+  assert.ok(off < tail.start);
+  const back = await readPage('claude', local, f, tail.start, 10, off);
+  assert.ok(back.items.some((i) => i.id === hits[1].id));
+  // and joins the page already shown without a gap
+  assert.equal(back.items[back.items.length - 1].text, '回复 169');
+  assert.equal(tail.items[0].text, '问题 170');
 });
 
 test('readPage: a line still being written is ignored; huge lines work', async () => {

@@ -33,7 +33,7 @@ import {
   type LiveSession,
 } from './sessions.js';
 import { claudeUsage } from './claude-usage.js';
-import { claudeState, followLog, readFull, readImage, readPage } from './transcript.js';
+import { claudeState, followLog, readFull, readImage, readPage, searchLog } from './transcript.js';
 import { changes, diff, fileSize, imageFile, insideCwd, listDir, readPart, search, streamFile, streamPart } from './files.js';
 import { shrink, thumbWidth } from './thumb.js';
 import { hostStats } from './stats.js';
@@ -273,11 +273,24 @@ route('GET', '/_tw/api/sessions/:id/messages', async (req, res, [id], url) => {
   if (!file || !live.host) return sendJson(req, res, 200, { items: [], start: 0, end: 0, hasMore: false, pending: row.agent !== 'bash' });
   const before = url.searchParams.has('before') ? Number(url.searchParams.get('before')) : null;
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit') || 30)));
+  const until = url.searchParams.has('until') ? Number(url.searchParams.get('until')) : null;
   try {
     // log: which conversation this is (a /clear starts a new log), so a client cache can tell
-    sendJson(req, res, 200, { ...(await readPage(row.agent, live.host, file, before, limit)), log: path.posix.basename(file) });
+    sendJson(req, res, 200, { ...(await readPage(row.agent, live.host, file, before, limit, until)), log: path.posix.basename(file) });
   } catch (e: any) {
     throw new HttpError(502, `读取对话记录失败：${e.message}`);
+  }
+});
+
+route('GET', '/_tw/api/sessions/:id/search', async (req, res, [id], url) => {
+  const { row, live } = sessionFor(requireUser(req), id, 'view');
+  const q = (url.searchParams.get('q') || '').slice(0, 200);
+  const file = row.agent === 'bash' ? null : await live.transcriptPath().catch(() => null);
+  if (!file || !live.host || !q.trim()) return sendJson(req, res, 200, { hits: [] });
+  try {
+    sendJson(req, res, 200, { hits: await searchLog(row.agent, live.host, file, q) });
+  } catch (e: any) {
+    throw new HttpError(502, `搜索失败：${e.message}`);
   }
 });
 

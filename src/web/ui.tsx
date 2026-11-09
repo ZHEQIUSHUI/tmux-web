@@ -49,6 +49,12 @@ export const Icon = {
       <path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18" />
     </svg>
   ),
+  search: () => (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="M16 16l4.5 4.5" />
+    </svg>
+  ),
   more: () => (
     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
       <circle cx="5" cy="12" r="1.8" />

@@ -232,6 +232,8 @@ export function parseLine(agent: Agent, line: string, offset: number, full = fal
 
 /** Bytes fetched per round trip. Latency to a host matters far more than bytes here. */
 const CHUNK = 256 * 1024;
+/** At most this many items when reading back to a search hit. */
+const UNTIL_MAX = 5000;
 
 export interface Page {
   items: ChatItem[];
@@ -267,8 +269,11 @@ class HostFile {
   }
 }
 
-/** Read backwards from `before` (or the end) until `limit` items are collected. */
-export async function readPage(agent: Agent, host: Host, file: string, before: number | null, limit: number): Promise<Page> {
+/**
+ * Read backwards from `before` (or the end) until `limit` items are collected, and further back
+ * as far as `until` if given (to jump to an older message found by a search).
+ */
+export async function readPage(agent: Agent, host: Host, file: string, before: number | null, limit: number, until: number | null = null): Promise<Page> {
   const f = new HostFile(host, file);
   const size = await f.tail();
   let end = Math.min(before ?? size, size);
@@ -293,7 +298,8 @@ export async function readPage(agent: Agent, host: Host, file: string, before: n
   let pos = end;
   // bytes [pos, pos + carry.length): the tail of a line that starts before pos
   let carry: Buffer = Buffer.alloc(0);
-  while (pos > 0 && count < limit) {
+  const more = () => count < limit || (until !== null && start > until && count < UNTIL_MAX);
+  while (pos > 0 && more()) {
     const from = Math.max(0, pos - CHUNK);
     const chunk = await f.read(from, pos);
     const buf = carry.length ? Buffer.concat([chunk, carry]) : chunk;
@@ -301,7 +307,7 @@ export async function readPage(agent: Agent, host: Host, file: string, before: n
     for (let i = buf.indexOf(0x0a); i !== -1; i = buf.indexOf(0x0a, i + 1)) nls.push(i);
     // line k ends at nls[k]; the first one is only complete when we are at the file start
     const firstComplete = from === 0 ? 0 : 1;
-    for (let k = nls.length - 1; k >= firstComplete && count < limit; k--) {
+    for (let k = nls.length - 1; k >= firstComplete && more(); k--) {
       const s = k === 0 ? 0 : nls[k - 1] + 1;
       start = from + s;
       const items = parseLine(agent, buf.subarray(s, nls[k]).toString('utf8'), start);
@@ -314,6 +320,45 @@ export async function readPage(agent: Agent, host: Host, file: string, before: n
     pos = from;
   }
   return { items: groups.reverse().flat(), start, end, hasMore: start > 0 };
+}
+
+/** A search hit: the message it is in, with a bit of text around the match. */
+export interface SearchHit {
+  id: string;
+  role: 'user' | 'assistant';
+  at?: number;
+  snippet: string;
+}
+
+/**
+ * Messages (yours and the agent's replies, not tool output) containing `query`, newest first.
+ * grep on the host finds the candidate lines, so a long log isn't fetched whole.
+ */
+export async function searchLog(agent: Agent, host: Host, file: string, query: string, limit = 50): Promise<SearchHit[]> {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  // as it is written inside the JSON line (quotes, backslashes, newlines escaped)
+  const raw = JSON.stringify(query.trim()).slice(1, -1);
+  // the newest few hundred matching lines; very long ones (tool output, images) are skipped
+  const out = await host.sh(`grep -b -F -i -- "$2" "$1" | tail -n 400 | awk 'length($0) < 400000'`, [file, raw]);
+  const hits: SearchHit[] = [];
+  const lines = out.toString('utf8').split('\n').reverse();
+  for (const line of lines) {
+    const colon = line.indexOf(':');
+    if (colon < 1) continue;
+    const items = parseLine(agent, line.slice(colon + 1), Number(line.slice(0, colon)), true);
+    for (const it of items.reverse()) {
+      if (it.role !== 'user' && it.role !== 'assistant') continue;
+      const text = it.text.replace(/\s+/g, ' ');
+      const at = text.toLowerCase().indexOf(needle);
+      if (at === -1) continue;
+      const from = Math.max(0, at - 30);
+      const to = Math.min(text.length, at + needle.length + 80);
+      hits.push({ id: it.id, role: it.role, ...(it.at ? { at: it.at } : {}), snippet: (from ? '…' : '') + text.slice(from, to) + (to < text.length ? '…' : '') });
+      if (hits.length >= limit) return hits;
+    }
+  }
+  return hits;
 }
 
 async function readLine(host: Host, file: string, offset: number): Promise<string> {

@@ -124,7 +124,7 @@ function Time({ at }: { at?: number }) {
   );
 }
 
-export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: ChatItem; onExpand: (it: ChatItem) => void; onRewind?: () => void }) {
+export function Message({ sid, it, hit, onExpand, onRewind }: { sid: number; it: ChatItem; hit?: boolean; onExpand: (it: ChatItem) => void; onRewind?: () => void }) {
   const [actions, setActions] = useState(false);
   const [md, setMd] = useState(true);
   const more = it.truncated && (
@@ -135,7 +135,7 @@ export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: Chat
   if (it.role === 'user') {
     return (
       // tap (phones) or hover (desktop) shows what can be done with your own message
-      <div class={`msg user ${actions ? 'show-actions' : ''}`} onClick={() => setActions((v) => !v)}>
+      <div class={`msg user ${actions ? 'show-actions' : ''}${hit ? ' hit' : ''}`} data-id={it.id} onClick={() => setActions((v) => !v)}>
         <div class="bubble">
           <ChatContent sid={sid} text={it.text} off={it.id.split(':')[0]} md={md} />
           {more}
@@ -170,7 +170,7 @@ export function Message({ sid, it, onExpand, onRewind }: { sid: number; it: Chat
   }
   if (it.role === 'meta') return <div class="msg meta">{it.text}</div>;
   return (
-    <div class="msg assistant">
+    <div class={`msg assistant${hit ? ' hit' : ''}`} data-id={it.id}>
       <Markdown sid={sid} id={it.id} text={it.text} />
       {more}
       <div class="msg-tools">
@@ -614,7 +614,147 @@ export function prefetchAll(list: SessionInfo[]): () => void {
 const sameState = (a: { status: Status; preview: string; error?: string; choices?: Choices | null; suggestion?: string }, b: typeof a) =>
   a.status === b.status && a.preview === b.preview && a.error === b.error && a.suggestion === b.suggestion && JSON.stringify(a.choices ?? null) === JSON.stringify(b.choices ?? null);
 
-export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; onOpenTerminal: () => void }) {
+interface SearchHit {
+  id: string;
+  role: 'user' | 'assistant';
+  at?: number;
+  snippet: string;
+}
+
+/** Search bar over this conversation's log: type, pick a result (or step with ↑ ↓) to jump to it. */
+function ChatSearch({ sid, onQuery, onPick, onClose }: { sid: number; onQuery: (q: string) => void; onPick: (id: string) => void; onClose: () => void }) {
+  const [q, setQ] = useState('');
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [cur, setCur] = useState(-1);
+  const [list, setList] = useState(true);
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => input.current?.focus(), []);
+  useEffect(() => {
+    const term = q.trim();
+    onQuery(term);
+    setCur(-1);
+    if (!term) return setHits(null);
+    let gone = false;
+    const t = setTimeout(() => {
+      setBusy(true);
+      api<{ hits: SearchHit[] }>('GET', `/_tw/api/sessions/${sid}/search?q=${encodeURIComponent(term)}`)
+        .then((r) => {
+          if (gone) return;
+          setHits(r.hits);
+          setErr('');
+          setList(true);
+        })
+        .catch((e) => !gone && setErr(e.message))
+        .finally(() => !gone && setBusy(false));
+    }, 300);
+    return () => {
+      gone = true;
+      clearTimeout(t);
+    };
+  }, [q, sid]);
+  const go = (i: number) => {
+    if (!hits?.[i]) return;
+    setCur(i);
+    setList(false);
+    onPick(hits[i].id);
+  };
+  const count = hits ? (hits.length ? `${cur >= 0 ? `${cur + 1}/` : ''}${hits.length}${hits.length >= 50 ? '+' : ''}` : '无结果') : busy ? '搜索中…' : '';
+  return (
+    <div class="chat-search">
+      <div class="cs-bar">
+        <Icon.search />
+        <input
+          ref={input}
+          type="search"
+          value={q}
+          placeholder="搜索这个会话的聊天记录"
+          enterKeyHint="search"
+          onInput={(e) => setQ((e.target as HTMLInputElement).value)}
+          onFocus={() => setList(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') onClose();
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              go(e.shiftKey ? Math.max(0, cur - 1) : Math.min((hits?.length ?? 0) - 1, cur + 1));
+            }
+          }}
+        />
+        {count && (
+          <button class="link cs-count" onClick={() => setList((v) => !v)} disabled={!hits?.length}>
+            {count}
+          </button>
+        )}
+        {/* results are newest first: ↑ goes further back */}
+        <button class="icon-btn" aria-label="更早的一条" disabled={!hits || cur >= hits.length - 1} onClick={() => go(cur + 1)}>
+          ↑
+        </button>
+        <button class="icon-btn" aria-label="更新的一条" disabled={!hits || cur <= 0} onClick={() => go(cur - 1)}>
+          ↓
+        </button>
+        <button class="icon-btn" aria-label="关闭搜索" onClick={onClose}>
+          ✕
+        </button>
+      </div>
+      {err && <div class="cs-err">{err}</div>}
+      {list && !!hits?.length && (
+        <ul class="cs-list">
+          {hits.map((h, i) => (
+            <li key={h.id} class={i === cur ? 'on' : ''} onClick={() => go(i)}>
+              <span class="cs-who">{h.role === 'user' ? '我' : 'AI'}</span>
+              <span class="cs-snip">
+                <Snippet text={h.snippet} q={q.trim()} />
+              </span>
+              <Time at={h.at} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** The snippet with each match marked. */
+function Snippet({ text, q }: { text: string; q: string }) {
+  if (!q) return <>{text}</>;
+  const parts: any[] = [];
+  const low = text.toLowerCase();
+  const needle = q.toLowerCase();
+  let i = 0;
+  for (let at = low.indexOf(needle); at !== -1; at = low.indexOf(needle, at + needle.length)) {
+    parts.push(text.slice(i, at), <mark key={at}>{text.slice(at, at + needle.length)}</mark>);
+    i = at + needle.length;
+  }
+  parts.push(text.slice(i));
+  return <>{parts}</>;
+}
+
+/** Marks every match inside the messages (CSS highlights: the DOM is left alone), where supported. */
+function useHighlight(root: { current: HTMLElement | null }, q: string, deps: unknown[]) {
+  useEffect(() => {
+    const reg = (globalThis as any).CSS?.highlights;
+    const H = (globalThis as any).Highlight;
+    if (!reg || !H) return;
+    if (!q || !root.current) return void reg.delete('tw-search');
+    const needle = q.toLowerCase();
+    const ranges: Range[] = [];
+    const walk = document.createTreeWalker(root.current, NodeFilter.SHOW_TEXT);
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      const low = (n.nodeValue || '').toLowerCase();
+      for (let at = low.indexOf(needle); at !== -1; at = low.indexOf(needle, at + needle.length)) {
+        const r = new Range();
+        r.setStart(n, at);
+        r.setEnd(n, at + needle.length);
+        ranges.push(r);
+      }
+    }
+    reg.set('tw-search', new H(...ranges));
+    return () => reg.delete('tw-search');
+  }, [q, ...deps]);
+}
+
+export function ChatView({ session, onOpenTerminal, search = false, onSearchClose }: { session: SessionInfo; onOpenTerminal: () => void; search?: boolean; onSearchClose?: () => void }) {
   // a cache that is behind is still shown at once, then brought up to date
   const cached = useMemo(() => chatCache.get(session.id), [session.id]);
   const current = useMemo(() => cacheUsable(cached, session.activityAt), [session.id]);
@@ -860,6 +1000,33 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
     }
   };
 
+  // search: the message to bring into view (older pages are loaded down to it first)
+  const [query, setQuery] = useState('');
+  const [hit, setHit] = useState<string | null>(null);
+  const jumpTo = useRef<string | null>(null);
+  useEffect(() => {
+    if (search) return;
+    setQuery('');
+    setHit(null);
+  }, [search]);
+  const jump = async (hitId: string) => {
+    const off = Number(hitId.split(':')[0]);
+    if (page?.hasMore && off < page.start) {
+      setLoadingOlder(true);
+      try {
+        const p = await api<Page>('GET', `/_tw/api/sessions/${id}/messages?before=${page.start}&limit=10&until=${off}`);
+        setItems((cur) => [...p.items, ...cur]);
+        setPage((pg) => ({ ...pg!, start: p.start, hasMore: p.hasMore }));
+      } catch (e: any) {
+        return setError(e.message);
+      } finally {
+        setLoadingOlder(false);
+      }
+    }
+    jumpTo.current = hitId;
+    setHit(hitId);
+  };
+
   // keep the view pinned to the bottom unless the user scrolled up; keep position when prepending
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -871,7 +1038,15 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
       el.scrollTop = anchor.current.top + (el.scrollHeight - anchor.current.height);
       anchor.current = null;
     } else if (stick.current) el.scrollTop = el.scrollHeight;
-  }, [items, pending, state.preview, state.status]);
+    if (jumpTo.current) {
+      const target = el.querySelector(`[data-id="${jumpTo.current}"]`);
+      jumpTo.current = null;
+      if (target) {
+        stick.current = false;
+        target.scrollIntoView({ block: 'center' });
+      }
+    }
+  }, [items, pending, state.preview, state.status, hit]);
 
   // new at the bottom while reading further up (older ones prepended don't count)
   const lastId = items[items.length - 1]?.id;
@@ -902,14 +1077,17 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
   };
 
   const blocks = useMemo(() => groupItems(items), [items]);
+  const messages = useRef<HTMLDivElement>(null);
+  useHighlight(messages, search ? query : '', [blocks]);
   const live = (state.status === 'busy' || state.status === 'waiting') && state.preview;
 
   return (
     <div class="chat">
       {isClaude && <ClaudeBar st={claude} usage={usage} update={update} restart={restart} onOpen={() => setPanel(true)} onRestart={session.access === 'control' ? restartClaude : undefined} />}
       {panel && <ClaudePanel st={claude} usage={usage} canControl={session.access === 'control'} onClose={() => setPanel(false)} run={runCommand} sendKeys={sendKeys} onRestart={restartClaude} />}
+      {search && <ChatSearch sid={id} onQuery={setQuery} onPick={jump} onClose={() => onSearchClose?.()} />}
       <div class="scroller" ref={scroller} onScroll={onScroll}>
-        <div class="messages">
+        <div class="messages" ref={messages}>
           {page?.hasMore && (
             <button class="older" onClick={loadOlder} disabled={loadingOlder}>
               {loadingOlder ? '加载中…' : '加载更早的消息'}
@@ -919,7 +1097,7 @@ export function ChatView({ session, onOpenTerminal }: { session: SessionInfo; on
             <div class="empty">{session.agent === 'bash' ? 'Shell 会话没有对话记录，请切换到「终端」。' : page.pending ? '还没有对话。在下方输入开始。' : '没有消息'}</div>
           )}
           {!page && !error && <div class="empty">加载中…</div>}
-          {blocks.map((b) => (b.kind === 'tools' ? <ToolGroup key={b.items[0].id} sid={id} items={b.items} onExpand={expand} /> : <Message key={b.it.id} sid={id} it={b.it} onExpand={expand} onRewind={canRewind ? rewind : undefined} />))}
+          {blocks.map((b) => (b.kind === 'tools' ? <ToolGroup key={b.items[0].id} sid={id} items={b.items} onExpand={expand} /> : <Message key={b.it.id} sid={id} it={b.it} hit={b.it.id === hit} onExpand={expand} onRewind={canRewind ? rewind : undefined} />))}
           {pending.map((p) => (
             <div key={p.key} class={`msg user pending${p.lost ? ' lost' : ''}`}>
               <div class="bubble">
