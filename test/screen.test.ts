@@ -36,6 +36,11 @@ test('permission prompt is "waiting"', async () => {
 test('update notice above the input box', async () => {
   const s = await screen(['                     ✔ Update installed · Restart to update', SEP, '❯ ', SEP, '  ⏵⏵ auto mode on']);
   assert.equal(s.analyze().update, true);
+  // newer Claude Code, also on the footer line itself
+  const n = await screen(['                     ✔ Update installed · /restart to apply', SEP, '❯ ', SEP, '  ⏵⏵ auto mode on']);
+  assert.equal(n.analyze().update, true);
+  const f = await screen([SEP, '❯ ', SEP, '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent  ✔ Update installed · /restart to apply']);
+  assert.equal(f.analyze().update, true);
   // talking about it in the conversation is not a notice
   const t = await screen(['❯ the docs say restart to update', '● ok', SEP, '❯ ', SEP, '  ⏵⏵ auto mode on']);
   assert.equal(t.analyze().update, false);

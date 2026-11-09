@@ -218,9 +218,9 @@ export class Screen {
     // Claude Code's footer shows the live permission mode ("⏵⏵ auto mode on", "⏸ plan mode on", ...)
     const footer = lines.slice(-4).join('\n');
     const mode = MODES.find(([re]) => re.test(footer))?.[1] ?? '';
-    // "✔ Update installed · Restart to update" in the footer: a new version is waiting
-    // (shown just above the input box, so look a bit higher than the footer)
-    const update = /(Update installed|·)\s*·?\s*Restart to (update|apply)/i.test(lines.slice(-8).join('\n'));
+    // "✔ Update installed · Restart to update" (newer: "· /restart to apply") in the footer: a new
+    // version is waiting (shown just above the input box, so look a bit higher than the footer)
+    const update = /(Update installed|·)\s*·?\s*\/?Restart to (update|apply)/i.test(lines.slice(-8).join('\n'));
     const choices = findChoices(lines);
     const bottom = lines.filter((l) => l.trim()).slice(-3).join('\n');
     const waiting = choices !== null || PLAIN_CONFIRM.test(bottom);
