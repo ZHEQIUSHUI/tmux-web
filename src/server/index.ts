@@ -268,7 +268,7 @@ route('POST', '/_tw/api/sessions/:id/restart', async (req, res, [id]) => {
 
 route('GET', '/_tw/api/sessions/:id/messages', async (req, res, [id], url) => {
   const { row, live } = sessionFor(requireUser(req), id, 'view');
-  await live.syncClaudeSession();
+  await live.syncAgentSession();
   const file = row.agent === 'bash' ? null : await live.transcriptPath().catch(() => null);
   if (!file || !live.host) return sendJson(req, res, 200, { items: [], start: 0, end: 0, hasMore: false, pending: row.agent !== 'bash' });
   const before = url.searchParams.has('before') ? Number(url.searchParams.get('before')) : null;
@@ -501,7 +501,7 @@ route('GET', '/_tw/api/sessions/:id/claude-usage', async (req, res, [id]) => {
 route('GET', '/_tw/api/sessions/:id/claude-state', async (req, res, [id]) => {
   const { row, live } = sessionFor(requireUser(req), id, 'view');
   if (row.agent !== 'claude') return sendJson(req, res, 200, null);
-  await live.syncClaudeSession();
+  await live.syncAgentSession();
   const file = await live.transcriptPath().catch(() => null);
   if (!file || !live.host) return sendJson(req, res, 200, { mode: live.mode });
   try {
@@ -527,10 +527,10 @@ function followSession(row: SessionRow, live: LiveSession, offset: number, log: 
   let following: string | null = null;
   let closed = false;
   const onState = (st: unknown) => send('state', st);
-  // the agent may switch conversations (/clear): then the page has to start over from the new log
+  // the agent may switch conversations (/clear, Codex's /new): then the page starts over from the new log
   const watchSwitch = setInterval(async () => {
     if (!following) return;
-    await live.syncClaudeSession();
+    await live.syncAgentSession();
     const file = await live.transcriptPath().catch(() => null);
     if (file && file !== following) send('reset', 0);
   }, 10000);

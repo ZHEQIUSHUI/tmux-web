@@ -414,14 +414,37 @@ export class LiveSession extends EventEmitter {
   }
 
   /**
-   * Claude Code switches to a new session id on /clear and some resumes. Ask the claude process
-   * in the pane which conversation it is on (~/.claude/sessions/<pid>.json) and follow it.
+   * The agent may switch to another conversation in the same pane: Claude Code on /clear and some
+   * resumes, Codex on /new and /resume. Follow it.
    */
-  async syncClaudeSession(): Promise<void> {
+  async syncAgentSession(): Promise<void> {
     const r = this.row;
     const host = this.host;
-    if (r.agent !== 'claude' || !host || !this.stream) return;
+    if (!host || !this.stream) return;
     const t = this.target;
+    if (r.agent === 'codex') {
+      // Codex keeps the logs of the conversations it has had open (/new leaves the old one open
+      // too): the one written last is the current one. Linux only (/proc); elsewhere it stays put.
+      const file = (
+        await host
+          .shText(
+            `pp=$(tmux -L "$1" display-message -p -t "=$2:" '#{pane_pid}' 2>/dev/null) || exit 0; ` +
+              `for p in $pp $(pgrep -P "$pp" 2>/dev/null) $(for c in $(pgrep -P "$pp" 2>/dev/null); do pgrep -P "$c"; done); do ` +
+              `for f in /proc/$p/fd/*; do l=$(readlink "$f" 2>/dev/null) || continue; ` +
+              `case "$l" in */rollout-*.jsonl) printf '%s\t%s\n' "$(stat -c %Y "$l" 2>/dev/null)" "$l";; esac; done; done | sort | tail -n 1 | cut -f2`,
+            [t.socket, t.name],
+          )
+          .catch(() => '')
+      ).trim();
+      const id = /-([0-9a-f-]{36})\.jsonl$/.exec(file)?.[1];
+      if (id && file !== r.transcript_path) {
+        q.setTranscript.run(id, file, r.id);
+        r.agent_session_id = id;
+        r.transcript_path = file;
+      }
+      return;
+    }
+    if (r.agent !== 'claude') return;
     const id = (
       await host
         .shText(
