@@ -6,7 +6,7 @@ import { TmuxBackend } from './backend/tmux.js';
 import type { PaneStream, PaneTarget, SessionBackend } from './backend/types.js';
 import { getHost, shq, type Host } from './host.js';
 import { SCROLLBACK, Screen, type AgentStatus, type Choices } from './screen.js';
-import { claudeTranscript, codexTranscript, codexUserText, findCodexRollout } from './transcript.js';
+import { claudeTranscript, codexThreadOf, codexTranscript, codexUserText, findCodexRollout } from './transcript.js';
 
 export const backend: SessionBackend = new TmuxBackend();
 
@@ -424,7 +424,8 @@ export class LiveSession extends EventEmitter {
     const t = this.target;
     if (r.agent === 'codex') {
       // Codex keeps the logs of the conversations it has had open (/new leaves the old one open
-      // too): the one written last is the current one. Linux only (/proc); elsewhere it stays put.
+      // too): the one written last is the current one. A long conversation also goes on in a new
+      // part (same thread). Linux only (/proc); elsewhere it stays put.
       const file = (
         await host
           .shText(
@@ -436,7 +437,7 @@ export class LiveSession extends EventEmitter {
           )
           .catch(() => '')
       ).trim();
-      const id = /-([0-9a-f-]{36})\.jsonl$/.exec(file)?.[1];
+      const id = codexThreadOf(file);
       if (id && file !== r.transcript_path) {
         q.setTranscript.run(id, file, r.id);
         r.agent_session_id = id;
@@ -1031,7 +1032,7 @@ export function parseCodexHistory(out: string): CodexHistory[] {
       section = '';
       const [, file, stat] = line.split('\t');
       const [mtime, size] = (stat || '').split(' ').map(Number);
-      const id = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/.exec(file || '')?.[1];
+      const id = codexThreadOf(file || '');
       if (id) cur = { id, cwd: '', title: '', lastPrompt: '', mtime: mtime * 1000, size };
       continue;
     }
@@ -1074,7 +1075,9 @@ export function parseCodexHistory(out: string): CodexHistory[] {
     const prompt = prompts.get(h.id);
     if (prompt) h.lastPrompt = prompt;
   }
-  return list.sort((a, b) => b.mtime - a.mtime);
+  // a long conversation has several parts: list it once, as of its latest
+  const seen = new Set<string>();
+  return list.sort((a, b) => b.mtime - a.mtime).filter((h) => !seen.has(h.id) && !!seen.add(h.id));
 }
 
 const codexHistoryCache = new Map<number, { at: number; list: Promise<CodexHistory[]> }>();

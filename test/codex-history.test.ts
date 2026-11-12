@@ -79,3 +79,40 @@ test('a Codex pane gets the rollout it started, not an older one still being wri
   assert.equal(pickCodexRollout([c('a', '2026-10-29T01:00:00Z'), c('b', '2026-10-29T03:00:00Z')], pane)?.name, 'b');
   assert.equal(pickCodexRollout([c('before', '2026-10-28T11:42:29Z')], pane), null);
 });
+
+test('a long Codex conversation goes on in a new part: same thread, the newest part is read', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { tmp } = await import('./helpers.js');
+  const { Host } = await import('../src/server/host.js');
+  const { codexThreadOf, codexTranscript } = await import('../src/server/transcript.js');
+  const thread = '01a1b363-8c3c-72b3-a9de-9eac8e1a9dbf';
+  const first = `rollout-2026-11-07T08-23-28-${thread}.jsonl`;
+  const part = `rollout-2026-11-11T18-36-06-${thread}_01a1ca2d-e1aa-73f0-99b0-024766f6e9d2.jsonl`;
+  assert.equal(codexThreadOf(`/x/${first}`), thread);
+  assert.equal(codexThreadOf(`/x/${part}`), thread);
+  assert.equal(codexThreadOf('/x/notes.jsonl'), null);
+
+  const home = path.join(tmp, 'codex-home');
+  const dir = path.join(home, '.codex/sessions/2026/11/11');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, first), '{}\n');
+  fs.utimesSync(path.join(dir, first), 1000, 1000);
+  fs.writeFileSync(path.join(dir, part), '{}\n');
+  const oldHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const local = new Host({ id: 0, name: 'local', kind: 'local', address: '', port: 0, ssh_user: '', owner_id: null, created_at: 0 });
+    assert.equal(await codexTranscript(local, thread), path.join(dir, part));
+  } finally {
+    process.env.HOME = oldHome;
+  }
+
+  // the history list shows the conversation once
+  const meta = JSON.stringify({ type: 'session_meta', payload: { id: thread, cwd: '/w' } });
+  const out = [`F\t/s/${first}\t1000 10`, meta, `F\t/s/${part}\t2000 20`, meta].join('\n');
+  assert.deepEqual(
+    parseCodexHistory(out).map((h) => [h.id, h.mtime]),
+    [[thread, 2000000]],
+  );
+});

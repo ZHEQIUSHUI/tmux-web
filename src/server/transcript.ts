@@ -422,10 +422,20 @@ export async function claudeTranscript(host: Host, sessionId: string): Promise<s
 }
 
 /** Codex rollout for a known session id (the file name ends with the id). */
+/**
+ * The conversation (thread) a Codex log belongs to, from its name: `rollout-<time>-<thread>.jsonl`,
+ * or a later part of a long conversation: `rollout-<time>-<thread>_<part>.jsonl`.
+ */
+export function codexThreadOf(file: string): string | null {
+  return /rollout-.*?-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_[0-9a-f-]{36})?\.jsonl$/.exec(file)?.[1] ?? null;
+}
+
+/** The log a Codex conversation is written to now: its newest part. */
 export async function codexTranscript(host: Host, sessionId: string): Promise<string | null> {
   if (!/^[0-9a-f-]{36}$/.test(sessionId)) return null;
   const out = await host.shText(
-    `d="$HOME/.codex/sessions"; [ -d "$d" ] || exit 0; find "$d" -type f -name "*-$1.jsonl" 2>/dev/null | head -n 1; true`,
+    `d="$HOME/.codex/sessions"; [ -d "$d" ] || exit 0; ` +
+      `f=$(find "$d" -type f \\( -name "*-$1.jsonl" -o -name "*-$1_*.jsonl" \\) 2>/dev/null); [ -n "$f" ] && ls -t $f | head -n 1; true`,
     [sessionId],
   );
   return out.trim() || null;
@@ -450,7 +460,8 @@ export async function findCodexRollout(host: Host, cwd: string, since: number, c
     const tab = line.indexOf('\t');
     if (tab === -1) continue;
     const file = line.slice(0, tab);
-    if (claimed.has(file)) continue;
+    // a later part of a conversation already going is not one just started
+    if (claimed.has(file) || /_[0-9a-f-]{36}\.jsonl$/.test(file)) continue;
     try {
       const meta = JSON.parse(line.slice(tab + 1));
       const p = meta.payload ?? {};
