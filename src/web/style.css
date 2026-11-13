@@ -2523,6 +2523,20 @@ a.btn {
   max-width: 100%;
   height: auto;
 }
+.mermaid-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.mermaid-bar details {
+  flex: 1;
+  min-width: 0;
+}
+.mermaid-save {
+  font-size: 12px;
+  margin-top: 4px;
+  flex: none;
+}
 .mermaid-block details summary {
   cursor: pointer;
   font-size: 12px;
