@@ -316,18 +316,27 @@ export function ClaudeBar({ st, usage, update, restart = '', onOpen, onRestart }
           class={`cbar-update ${restart}`}
           onClick={onRestart}
           disabled={restart === 'run'}
-          title={restart === 'run' ? '正在重启 Claude，对话会接着继续' : 'Claude Code 已更新，重启后生效（对话会接着继续）'}
+          title={
+            restart === 'run' ? '正在重启 Claude，对话会接着继续' : restart === 'fail' ? '重启失败，可以再点一次' : 'Claude Code 有新版本：点一下重启生效（对话会接着继续）'
+          }
+          aria-label="重启 Claude 以更新"
         >
+          {/* short: the bar is narrow on phones; the tooltip says the rest */}
           {restart === 'run' ? (
             <>
-              <span class="spinner cbar-spin" /> 重启中…
+              <span class="spinner cbar-spin" /> 重启
             </>
           ) : restart === 'done' ? (
-            '✓ 已重启'
+            '✓ 好了'
           ) : restart === 'fail' ? (
-            '重启失败'
+            '失败'
           ) : (
-            '有新版本 · 重启'
+            <>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5" />
+              </svg>
+              更新
+            </>
           )}
         </button>
       )}
