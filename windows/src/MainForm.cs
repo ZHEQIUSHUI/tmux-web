@@ -223,6 +223,7 @@ namespace TmuxWeb
         return;
       }
       foreach (var c in conns.Values) c.tunnel.Stop();
+      ShareService.Stop();
       tray.Visible = false;
     }
 
@@ -617,6 +618,7 @@ namespace TmuxWeb
         version = Updater.Current,
         update = UpdateOffer,
         easyTier = EasyTierCore.Executable != null,
+        share = ShareService.Info,
       });
     }
 
@@ -719,6 +721,57 @@ namespace TmuxWeb
           case "link": Browser(S(m, "url")); break;
           case "openLog": if (File.Exists(Log.FilePath)) Process.Start("notepad.exe", "\"" + Log.FilePath + "\""); break;
           case "quit": Quit(); break;
+          case "shareStart":
+            {
+              var ps = ((System.Collections.IEnumerable)m["profiles"]).OfType<string>().ToList();
+              var ks = ((System.Collections.IEnumerable)m["keys"]).OfType<string>().ToList();
+              var port = m.TryGetValue("port", out var po) && po is int pi ? pi : 0;
+              var t = ShareService.Start(ps, ks, S(m, "passphrase") ?? "", S(m, "password") ?? "", port);
+              Publish();
+              await t;
+              Publish();
+              break;
+            }
+          case "shareStop": ShareService.Stop(); Publish(); break;
+          case "shareFetch":
+            {
+              try
+              {
+                Dictionary<string, object> payload = null;
+                var link = ShareLink.Parse(S(m, "link"));
+                if (link != null)
+                {
+                  Exception last = new ShareError("链接里没有地址");
+                  foreach (var h in link.hosts)
+                  {
+                    try { payload = await ShareImport.Fetch(h, link.port, link.password, link.hosts.Count > 1 ? 4000 : 12000); break; }
+                    catch (ShareError e) when (e.Message.StartsWith("连不上")) { last = e; }
+                  }
+                  if (payload == null) throw last;
+                }
+                else
+                {
+                  var port = m.TryGetValue("port", out var po) && po is int pi ? pi : ShareProtocol.DefaultPort;
+                  var (h, p) = ShareImport.Target(S(m, "host"), port);
+                  payload = await ShareImport.Fetch(h, p, S(m, "password") ?? "", 12000);
+                }
+                var text = ShareImport.Merge(payload);
+                Publish();
+                StartProbing();
+                Reply(req, new { ok = true, text });
+              }
+              catch (ShareError e) { Reply(req, new { error = e.Message }); }
+              break;
+            }
+          case "randomPassword": Reply(req, ShareProtocol.RandomPassword()); break;
+          case "copy": Clipboard.SetText(S(m, "text") ?? ""); break;
+          case "forgetHostKey":
+            {
+              var target = S(m, "target") ?? "";
+              var port = m.TryGetValue("port", out var po) && po is int pi ? pi : 22;
+              Reply(req, await Task.Run(() => ForgetHostKey(target, port)));
+              break;
+            }
         }
       }
       catch (Exception e)
@@ -726,6 +779,27 @@ namespace TmuxWeb
         Log.Write("op " + op + ": " + e);
         if (req != null) Reply(req, new { error = e.Message });
       }
+    }
+
+    /// the server's remembered host key goes (it was reinstalled): the next connection takes the new one
+    static object ForgetHostKey(string target, int port)
+    {
+      var t = target.Trim();
+      if (t.Length == 0) return new { error = "先填 SSH 目标" };
+      var d = Prober.Destination(t, port);
+      var keygen = Ssh.Tool("ssh-keygen.exe");
+      if (keygen == null) return new { error = "没有找到 ssh-keygen.exe" };
+      var names = new List<string> { d.host };
+      if (d.port != 22) names.Add("[" + d.host + "]:" + d.port);
+      var removed = 0;
+      foreach (var n in names)
+      {
+        var o = Ssh.Run(keygen, new[] { "-R", n }, 5000);
+        if (o != null && o.Contains("updated")) removed++;
+      }
+      return removed > 0
+        ? (object)new { text = "已忘记 " + d.host + " 的主机密钥，下次连接时记住新的" }
+        : new { text = "没有记录过 " + d.host + " 的主机密钥" };
     }
 
     Point Pt(Dictionary<string, object> m)
@@ -775,6 +849,7 @@ namespace TmuxWeb
       if (conns.Count > 1) m.Items.Add(Item("断开全部（" + conns.Count + " 台）", () => { foreach (var k in conns.Keys.ToList()) Disconnect(k); }));
       m.Items.Add(new ToolStripSeparator());
       m.Items.Add(Item("私钥…", () => Send(new { type = "keys" })));
+      m.Items.Add(Item("共享配置…", () => Send(new { type = "share" })));
       m.Items.Add(Item("检查更新…", () => Updater.Check(this, c?.loadedBase, true)));
       m.Items.Add(Item("查看日志", () => { if (File.Exists(Log.FilePath)) Process.Start("notepad.exe", "\"" + Log.FilePath + "\""); }));
       m.Items.Add(new ToolStripSeparator());
@@ -798,6 +873,7 @@ namespace TmuxWeb
       m.Font = new Font("Microsoft YaHei UI", 9f);
       m.Items.Add(Item("显示 tmux-web", BringBack));
       m.Items.Add(Item("全部服务器", () => { BringBack(); GoHome(); }));
+      m.Items.Add(Item(ShareService.Server != null ? "共享配置（正在共享）…" : "共享配置…", () => { BringBack(); Send(new { type = "share" }); }));
       var used = Store.Sorted.Where(p => conns.ContainsKey(p.id)).ToList();
       if (used.Count > 0) m.Items.Add(new ToolStripSeparator());
       foreach (var p in used)

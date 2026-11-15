@@ -45,7 +45,7 @@ namespace TmuxWeb
     }
 
     /// where ssh would really go: ~/.ssh/config may rename the host, change the port or jump
-    static (string host, int port, bool jump) Destination(string target, int port)
+    public static (string host, int port, bool jump) Destination(string target, int port)
     {
       var host = target.Contains("@") ? target.Substring(target.LastIndexOf('@') + 1) : target;
       var prt = port;

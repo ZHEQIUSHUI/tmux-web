@@ -71,7 +71,9 @@ namespace TmuxWeb
         Dictionary<string, object> info = null;
         string from = null;
         if (server != null) { info = await Json(server + "/_tw/api/app/version.json", 15000); if (info != null) from = server; }
-        if (info == null) info = await Race(Proxies.Select(p => p + Github + "version.json"));
+        if (info == null)
+          info = await Race(Proxies.Select(p => (Func<Task<Dictionary<string, object>>>)(() => Json(p + Github + "version.json", 20000)))
+            .Concat(GhcrHosts.Select(h => (Func<Task<Dictionary<string, object>>>)(() => GhcrVersion(h)))));
         if (info == null)
         {
           if (asked) Say(form, "failed", "服务器、GitHub 和镜像都没取到版本信息，稍后再试。");
@@ -126,11 +128,21 @@ namespace TmuxWeb
         Say(form, "downloading", "0");
         var urls = new List<string>();
         if (o.server != null) urls.Add(o.server + "/_tw/api/app/download/" + Uri.EscapeDataString(o.file));
-        urls.AddRange(Proxies.Select(p => p + Github + o.file));
+        // GitHub's proxies, GitHub, and the release in GHCR (Nanjing University's mirror first)
+        urls.Add(Proxies[0] + Github + o.file);
+        if (!string.IsNullOrEmpty(o.sha256)) urls.AddRange(GhcrHosts.Select(h => "ghcr:" + h));
+        urls.AddRange(Proxies.Skip(1).Select(p => p + Github + o.file));
         byte[] data = null;
         foreach (var u in urls)
         {
-          data = await Download(u, o.size, pct => Say(form, "downloading", pct.ToString()));
+          string token = null, url = u;
+          if (u.StartsWith("ghcr:"))
+          {
+            token = await GhcrToken();
+            if (token == null) continue;
+            url = "https://" + u.Substring(5) + "/v2/" + Image + "/blobs/sha256:" + o.sha256;
+          }
+          data = await Download(url, o.size, pct => Say(form, "downloading", pct.ToString()), token);
           if (data == null) continue;
           var sha = Hex(SHA256.Create().ComputeHash(data));
           if (string.IsNullOrEmpty(o.sha256) || sha == o.sha256) break;
@@ -214,25 +226,48 @@ namespace TmuxWeb
 
     static string Hex(byte[] b) => string.Concat(b.Select(x => x.ToString("x2")));
 
-    static async Task<Dictionary<string, object>> Json(string url, int timeoutMs)
+    static async Task<Dictionary<string, object>> Json(string url, int timeoutMs, string bearer = null, string accept = null, bool needVersion = true)
     {
       try
       {
         using (var c = new TimedClient(timeoutMs))
         {
+          if (bearer != null) c.Headers[HttpRequestHeader.Authorization] = "Bearer " + bearer;
+          if (accept != null) c.Headers[HttpRequestHeader.Accept] = accept;
           var t = c.DownloadDataTaskAsync(url);
           if (await Task.WhenAny(t, Task.Delay(timeoutMs)) != t) { c.CancelAsync(); return null; }
           var d = Store.Json.DeserializeObject(Encoding.UTF8.GetString(await t).TrimStart('\uFEFF')) as Dictionary<string, object>;
-          return d != null && d.ContainsKey("version") ? d : null;
+          return d != null && (!needVersion || d.ContainsKey("version")) ? d : null;
         }
       }
       catch { return null; }
     }
 
-    /// version.json from everywhere at once: the first good answer
-    static async Task<Dictionary<string, object>> Race(IEnumerable<string> urls)
+    /// the release as an OCI artifact (CI pushes it): version.json in the manifest, the files as blobs
+    const string Image = "zheqiushui/tmux-web-app";
+    static readonly string[] GhcrHosts = { "ghcr.nju.edu.cn", "ghcr.io" };
+
+    static async Task<string> GhcrToken()
     {
-      var tasks = urls.Select(u => Json(u, 20000)).ToList();
+      var d = await Json("https://ghcr.io/token?service=ghcr.io&scope=repository:" + Image + ":pull", 10000, null, null, false);
+      return d != null && d.TryGetValue("token", out var t) ? t as string : null;
+    }
+
+    static async Task<Dictionary<string, object>> GhcrVersion(string host)
+    {
+      var token = await GhcrToken();
+      if (token == null) return null;
+      var m = await Json("https://" + host + "/v2/" + Image + "/manifests/latest", 15000, token, "application/vnd.oci.image.manifest.v1+json", false);
+      var ann = m != null && m.TryGetValue("annotations", out var a) ? a as Dictionary<string, object> : null;
+      var v = ann != null && ann.TryGetValue("tw.version", out var x) ? x as string : null;
+      if (v == null) return null;
+      try { var d = Store.Json.DeserializeObject(v) as Dictionary<string, object>; return d != null && d.ContainsKey("version") ? d : null; } catch { return null; }
+    }
+
+    /// version.json from everywhere at once: the first good answer
+    static async Task<Dictionary<string, object>> Race(IEnumerable<Func<Task<Dictionary<string, object>>>> sources)
+    {
+      var tasks = sources.Select(f => f()).ToList();
       while (tasks.Count > 0)
       {
         var done = await Task.WhenAny(tasks);
@@ -242,12 +277,13 @@ namespace TmuxWeb
       return null;
     }
 
-    static async Task<byte[]> Download(string url, long size, Action<int> progress)
+    static async Task<byte[]> Download(string url, long size, Action<int> progress, string bearer = null)
     {
       try
       {
         using (var c = new TimedClient(30000))
         {
+          if (bearer != null) c.Headers[HttpRequestHeader.Authorization] = "Bearer " + bearer;
           var last = -1;
           c.DownloadProgressChanged += (s, e) =>
           {

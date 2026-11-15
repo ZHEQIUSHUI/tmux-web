@@ -392,3 +392,28 @@ select.field { padding-right: 4px; }
   .frow { flex-direction: column; gap: 6px; }
   .frow > label { width: auto; }
 }
+
+/* ---------- sharing */
+.seg { display: flex; gap: 4px; margin: 12px 22px 0; padding: 3px; border-radius: 8px; background: var(--hover); }
+.seg button { flex: 1; height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--dim); }
+.seg button.on { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
+.box.pad { padding: 14px; display: flex; flex-direction: column; gap: 6px; }
+.box.pad .frow { padding: 8px 0; }
+.sel-list { display: flex; flex-direction: column; margin-top: 6px; }
+.sel { display: flex; align-items: center; gap: 11px; border: 0; background: transparent; text-align: left; padding: 7px 4px; border-radius: 6px; }
+.sel + .sel { border-top: 1px solid var(--line); border-radius: 0; }
+.sel:hover { background: var(--hover); }
+.sel .avatar.sm { width: 26px; height: 26px; font-size: 12px; border-radius: 7px; }
+.sel .kic { border-radius: 7px; background: color-mix(in srgb, #e07400 15%, transparent); color: #e07400; display: flex; align-items: center; justify-content: center; flex: none; }
+.sel-t { display: flex; flex-direction: column; min-width: 0; }
+.sel-t b { font-weight: 500; font-size: 13.5px; }
+.sel-t span { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.check { width: 18px; height: 18px; flex: none; border-radius: 4px; border: 1.5px solid var(--line2); display: flex; align-items: center; justify-content: center; color: var(--accent-text); }
+.check.on { background: var(--accent); border-color: var(--accent); }
+.share-ok { display: flex; align-items: center; gap: 9px; font-size: 15px; }
+.share-ok > span:first-child { display: flex; }
+.qr-row { display: flex; gap: 18px; align-items: center; }
+.qr { background: #fff; padding: 10px; border-radius: 10px; flex: none; line-height: 0; box-shadow: var(--shadow); }
+.qr-text { display: flex; flex-direction: column; gap: 8px; }
+.addrs { background: var(--hover); border-radius: 9px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.addr { display: flex; align-items: center; justify-content: space-between; gap: 10px; }

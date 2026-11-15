@@ -43,6 +43,7 @@ const I = {
   warn: '<svg width="18" height="18" viewBox="0 0 16 16"><path d="M8 1.5 15 14H1z" fill="currentColor"/><path d="M8 6v3.6" stroke="var(--bg)" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.8" r=".9" fill="var(--bg)"/></svg>',
   errDot: '<svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M8 4.5v4.2" stroke="var(--bg)" stroke-width="1.7" stroke-linecap="round"/><circle cx="8" cy="11.3" r="1" fill="var(--bg)"/></svg>',
   minus: '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="6.2"/><path d="M5 8h6" stroke-linecap="round"/></svg>',
+  share: '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 10V2M5 4.8 8 2l3 2.8"/><path d="M4.5 7H3.5v7h9V7h-1"/></svg>',
   bolt: '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9 1 3 9h4l-1 6 6-8H8z"/></svg>',
   network: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="7.5"/><path d="M2.5 10h15M10 2.5c2.3 2.2 3.3 4.7 3.3 7.5s-1 5.3-3.3 7.5c-2.3-2.2-3.3-4.7-3.3-7.5S7.7 4.7 10 2.5z"/></svg>',
   link: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8.5 11.5a3.5 3.5 0 0 0 5 0l2.5-2.5a3.5 3.5 0 0 0-5-5l-1 1"/><path d="M11.5 8.5a3.5 3.5 0 0 0-5 0L4 11a3.5 3.5 0 0 0 5 5l1-1"/></svg>',
@@ -104,7 +105,7 @@ function explain(raw, direct, easyTier) {
   if (t.includes('could not resolve') || t.includes('找不到主机') || t.includes('no such host')) return ['找不到这台主机', '检查地址有没有拼错；用 EasyTier 等组网的话，确认它已经连上。'];
   if (t.includes('timed out') || t.includes('超时')) return ['连接超时', '服务器没有响应：检查网络、地址和端口，或者防火墙是不是挡住了。'];
   if (t.includes('connection refused') || t.includes('拒绝连接')) return [direct ? '服务器拒绝连接' : 'SSH 端口拒绝连接', direct ? '确认 tmux-web 正在运行，端口填对了。' : '确认 SSH 端口填对了，sshd 正在运行。'];
-  if (t.includes('host key') || t.includes('identification has changed')) return ['服务器的主机密钥变了', '服务器重装过的话，在命令行运行 ssh-keygen -R <主机> 删掉旧记录后重试；否则可能有人冒充这台服务器。'];
+  if (t.includes('host key') || t.includes('identification has changed')) return ['服务器的主机密钥变了', '服务器重装过的话，在「编辑服务器 → 高级」里点「忘记主机密钥」后重试；否则可能有人冒充这台服务器。'];
   if (t.includes('已被占用')) return ['本地端口被占用', '换一个本地端口（编辑服务器 → 高级），或者关掉占用它的程序。'];
   if (t.includes('forwarding') || t.includes('open failed') || t.includes('administratively prohibited')) return ['端口转发失败', 'SSH 登录成功了，但转发不到 tmux-web：检查「服务器上 tmux-web 的端口」，以及服务器是否允许端口转发（AllowTcpForwarding）。'];
   if (t.includes('网页加载失败')) return ['网页没有打开', '连接已经建立，但页面加载失败：确认 tmux-web 正在运行，然后重试。'];
@@ -221,6 +222,7 @@ function renderHome(m) {
       <div class="grow"></div>
       <label class="search">${I.search}<input id="q" placeholder="搜索名称或地址" value="${esc(query)}" spellcheck="false">${query ? `<button class="eye" data-clear style="width:20px;height:20px">${I.x}</button>` : ''}</label>
       <button class="btn" data-keys title="私钥统一登记在这里，多台服务器可以共用">${I.key}私钥</button>
+      <button class="btn" data-share title="通过局域网把服务器和私钥交给另一台设备">${I.share}${S.share && S.share.running ? '正在共享' : '共享配置'}</button>
       <button class="btn primary" data-new="">${I.plus}新建服务器</button>
     </div>
     <div class="scroll" style="flex:1"><div class="grid">${shown.map(card).join('')}</div>${shown.length ? '' : `<div class="empty-search">没有找到「${esc(query)}」</div>`}</div>
@@ -277,6 +279,7 @@ $('#main').addEventListener('click', (e) => {
   let el;
   if ((el = t.closest('[data-new]'))) return openEditor({ mode: el.dataset.new || null });
   if (t.closest('[data-keys]')) return openKeys();
+  if (t.closest('[data-share]')) return openShare();
   if (t.closest('[data-clear]')) {
     query = '';
     return renderMain();
@@ -531,7 +534,8 @@ function renderEditor(focusKey) {
     more += adv(
       row('本地端口', num('localPort', d.localPort), '每台服务器一个固定端口，网页的登录状态才能保留', e.taken || e.localPort) +
         row('远端地址', text('remoteHost', d.remoteHost, '127.0.0.1'), 'tmux-web 在服务器看来的地址，一般不用改') +
-        row('其他 ssh 参数', text('extraArgs', d.extraArgs, '可选'), '比如 -J 跳板机'),
+        row('其他 ssh 参数', text('extraArgs', d.extraArgs, '可选'), '比如 -J 跳板机') +
+        row('主机密钥', `<div class="inline"><button class="btn small" data-forget ${(d.target || '').trim() ? '' : 'disabled'}>忘记主机密钥</button></div>`, m.forgetMsg || '服务器重装过、连接时提示主机密钥变了，点这里后重新连接'),
     );
   }
   const t = m.test;
@@ -674,6 +678,12 @@ $('#modal').addEventListener('click', async (e) => {
     return renderEditor();
   }
   if (t.closest('[data-addpeer]')) return addPeer();
+  if (t.closest('[data-forget]')) {
+    const r = await ask({ op: 'forgetHostKey', target: m.d.target, port: m.d.sshPort });
+    if (modal !== m) return;
+    m.forgetMsg = r.error || r.text;
+    return renderEditor();
+  }
   if ((el = t.closest('[data-unpeer]'))) {
     const rows = (m.d.easyTierPeers || '').split('\n');
     if (rows.length > 1) rows.splice(+el.dataset.unpeer, 1);
@@ -830,6 +840,219 @@ $('#modal').addEventListener('change', (e) => {
   if (id) post({ op: 'renameKey', id, name: e.target.value.trim() || '未命名' });
 });
 
+// ---------- LAN config sharing (the same protocol as the Mac and Android apps)
+
+function openShare() {
+  modal = {
+    kind: 'share',
+    tab: 0,
+    sel: new Set(S.profiles.map((p) => p.id)),
+    keys: new Set(S.keys.map((k) => k.id)),
+    port: '48620',
+    password: '',
+    passphrase: '',
+    err: null,
+    host: '',
+    rport: '48620',
+    rpassword: '',
+    busy: false,
+    rerr: null,
+    done: null,
+  };
+  renderShare();
+}
+
+function check(on) {
+  return `<span class="check ${on ? 'on' : ''}">${on ? '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg>' : ''}</span>`;
+}
+
+function renderShare(focus) {
+  const m = modal;
+  if (!m || m.kind !== 'share') return;
+  const active = document.activeElement;
+  const fk = focus || (active && active.dataset && active.dataset.s);
+  const caret = active && 'selectionStart' in active ? active.selectionStart : null;
+  const sh = S.share || {};
+  let body;
+  if (m.tab === 0 && sh.running) {
+    const addrs = sh.addresses || [];
+    body = `<div class="share-ok"><span>${I.check}</span><b>共享已开始</b><span class="small-dim" style="margin-left:auto">${sh.profileCount} 个服务器 · ${sh.keyCount} 把私钥</span></div>
+      ${sh.link ? `<div class="qr-row"><div class="qr">${QR.svg(sh.link, 190)}</div><div class="qr-text">
+        <b>用手机扫码</b>
+        <div>在手机上打开 tmux-web App → 共享配置 → 从其他设备获取 → 扫码导入，对准左边的二维码。</div>
+        <div class="small-dim">另一台电脑：复制共享链接，粘贴到它的「对方 IP」一栏。</div>
+        <div><button class="btn small" data-copy="${esc(sh.link)}">复制共享链接（含密码）</button></div></div></div>` : ''}
+      <div>也可以在对方那里手动填地址、端口和刚才设置的密码。</div>
+      <div class="addrs"><div class="small-dim" style="font-weight:600">本机地址</div>${
+        addrs.length
+          ? addrs.map((ip) => `<div class="addr"><span class="mono" style="font-size:14px;color:var(--text)">${esc(ip)}:${sh.port}</span><button class="btn small" data-copy="${esc(ip)}:${sh.port}">复制</button></div>`).join('')
+          : '<div style="color:var(--red)">没有找到局域网 IPv4 地址，确认这台电脑已连接网络。</div>'
+      }</div>
+      <div class="small-dim">Windows 防火墙如果询问是否允许 tmux-web 访问网络，选「允许」（专用网络），否则其他设备连不上。离开这个窗口后共享仍会继续，直到点「停止共享」或退出 App。只在你信任的局域网里使用。</div>
+      <div><button class="btn danger" data-sstop>停止共享</button></div>`;
+  } else if (m.tab === 0) {
+    const portOk2 = /^\d+$/.test(m.port) && +m.port >= 1024 && +m.port <= 65535;
+    const can = !sh.starting && m.sel.size > 0 && m.password.length >= 6 && portOk2;
+    body = `<div class="group"><div class="box pad">
+        <div class="inline" style="align-items:flex-start"><div style="flex:1"><b>选择要共享的服务器</b><div class="small-dim">会带上连接地址、账号、密码、EasyTier 网络密钥和所选的私钥。接收方会跳过完全相同的配置。</div></div>
+        <button class="btn small" data-sall>全选</button><button class="btn small" data-snone>全不选</button></div>
+        <div class="sel-list">${
+          S.profiles.length
+            ? S.profiles.map((p) => `<button class="sel" data-sp="${esc(p.id)}">${check(m.sel.has(p.id))}${avatar(p, 'sm')}<span class="sel-t"><b>${esc(titleOf(p))}</b><span>${esc(p.Address)}</span></span></button>`).join('')
+            : '<div class="small-dim" style="padding:8px 0">还没有服务器配置。</div>'
+        }</div></div></div>
+      ${
+        S.keys.length
+          ? `<div class="group"><div class="box pad"><b>SSH 私钥</b><div class="small-dim">选中的服务器会尽量自动选上它使用的私钥；相同的私钥在接收端只保留一份。</div>
+        <div class="sel-list">${S.keys.map((k) => `<button class="sel" data-sk="${esc(k.id)}">${check(m.keys.has(k.id))}<span class="kic" style="width:26px;height:26px">${I.key}</span><span class="sel-t"><b>${esc(k.name)}</b><span>${esc(k.path)}</span></span></button>`).join('')}</div>
+        <div class="frow" style="border-top:1px solid var(--line)"><label>私钥口令</label><div class="fc"><input class="field" type="password" data-s="passphrase" value="${esc(m.passphrase)}" placeholder="可选：加密私钥的口令，随本次共享发送"><div class="note">这台电脑不保存私钥口令。共享加密私钥时可以在这里填上，安卓接收后会直接使用；不填则接收端连接时再问。</div></div></div>
+        </div></div>`
+          : ''
+      }
+      <div class="group"><div class="box pad"><b>连接方式</b>
+        ${row('端口', `<div class="inline"><input class="field num" data-s="port" value="${esc(m.port)}" inputmode="numeric"><span class="note">另一台设备用这个端口连接</span></div>`, null, portOk2 ? null : '端口在 1024–65535 之间')}
+        ${row('访问密码', `<div class="inline"><input class="field" type="password" data-s="password" value="${esc(m.password)}" placeholder="至少 6 位"><button class="btn small" data-srand>随机</button></div>`, m.password && m.password.length < 6 ? null : null, m.password && m.password.length < 6 ? '密码至少 6 位' : null)}
+        ${m.err || sh.error ? `<div class="err">${I.errDot}${esc(m.err || sh.error)}</div>` : ''}
+        <div class="inline" style="justify-content:flex-end;margin-top:8px">${sh.starting ? '<span class="spin"></span><span class="small-dim">正在启动…</span>' : ''}<button class="btn primary" data-sstart ${can ? '' : 'disabled'}>开始共享</button></div>
+      </div></div>`;
+  } else if (m.done) {
+    body = `<div class="group"><div class="box pad"><div class="share-ok"><span>${I.check}</span><b>导入完成</b></div><div>${esc(m.done)}</div><div style="margin-top:10px"><button class="btn" data-sagain>再接收一份</button></div></div></div>`;
+  } else {
+    const rportOk = /^\d+$/.test(m.rport) && +m.rport >= 1024 && +m.rport <= 65535;
+    const can = !m.busy && m.host.trim() && rportOk && m.rpassword;
+    body = `<div class="group"><div class="box pad"><b>从另一台设备获取</b>
+        <div class="small-dim">让对方开始共享，把显示的 IP 和端口填在这里，再输入对方设置的密码。也可以把对方复制的共享链接直接粘贴到「对方 IP」，会自动填好并导入。</div>
+        ${row('对方 IP', `<input class="field" data-s="host" value="${esc(m.host)}" placeholder="比如 192.168.1.23，或 tmuxweb://share?… 链接" spellcheck="false">`)}
+        ${row('端口', `<div class="inline"><input class="field num" data-s="rport" value="${esc(m.rport)}" inputmode="numeric"><span class="note">1024–65535</span></div>`)}
+        ${row('访问密码', `<input class="field" type="password" data-s="rpassword" value="${esc(m.rpassword)}">`)}
+        ${m.rerr ? `<div class="err">${I.errDot}${esc(m.rerr)}</div>` : ''}
+        <div class="inline" style="justify-content:flex-end;margin-top:8px">${m.busy ? '<span class="spin"></span>' : ''}<button class="btn primary" data-sfetch ${can ? '' : 'disabled'}>${m.busy ? '正在获取…' : '获取并导入'}</button></div>
+      </div></div>
+      <div class="group"><div class="box pad"><b>查重规则</b><div class="small-dim">服务器按连接方式、账号、地址、端口、密码和私钥判断。完全相同的配置会跳过；同一台服务器但密码或私钥不同，会作为另一个配置导入。相同的私钥只保留一份，导入的服务器会复用它。</div></div></div>`;
+  }
+  setModal(`<div class="dlg" style="max-width:720px">
+    <div class="dlg-head"><div class="avatar" style="background:var(--blue)">${I.share.replace('width="15" height="15"', 'width="18" height="18"')}</div><div style="min-width:0"><h2>共享配置</h2><div class="sub">在局域网里把服务器和私钥安全地交给另一台设备</div></div></div>
+    <div class="seg"><button class="${m.tab === 0 ? 'on' : ''}" data-stab="0">共享给其他设备</button><button class="${m.tab === 1 ? 'on' : ''}" data-stab="1">从其他设备获取</button></div>
+    <div class="dlg-body">${body}</div>
+    <div class="dlg-foot"><div class="msg">共享内容用密码加密；密码不会保存在发送设备上。</div><button class="btn primary" data-sdone>完成</button></div></div>`);
+  if (fk) {
+    const f = document.querySelector(`[data-s="${fk}"]`);
+    if (f) {
+      f.focus();
+      if (caret != null && f.setSelectionRange) try { f.setSelectionRange(caret, caret); } catch {}
+    }
+  }
+}
+
+async function shareFetch(link) {
+  const m = modal;
+  m.busy = true;
+  m.rerr = null;
+  renderShare();
+  const r = await ask(link ? { op: 'shareFetch', link } : { op: 'shareFetch', host: m.host, port: +m.rport, password: m.rpassword });
+  if (modal !== m) return;
+  m.busy = false;
+  if (r.error) m.rerr = r.error;
+  else {
+    m.done = r.text;
+    m.rpassword = '';
+  }
+  renderShare();
+}
+
+$('#modal').addEventListener('input', (e) => {
+  const m = modal;
+  if (!m || m.kind !== 'share') return;
+  const k = e.target.dataset.s;
+  if (!k) return;
+  m[k] = e.target.value;
+  if (k === 'host' && /^tmuxweb:\/\/share\?/.test(m.host.trim())) {
+    // a pasted share link: fill in and import
+    const q = new URLSearchParams(m.host.trim().slice('tmuxweb://share?'.length));
+    const link = m.host.trim();
+    m.host = (q.get('h') || '').split(',')[0] || '';
+    m.rport = q.get('p') || m.rport;
+    m.rpassword = q.get('k') || '';
+    shareFetch(link);
+    return;
+  }
+  m.err = null;
+  const t = e.target, caret = t.selectionStart;
+  renderShare(k);
+  const f = document.activeElement;
+  if (f && f.setSelectionRange) try { f.setSelectionRange(caret, caret); } catch {}
+});
+
+$('#modal').addEventListener('keydown', (e) => {
+  const m = modal;
+  if (!m || m.kind !== 'share' || e.key !== 'Enter' || e.target.tagName !== 'INPUT') return;
+  e.preventDefault();
+  const b = document.querySelector(m.tab === 0 ? '[data-sstart]' : '[data-sfetch]');
+  if (b && !b.disabled) b.click();
+});
+
+$('#modal').addEventListener('click', async (e) => {
+  const m = modal;
+  if (!m || m.kind !== 'share') return;
+  const t = e.target;
+  let el;
+  if ((el = t.closest('[data-stab]'))) {
+    m.tab = +el.dataset.stab;
+    return renderShare();
+  }
+  if (t.closest('[data-sdone]')) return closeModal();
+  if ((el = t.closest('[data-sp]'))) {
+    const id = el.dataset.sp;
+    if (m.sel.has(id)) m.sel.delete(id);
+    else {
+      m.sel.add(id);
+      const p = S.profiles.find((x) => x.id === id);
+      if (p && p.keyID) m.keys.add(p.keyID);
+    }
+    return renderShare();
+  }
+  if ((el = t.closest('[data-sk]'))) {
+    const id = el.dataset.sk;
+    if (m.keys.has(id)) m.keys.delete(id);
+    else m.keys.add(id);
+    return renderShare();
+  }
+  if (t.closest('[data-sall]')) {
+    m.sel = new Set(S.profiles.map((p) => p.id));
+    m.keys = new Set(S.keys.map((k) => k.id));
+    return renderShare();
+  }
+  if (t.closest('[data-snone]')) {
+    m.sel = new Set();
+    m.keys = new Set();
+    return renderShare();
+  }
+  if (t.closest('[data-srand]')) {
+    m.password = await ask({ op: 'randomPassword' });
+    return renderShare();
+  }
+  if (t.closest('[data-sstart]')) {
+    m.err = null;
+    post({ op: 'shareStart', profiles: [...m.sel], keys: [...m.keys], passphrase: m.passphrase, password: m.password, port: +m.port });
+    return;
+  }
+  if (t.closest('[data-sstop]')) return post({ op: 'shareStop' });
+  if ((el = t.closest('[data-copy]'))) {
+    post({ op: 'copy', text: el.dataset.copy });
+    const was = el.textContent;
+    el.textContent = '已复制';
+    setTimeout(() => (el.textContent = was), 1500);
+    return;
+  }
+  if (t.closest('[data-sfetch]')) return shareFetch(null);
+  if (t.closest('[data-sagain]')) {
+    m.done = null;
+    m.rerr = null;
+    m.rpassword = '';
+    return renderShare();
+  }
+});
+
 // ---------- updates
 
 let lastNotes = '';
@@ -882,6 +1105,7 @@ function render() {
   renderBar();
   renderMain();
   if (modal && modal.kind === 'keys') renderKeys();
+  else if (modal && modal.kind === 'share') renderShare();
   else if (modal && modal.kind === 'editor') {
     // the key list may have changed under it (a key added from here)
   }
@@ -902,6 +1126,8 @@ if (host) {
       showEditor(m.draft);
     } else if (m.type === 'keys') {
       openKeys();
+    } else if (m.type === 'share') {
+      if (!modal || modal.kind !== 'share') openShare();
     } else if (m.type === 'update') {
       openUpdate(m);
     }
