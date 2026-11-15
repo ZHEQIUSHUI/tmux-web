@@ -31,6 +31,7 @@ export interface VersionInfo {
   notes?: string;
   mac?: AppFile;
   android?: AppFile & { versionCode?: number };
+  windows?: AppFile;
 }
 
 let token: { at: number; value: string } | null = null;
@@ -54,7 +55,7 @@ export function newer(a: string, b: string): boolean {
 
 function valid(v: unknown): VersionInfo {
   const info = v as VersionInfo;
-  if (!info || typeof info.version !== 'string' || !(info.mac || info.android)) throw new Error('version.json 不对');
+  if (!info || typeof info.version !== 'string' || !(info.mac || info.android || info.windows)) throw new Error('version.json 不对');
   return info;
 }
 
@@ -193,7 +194,7 @@ export async function raceDownload(list: Source[], sha?: string, head = 512 * 10
 /** A file of the latest release (only those version.json names), downloaded once and kept. */
 export async function releaseFile(name: string): Promise<{ path: string; size: number }> {
   const info = await latestVersion();
-  const entry = [info.mac, info.android].find((f) => f?.file === name);
+  const entry = [info.mac, info.android, info.windows].find((f) => f?.file === name);
   if (!entry) throw Object.assign(new Error('没有这个文件'), { status: 404 });
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${entry.sha256 || info.version}-${name}`);

@@ -1,12 +1,12 @@
-# Builds the Mac and Android apps into the one release "latest" (replaced each time, no version
+# Builds the Mac, Android and Windows apps into the one release "latest" (replaced each time, no version
 # numbers to manage), with version.json for the apps' update check. Runs when the app code changes
-# (mac/, android/) or by hand (Actions → Apps → Run workflow); the web page's changes don't.
+# (mac/, android/, windows/) or by hand (Actions → Apps → Run workflow); the web page's changes don't.
 name: Apps
 
 on:
   push:
     branches: [main]
-    paths: ['mac/**', 'android/**', '.github/workflows/apps.yml']
+    paths: ['mac/**', 'android/**', 'windows/**', '.github/workflows/apps.yml']
   workflow_dispatch:
     inputs:
       notes:
@@ -77,8 +77,19 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: android, path: tmux-web-android.apk, retention-days: 1, compression-level: 0 }
 
+  windows:
+    needs: version
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      # Visual Studio's C# compiler and .NET Framework 4.8 come with the runner image
+      - run: powershell -NoProfile -ExecutionPolicy Bypass -File windows\build.ps1
+        env: { VERSION: '${{ needs.version.outputs.version }}' }
+      - uses: actions/upload-artifact@v4
+        with: { name: windows, path: windows/build/tmux-web-windows.zip, retention-days: 1, compression-level: 0 }
+
   release:
-    needs: [version, mac, android]
+    needs: [version, mac, android, windows]
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -94,17 +105,18 @@ jobs:
           V=${{ needs.version.outputs.version }}
           NOTES="$NOTES_INPUT"
           # by default: the app changes since the last build
-          [ -n "$NOTES" ] || NOTES=$(git log --format='- %s' -n 8 ${{ github.event.before || 'HEAD~1' }}..HEAD -- mac android 2>/dev/null | head -8)
+          [ -n "$NOTES" ] || NOTES=$(git log --format='- %s' -n 8 ${{ github.event.before || 'HEAD~1' }}..HEAD -- mac android windows 2>/dev/null | head -8)
           [ -n "$NOTES" ] || NOTES="App 更新"
           sha() { sha256sum "out/$1" | cut -d' ' -f1; }
           size() { stat -c %s "out/$1"; }
-          python3 - "$V" "${{ needs.version.outputs.code }}" "$NOTES" "$(sha tmux-web-mac.zip)" "$(size tmux-web-mac.zip)" "$(sha tmux-web-android.apk)" "$(size tmux-web-android.apk)" > out/version.json <<'PY'
+          python3 - "$V" "${{ needs.version.outputs.code }}" "$NOTES" "$(sha tmux-web-mac.zip)" "$(size tmux-web-mac.zip)" "$(sha tmux-web-android.apk)" "$(size tmux-web-android.apk)" "$(sha tmux-web-windows.zip)" "$(size tmux-web-windows.zip)" > out/version.json <<'PY'
           import json, sys
-          v, code, notes, msha, msize, asha, asize = sys.argv[1:]
+          v, code, notes, msha, msize, asha, asize, wsha, wsize = sys.argv[1:]
           print(json.dumps({
             "version": v, "notes": notes,
             "mac": {"file": "tmux-web-mac.zip", "sha256": msha, "size": int(msize)},
             "android": {"file": "tmux-web-android.apk", "versionCode": int(code), "sha256": asha, "size": int(asize)},
+            "windows": {"file": "tmux-web-windows.zip", "sha256": wsha, "size": int(wsize)},
           }, ensure_ascii=False, indent=2))
           PY
           cat > out/body.md <<MD
@@ -120,6 +132,7 @@ jobs:
                \`\`\`
                xattr -c /Applications/tmux-web.app
                \`\`\`
+          - **Windows**：[tmux-web-windows.zip](https://github.com/${{ github.repository }}/releases/latest/download/tmux-web-windows.zip)（Windows 10/11，64 位）。解压到自己的文件夹（比如「文档」里），打开里面的 \`tmux-web.exe\`。第一次打开时 SmartScreen 可能提示「已保护你的电脑」，点「更多信息 → 仍要运行」。
           - **安卓**：[tmux-web-android.apk](https://github.com/${{ github.repository }}/releases/latest/download/tmux-web-android.apk)（Android 8 起）。下载后点开安装，系统可能会要求允许「安装未知应用」。
 
           ### 更新
@@ -135,7 +148,7 @@ jobs:
           for t in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
             case "$t" in latest|app-v*) gh release delete "$t" --yes --cleanup-tag || true ;; esac
           done
-          gh release create latest out/tmux-web-mac.zip out/tmux-web-android.apk out/version.json \
+          gh release create latest out/tmux-web-mac.zip out/tmux-web-android.apk out/tmux-web-windows.zip out/version.json \
             --target "$GITHUB_SHA" --title "tmux-web App（最新版）" --notes-file out/body.md --latest
       # the same release as an OCI artifact in GHCR: Nanjing University mirrors GHCR
       # (ghcr.nju.edu.cn), which mainland China reaches far better than GitHub's downloads.
@@ -157,7 +170,7 @@ jobs:
           cd out
           oras push ghcr.io/zheqiushui/tmux-web-app:latest --artifact-type application/vnd.tmuxweb.app \
             --annotation-file annotations.json \
-            tmux-web-mac.zip:application/zip tmux-web-android.apk:application/vnd.android.package-archive version.json:application/json
+            tmux-web-mac.zip:application/zip tmux-web-android.apk:application/vnd.android.package-archive tmux-web-windows.zip:application/zip version.json:application/json
       # only the newest stays (the others would just pile up)
       - uses: actions/delete-package-versions@v5
         continue-on-error: true
