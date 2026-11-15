@@ -176,8 +176,12 @@ namespace TmuxWeb
     {
       var t = new Thread(() =>
       {
-        Thread.Sleep(5000);
-        try { if (Directory.Exists(Dir)) Directory.Delete(Dir, true); } catch { }
+        // the script that started us may still be sitting in that folder for a moment
+        for (var i = 0; i < 10 && Directory.Exists(Dir); i++)
+        {
+          Thread.Sleep(3000);
+          try { Directory.Delete(Dir, true); } catch { }
+        }
       }) { IsBackground = true };
       t.Start();
     }
