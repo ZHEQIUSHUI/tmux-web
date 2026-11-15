@@ -218,7 +218,7 @@ namespace TmuxWeb
         {
           var t = c.DownloadDataTaskAsync(url);
           if (await Task.WhenAny(t, Task.Delay(timeoutMs)) != t) { c.CancelAsync(); return null; }
-          var d = Store.Json.DeserializeObject(Encoding.UTF8.GetString(await t)) as Dictionary<string, object>;
+          var d = Store.Json.DeserializeObject(Encoding.UTF8.GetString(await t).TrimStart('\uFEFF')) as Dictionary<string, object>;
           return d != null && d.ContainsKey("version") ? d : null;
         }
       }
