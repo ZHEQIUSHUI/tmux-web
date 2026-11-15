@@ -115,8 +115,9 @@ namespace TmuxWeb
       StartPosition = FormStartPosition.CenterScreen;
       TopMost = true;
       ShowInTaskbar = true;
-      Font = new Font("Microsoft YaHei UI", 9f);
+      AutoScaleDimensions = new SizeF(96f, 96f);
       AutoScaleMode = AutoScaleMode.Dpi;
+      Font = new Font("Microsoft YaHei UI", 9f);
       Icon = Program.AppIcon;
       var pad = 16;
       var label = new Label { Text = prompt.Trim(), AutoSize = true, MaximumSize = new Size(380, 0), Location = new Point(pad, pad) };

@@ -67,7 +67,6 @@ namespace TmuxWeb
     {
       Text = "tmux-web";
       Icon = Program.AppIcon;
-      MinimumSize = new Size(560, 420);
       StartPosition = FormStartPosition.Manual;
       BackColor = Dark() ? Color.FromArgb(30, 30, 30) : Color.FromArgb(246, 246, 246);
       LoadBounds();
@@ -167,14 +166,18 @@ namespace TmuxWeb
     {
       var s = Store.Setting("window");
       var area = Screen.PrimaryScreen.WorkingArea;
-      var r = new Rectangle(area.X + (area.Width - Math.Min(1280, area.Width - 80)) / 2, area.Y + (area.Height - Math.Min(820, area.Height - 80)) / 2, Math.Min(1280, area.Width - 80), Math.Min(820, area.Height - 80));
+      double sys = 1;
+      try { sys = GetDpiForSystem() / 96.0; } catch { }
+      int w0 = Math.Min((int)(1280 * sys), area.Width - 40), h0 = Math.Min((int)(820 * sys), area.Height - 40);
+      var r = new Rectangle(area.X + (area.Width - w0) / 2, area.Y + (area.Height - h0) / 2, w0, h0);
+      MinimumSize = new Size((int)(560 * sys), (int)(420 * sys));
       var max = false;
       if (s != null)
       {
         var p = s.Split(',');
         if (p.Length == 5 && int.TryParse(p[0], out var x) && int.TryParse(p[1], out var y) && int.TryParse(p[2], out var w) && int.TryParse(p[3], out var h))
         {
-          var saved = new Rectangle(x, y, Math.Max(w, 560), Math.Max(h, 420));
+          var saved = new Rectangle(x, y, Math.Max(w, MinimumSize.Width), Math.Max(h, MinimumSize.Height));
           // only where a screen still is (a display that's gone)
           if (Screen.AllScreens.Any(sc => sc.WorkingArea.IntersectsWith(saved))) r = saved;
           max = p[4] == "1";
@@ -230,7 +233,20 @@ namespace TmuxWeb
       Application.Exit();
     }
 
-    int BarPx => (int)Math.Round(BarCss * DeviceDpi / 96.0);
+    [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern uint GetDpiForSystem();
+
+    /// the window's own DPI (WinForms' DeviceDpi stays 96 without its app.config switch)
+    double DpiScale
+    {
+      get
+      {
+        try { var d = GetDpiForWindow(Handle); if (d > 0) return d / 96.0; } catch { }
+        return DeviceDpi / 96.0;
+      }
+    }
+
+    int BarPx => (int)Math.Round(BarCss * DpiScale);
 
     /// which page shows, how much of the window the shell takes
     void Layout2()
@@ -715,7 +731,7 @@ namespace TmuxWeb
     Point Pt(Dictionary<string, object> m)
     {
       double x = m.TryGetValue("x", out var a) ? Convert.ToDouble(a) : 0, y = m.TryGetValue("y", out var b) ? Convert.ToDouble(b) : 0;
-      var scale = DeviceDpi / 96.0;
+      var scale = DpiScale;
       return shell.PointToScreen(new Point((int)(x * scale), (int)(y * scale)));
     }
 
