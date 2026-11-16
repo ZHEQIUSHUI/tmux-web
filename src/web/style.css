@@ -2781,6 +2781,19 @@ a.btn {
   color: var(--dim);
   opacity: 0.75;
 }
+.composer .take-hint {
+  flex: none;
+  height: 36px;
+  padding: 0 12px;
+  white-space: nowrap;
+  color: var(--accent);
+}
+@media (pointer: coarse) {
+  .composer .take-hint {
+    height: 40px;
+    border-radius: 20px;
+  }
+}
 /* narrow screens: the meter gives way first, the ⋯ never covers the numbers */
 .cbar-ctx {
   overflow: hidden;

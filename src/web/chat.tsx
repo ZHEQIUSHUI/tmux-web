@@ -1426,6 +1426,16 @@ export function Composer(props: {
   // only while working: while it waits for a choice, Esc would cancel the question instead
   const running = status === 'busy';
   const stop = () => key(props.agent === 'bash' ? ['C-c'] : ['Escape']);
+  // the suggestion into the box, cursor at the end, to edit it (phones have no Tab key)
+  const takeHint = () => {
+    update(hint);
+    requestAnimationFrame(() => {
+      const el = ta.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(hint.length, hint.length);
+    });
+  };
 
   // when the first key of Ctrl+X Ctrl+S came; Ctrl+X with text selected is still cut
   const chord = useRef(0);
@@ -1454,7 +1464,7 @@ export function Composer(props: {
     // Tab (or → at the start) takes the suggestion into the box to edit it
     if (hint && (e.key === 'Tab' || e.key === 'ArrowRight') && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      update(hint);
+      takeHint();
       return;
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !coarse) {
@@ -1490,7 +1500,7 @@ export function Composer(props: {
       {keysOpen && (
         <div class="keys">
           {QUICK_KEYS.map(([label, keys, title]) => (
-            <button key={label} title={title} class={status === 'waiting' && /^\d$/.test(label) ? 'hot' : ''} onMouseDown={(e) => e.preventDefault()} onClick={() => key(keys)}>
+            <button key={label} title={title} class={status === 'waiting' && /^\d$/.test(label) ? 'hot' : ''} onMouseDown={(e) => e.preventDefault()} onClick={() => (hint && label === 'Tab' ? takeHint() : key(keys))}>
               {label}
             </button>
           ))}
@@ -1584,10 +1594,15 @@ export function Composer(props: {
           onPaste={onPaste}
           value={text}
           class={hint ? 'has-hint' : ''}
-          placeholder={hint ? (coarse ? hint : `${hint}　（Enter 发送这条建议，Tab 填入修改）`) : coarse ? '输入消息' : running && props.agent === 'claude' ? '输入消息，Enter 发送（排队），Ctrl+X Ctrl+S 立即插入对话' : '输入消息，Enter 发送，Shift+Enter 换行'}
+          placeholder={hint ? (coarse ? hint : `${hint}　（Enter 发送这条建议，Tab 或「修改」填入输入框）`) : coarse ? '输入消息' : running && props.agent === 'claude' ? '输入消息，Enter 发送（排队），Ctrl+X Ctrl+S 立即插入对话' : '输入消息，Enter 发送，Shift+Enter 换行'}
           onInput={(e) => update((e.target as HTMLTextAreaElement).value)}
           onKeyDown={onKeyDown}
         />
+        {hint && (
+          <button class="take-hint" aria-label="修改建议" title="把建议填进输入框修改（Tab）" onMouseDown={(e) => e.preventDefault()} onClick={takeHint}>
+            修改
+          </button>
+        )}
         {running && (
           <button class={`stop ${coarse ? 'round' : ''}`} aria-label="停止" title="停止当前输出（Esc）" onMouseDown={(e) => e.preventDefault()} onClick={stop}>
             <span class="stop-square" />
