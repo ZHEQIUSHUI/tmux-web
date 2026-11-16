@@ -1588,21 +1588,23 @@ export function Composer(props: {
             />
           </>
         )}
-        <textarea
-          ref={ta}
-          rows={1}
-          onPaste={onPaste}
-          value={text}
-          class={hint ? 'has-hint' : ''}
-          placeholder={hint ? (coarse ? hint : `${hint}　（Enter 发送这条建议，Tab 或「修改」填入输入框）`) : coarse ? '输入消息' : running && props.agent === 'claude' ? '输入消息，Enter 发送（排队），Ctrl+X Ctrl+S 立即插入对话' : '输入消息，Enter 发送，Shift+Enter 换行'}
-          onInput={(e) => update((e.target as HTMLTextAreaElement).value)}
-          onKeyDown={onKeyDown}
-        />
-        {hint && (
-          <button class="take-hint" aria-label="修改建议" title="把建议填进输入框修改（Tab）" onMouseDown={(e) => e.preventDefault()} onClick={takeHint}>
-            修改
-          </button>
-        )}
+        <div class="ta-wrap">
+          <textarea
+            ref={ta}
+            rows={1}
+            onPaste={onPaste}
+            value={text}
+            class={hint ? 'has-hint' : ''}
+            placeholder={hint ? (coarse ? hint : `${hint}　（Enter 发送，Tab 补全）`) : coarse ? '输入消息' : running && props.agent === 'claude' ? '输入消息，Enter 发送（排队），Ctrl+X Ctrl+S 立即插入对话' : '输入消息，Enter 发送，Shift+Enter 换行'}
+            onInput={(e) => update((e.target as HTMLTextAreaElement).value)}
+            onKeyDown={onKeyDown}
+          />
+          {hint && (
+            <button class="take-hint" aria-label="补全" title="把建议填进输入框修改（Tab）" onMouseDown={(e) => e.preventDefault()} onClick={takeHint}>
+              补全
+            </button>
+          )}
+        </div>
         {running && (
           <button class={`stop ${coarse ? 'round' : ''}`} aria-label="停止" title="停止当前输出（Esc）" onMouseDown={(e) => e.preventDefault()} onClick={stop}>
             <span class="stop-square" />

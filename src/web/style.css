@@ -2781,17 +2781,35 @@ a.btn {
   color: var(--dim);
   opacity: 0.75;
 }
+.composer .ta-wrap {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;
+}
+.composer .ta-wrap textarea.has-hint {
+  padding-right: 64px;
+}
+/* 补全: inside the box, at its right end, only while a suggestion shows */
 .composer .take-hint {
-  flex: none;
-  height: 36px;
-  padding: 0 12px;
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  font-size: 13px;
   white-space: nowrap;
   color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: none;
 }
 @media (pointer: coarse) {
   .composer .take-hint {
-    height: 40px;
-    border-radius: 20px;
+    right: 6px;
+    bottom: 6px;
+    height: 28px;
+    border-radius: 14px;
   }
 }
 /* narrow screens: the meter gives way first, the ⋯ never covers the numbers */
