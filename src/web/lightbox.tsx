@@ -156,8 +156,19 @@ export function Lightbox() {
   const [dragging, setDragging] = useState(false);
   const lastTap = useRef(0);
 
+  // drop a drag without acting on it: the right button's menu (copy image…) takes the mouse up
+  // away, so the image would otherwise keep following the pointer
+  const cancel = () => {
+    if (!gesture.current && !ptrs.current.size) return;
+    ptrs.current.clear();
+    gesture.current = null;
+    setDragging(false);
+    if (slide.dx || slide.dy) snapBack();
+  };
   const onDown = (e: PointerEvent) => {
     if (turning.current) return;
+    // only the left button drags; right / middle are for the browser's own menus
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
     ptrs.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const p = [...ptrs.current.values()];
@@ -172,6 +183,8 @@ export function Lightbox() {
   };
   const onMove = (e: PointerEvent) => {
     if (!ptrs.current.has(e.pointerId)) return;
+    // the button was let go where we didn't hear it (a menu, another window)
+    if (e.pointerType === 'mouse' && !(e.buttons & 1)) return cancel();
     ptrs.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const g = gesture.current;
     if (!g) return;
@@ -302,7 +315,7 @@ export function Lightbox() {
           ✕
         </button>
       </div>
-      <div class="lb-stage" ref={stage} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
+      <div class="lb-stage" ref={stage} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onContextMenu={cancel}>
         <div
           class="lb-strip"
           style={{
