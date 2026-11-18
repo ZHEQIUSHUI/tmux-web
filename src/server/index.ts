@@ -502,10 +502,12 @@ route('GET', '/_tw/api/sessions/:id/claude-state', async (req, res, [id]) => {
   const { row, live } = sessionFor(requireUser(req), id, 'view');
   if (row.agent !== 'claude') return sendJson(req, res, 200, null);
   await live.syncAgentSession();
+  // for driving it from elsewhere: claude --resume <sessionId>, tmux -L <socket> send-keys -t <name>
+  const ids = { mode: live.mode, sessionId: row.agent_session_id || '', tmux: { socket: live.target.socket, name: live.target.name } };
   const file = await live.transcriptPath().catch(() => null);
-  if (!file || !live.host) return sendJson(req, res, 200, { mode: live.mode });
+  if (!file || !live.host) return sendJson(req, res, 200, ids);
   try {
-    sendJson(req, res, 200, { ...(await claudeState(live.host, file)), mode: live.mode });
+    sendJson(req, res, 200, { ...(await claudeState(live.host, file)), ...ids });
   } catch (e: any) {
     throw new HttpError(502, e.message);
   }

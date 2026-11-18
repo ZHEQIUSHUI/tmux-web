@@ -1450,6 +1450,11 @@ a.btn {
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
 }
+.cp-id {
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
 .cp-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;

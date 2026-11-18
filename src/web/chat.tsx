@@ -248,6 +248,10 @@ export interface ClaudeState {
   permissionMode?: string;
   /** live permission mode from the TUI footer */
   mode?: string;
+  /** Claude Code's session id (claude --resume) */
+  sessionId?: string;
+  /** where it runs: tmux -L <socket> … -t <name> */
+  tmux?: { socket: string; name: string };
 }
 
 /** Plan limits, see server/claude-usage.ts */
@@ -385,7 +389,20 @@ function UsageRow({ label, w }: { label: string; w: UsageWindow }) {
   );
 }
 
-export function ClaudePanel(props: { st: ClaudeState | null; usage?: ClaudeUsage | null; canControl: boolean; onClose: () => void; run: (cmd: string) => void; sendKeys: (k: string[]) => void; onRestart: () => void }) {
+/** "-L tw -t tw-5": the arguments that address the session's pane with tmux on its host */
+const tmuxTarget = (t?: { socket: string; name: string }) => (t ? `${t.socket === 'default' ? '' : `-L ${t.socket} `}-t ${t.name}` : '');
+
+function IdRow(props: { label: string; value: string; title?: string }) {
+  return (
+    <div class="cp-row" title={props.title}>
+      <span class="dim">{props.label}</span>
+      <code class="cp-id">{props.value || '—'}</code>
+      {props.value ? <CopyBtn text={props.value} /> : <span />}
+    </div>
+  );
+}
+
+export function ClaudePanel(props: { session: SessionInfo; st: ClaudeState | null; usage?: ClaudeUsage | null; canControl: boolean; onClose: () => void; run: (cmd: string) => void; sendKeys: (k: string[]) => void; onRestart: () => void }) {
   const { st } = props;
   const mode = st?.mode || st?.permissionMode || '';
   const pct = st?.contextTokens && st?.contextWindow ? Math.round((st.contextTokens / st.contextWindow) * 100) : null;
@@ -397,6 +414,10 @@ export function ClaudePanel(props: { st: ClaudeState | null; usage?: ClaudeUsage
   return (
     <Modal title="Claude" onClose={props.onClose}>
       <div class="cpanel">
+        <IdRow label="会话名称" value={props.session.name} />
+        <IdRow label="会话 ID" value={String(props.session.id)} title="tmux-web 的会话编号，API 里的 sessions/:id" />
+        <IdRow label="Claude ID" value={st?.sessionId || ''} title="Claude Code 的会话 ID，claude --resume 用" />
+        <IdRow label="tmux" value={tmuxTarget(st?.tmux)} title="在主机上用 tmux 操作这个会话，比如 send-keys" />
         <div class="cp-row">
           <span class="dim">模型</span>
           <b>{modelName(st?.model) || '—'}</b>
@@ -1093,7 +1114,7 @@ export function ChatView({ session, onOpenTerminal, search = false, onSearchClos
   return (
     <div class="chat">
       {isClaude && <ClaudeBar st={claude} usage={usage} update={update} restart={restart} onOpen={() => setPanel(true)} onRestart={session.access === 'control' ? restartClaude : undefined} />}
-      {panel && <ClaudePanel st={claude} usage={usage} canControl={session.access === 'control'} onClose={() => setPanel(false)} run={runCommand} sendKeys={sendKeys} onRestart={restartClaude} />}
+      {panel && <ClaudePanel session={session} st={claude} usage={usage} canControl={session.access === 'control'} onClose={() => setPanel(false)} run={runCommand} sendKeys={sendKeys} onRestart={restartClaude} />}
       {search && <ChatSearch sid={id} onQuery={setQuery} onPick={jump} onClose={() => onSearchClose?.()} />}
       <div class="scroller" ref={scroller} onScroll={onScroll}>
         <div class="messages" ref={messages}>
