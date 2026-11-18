@@ -248,6 +248,8 @@ export interface ClaudeState {
   permissionMode?: string;
   /** live permission mode from the TUI footer */
   mode?: string;
+  /** Claude Code's name for the running session, which other Claude sessions message it by */
+  name?: string;
   /** Claude Code's session id (claude --resume) */
   sessionId?: string;
   /** where it runs: tmux -L <socket> … -t <name> */
@@ -414,9 +416,8 @@ export function ClaudePanel(props: { session: SessionInfo; st: ClaudeState | nul
   return (
     <Modal title="Claude" onClose={props.onClose}>
       <div class="cpanel">
-        <IdRow label="会话名称" value={props.session.name} />
-        <IdRow label="会话 ID" value={String(props.session.id)} title="tmux-web 的会话编号，API 里的 sessions/:id" />
-        <IdRow label="Claude ID" value={st?.sessionId || ''} title="Claude Code 的会话 ID，claude --resume 用" />
+        <IdRow label="会话名称" value={st?.name || ''} title="Claude Code 给这个会话起的名字，其他 Claude 会话用它发消息过来" />
+        <IdRow label="会话 ID" value={st?.sessionId || ''} title="Claude Code 的会话 ID，claude --resume 用" />
         <IdRow label="tmux" value={tmuxTarget(st?.tmux)} title="在主机上用 tmux 操作这个会话，比如 send-keys" />
         <div class="cp-row">
           <span class="dim">模型</span>

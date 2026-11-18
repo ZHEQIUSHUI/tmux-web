@@ -417,6 +417,9 @@ export class LiveSession extends EventEmitter {
    * The agent may switch to another conversation in the same pane: Claude Code on /clear and some
    * resumes, Codex on /new and /resume. Follow it.
    */
+  /** Claude Code's name for the running session (in ~/.claude/sessions/<pid>.json), '' if unknown */
+  claudeName = '';
+
   async syncAgentSession(): Promise<void> {
     const r = this.row;
     const host = this.host;
@@ -446,16 +449,21 @@ export class LiveSession extends EventEmitter {
       return;
     }
     if (r.agent !== 'claude') return;
-    const id = (
+    // Claude Code's file for the running process: its session id, and the name other Claude
+    // sessions address it by (SendMessage), like "workspace-a1"
+    const [id = '', name = ''] = (
       await host
         .shText(
           `pp=$(tmux -L "$1" display-message -p -t "=$2:" '#{pane_pid}' 2>/dev/null) || exit 0; ` +
             `for p in $pp $(pgrep -P "$pp" 2>/dev/null); do f="$HOME/.claude/sessions/$p.json"; ` +
-            `[ -f "$f" ] && { sed -n 's/.*"sessionId" *: *"\\([0-9a-f-]*\\)".*/\\1/p' "$f" | head -n1; exit 0; }; done`,
+            `[ -f "$f" ] && { printf '%s\\t%s\\n' "$(sed -n 's/.*"sessionId" *: *"\\([0-9a-f-]*\\)".*/\\1/p' "$f" | head -n1)" "$(sed -n 's/.*"name" *: *"\\([^"]*\\)".*/\\1/p' "$f" | head -n1)"; exit 0; }; done`,
           [t.socket, t.name],
         )
         .catch(() => '')
-    ).trim();
+    )
+      .trim()
+      .split('\t');
+    this.claudeName = name;
     // switch only once the new conversation has a log (a fresh fork writes it with its first message)
     if (id && /^[0-9a-f-]{36}$/.test(id) && id !== r.agent_session_id && (await claudeTranscript(host, id).catch(() => null))) {
       q.setTranscript.run(id, null, r.id);

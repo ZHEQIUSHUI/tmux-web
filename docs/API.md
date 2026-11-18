@@ -35,7 +35,7 @@
 | GET | `sessions/:id/message?off=<偏移>` | 被截断的条目的完整内容（条目 `id` 的格式是 `"<偏移>:<序号>"`） |
 | GET | `sessions/:id/stream?from=<end>&log=<log>` | SSE：`msg`（新条目；事件 id 是记录文件的字节偏移，断线后用 `Last-Event-ID` 重连会从断点继续）、`state`（`{status, preview, mode, update, background, choices, suggestion}`）、`reset`（对话换了，比如 `/clear`，需要重新加载）、`ping` 心跳 |
 | GET | `streams?s=<id>:<from>:<log>,…` | 多个会话共用一条 SSE 连接（事件同上，数据都包成 `{sid, data, end}`；没有权限或不存在的会话收到 `gone`）。没有事件 id：重连时自己带上已经读到的偏移 |
-| GET | `sessions/:id/claude-state` | 模型、上下文用量、权限模式；`sessionId`（Claude Code 的会话 ID，`claude --resume` 用）、`tmux`（`{socket, name}`，在主机上用 `tmux -L <socket> send-keys -t <name>` 操作） |
+| GET | `sessions/:id/claude-state` | 模型、上下文用量、权限模式；`name`（Claude Code 给运行中的会话起的名字，比如 `workspace-a1`，其他 Claude 会话按这个名字给它发消息）、`sessionId`（Claude Code 的会话 ID，`claude --resume` 用）、`tmux`（`{socket, name}`，在主机上用 `tmux -L <socket> send-keys -t <name>` 操作） |
 | GET | `sessions/:id/image?off=<偏移>&n=<序号>&w=<宽度>` | 对话里嵌入的图片。消息里嵌入的 base64 图片会被替换成 `tw-img:<序号>`，`off` 是条目 `id` 的前半部分。带 `w` 时大图会压缩成适合这个宽度的 WebP |
 | GET | `sessions/:id/file-image?path=<路径>&w=<宽度>` | 主机上的图片文件（相对路径从会话的工作目录算起；工作目录以外的路径需要操作权限；最大 20MB）。`w` 同上 |
 | POST | `sessions/:id/input` | 发送文字并回车：`{text, submit?: true, now?: false}`；`now` 只对 Claude 会话有效，用 Ctrl+X Ctrl+S 立即插入对话而不是排队 |
