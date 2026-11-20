@@ -123,19 +123,25 @@ namespace TmuxWeb
   }
 
   /// tmuxweb://share?h=192.168.1.23,10.126.126.5&p=48620&k=<password>: everything a receiver needs.
+  /// tmuxweb://share?h=…&p=…&k=… : a device sharing, to fetch from.
+  /// tmuxweb://receive?h=…&p=…&k=… : a device waiting to be sent to (it has no camera to scan with:
+  /// the sender scans its code instead).
   public class ShareLink
   {
     public const string Prefix = "tmuxweb://share";
+    public const string ReceivePrefix = "tmuxweb://receive";
     public List<string> hosts;
     public int port;
     public string password;
+    public bool receive;
 
     public static ShareLink Parse(string text)
     {
       var s = (text ?? "").Trim();
-      if (!s.StartsWith(Prefix + "?")) return null;
+      var receive = s.StartsWith(ReceivePrefix + "?");
+      if (!receive && !s.StartsWith(Prefix + "?")) return null;
       var q = new Dictionary<string, string>();
-      foreach (var pair in s.Substring(Prefix.Length + 1).Split('&'))
+      foreach (var pair in s.Substring((receive ? ReceivePrefix : Prefix).Length + 1).Split('&'))
       {
         var i = pair.IndexOf('=');
         if (i < 0) return null;
@@ -144,7 +150,7 @@ namespace TmuxWeb
       var hosts = (q.TryGetValue("h", out var h) ? h : "").Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
       if (hosts.Count == 0 || !q.TryGetValue("p", out var ps) || !int.TryParse(ps, out var port) || port < 1024 || port > 65535) return null;
       if (!q.TryGetValue("k", out var k) || k.Length < ShareProtocol.MinPassword) return null;
-      return new ShareLink { hosts = hosts, port = port, password = k };
+      return new ShareLink { hosts = hosts, port = port, password = k, receive = receive };
     }
 
     /// the password: only letters and digits stay as they are (the same as the Mac app writes it)
@@ -158,7 +164,7 @@ namespace TmuxWeb
           var c = (char)b;
           if (b < 128 && char.IsLetterOrDigit(c)) sb.Append(c); else sb.Append('%').Append(b.ToString("X2"));
         }
-        return Prefix + "?h=" + string.Join(",", hosts) + "&p=" + port + "&k=" + sb;
+        return (receive ? ReceivePrefix : Prefix) + "?h=" + string.Join(",", hosts) + "&p=" + port + "&k=" + sb;
       }
     }
   }
@@ -245,7 +251,7 @@ namespace TmuxWeb
       {
         var text = ReadKey(k);
         if (string.IsNullOrWhiteSpace(text)) throw new ShareError("读不到私钥文件：" + k.path);
-        keys.Add(new Dictionary<string, object> { ["id"] = k.id, ["name"] = k.name, ["privateKey"] = text, ["passphrase"] = passphrase ?? "" });
+        keys.Add(new Dictionary<string, object> { ["id"] = k.id, ["name"] = k.name, ["privateKey"] = text, ["passphrase"] = string.IsNullOrEmpty(passphrase) ? Store.Passphrase(k.id) : passphrase });
         sent.Add(k.id);
       }
       var profiles = new List<object>();
@@ -298,15 +304,23 @@ namespace TmuxWeb
         var text = sk.TryGetValue("privateKey", out var pk) ? pk as string : null;
         if (string.IsNullOrWhiteSpace(text)) continue;
         var sid = sk.TryGetValue("id", out var i) ? i as string ?? "" : "";
+        var phrase = sk.TryGetValue("passphrase", out var pp) ? pp as string ?? "" : "";
         var fp = ShareIdentity.KeyFingerprint(text);
-        if (byFingerprint.TryGetValue(fp, out var existing)) { mapped[sid] = existing; keysReused++; continue; }
+        if (byFingerprint.TryGetValue(fp, out var existing))
+        {
+          mapped[sid] = existing;
+          keysReused++;
+          if (phrase.Length > 0 && Store.Passphrase(existing).Length == 0) Store.SetPassphrase(existing, phrase);
+          continue;
+        }
         Directory.CreateDirectory(KeyDir);
         var file = Path.Combine(KeyDir, Guid.NewGuid() + ".key");
-        // OpenSSH on Windows reads LF keys fine; written as received
-        Private.WriteFile(file, new UTF8Encoding(false).GetBytes(text));
+        // as received, with the final line break ssh needs (the Android app sends keys trimmed)
+        Private.WriteFile(file, KeyFile.Readable(new UTF8Encoding(false).GetBytes(text)));
         var name = sk.TryGetValue("name", out var n) && n is string nn && nn.Length > 0 ? nn : "共享私钥";
         var key = new SSHKey { name = name, path = file };
         Store.Keys.Add(key);
+        if (phrase.Length > 0) Store.SetPassphrase(key.id, phrase);
         byFingerprint[fp] = key.id;
         mapped[sid] = key.id;
         keysAdded++;
@@ -389,6 +403,61 @@ namespace TmuxWeb
       return await Task.Run(() => ShareProtocol.Open(body, password));
     }
 
+    /// Send a bundle to a device waiting for one (POST /api/push): its summary of what it took.
+    public static async Task<string> Push(string host, int port, string password, string envelopeJson, int timeoutMs)
+    {
+      // an address that doesn't answer fails fast (the async request below keeps no connect timeout)
+      using (var probe = new TcpClient())
+      {
+        try
+        {
+          var c = probe.ConnectAsync(host, port);
+          if (await Task.WhenAny(c, Task.Delay(timeoutMs)) != c) throw new ShareError("连不上 " + host + ":" + port + "：连接超时");
+          await c;
+        }
+        catch (ShareError) { throw; }
+        catch (Exception e) { throw new ShareError("连不上 " + host + ":" + port + "：" + Http.Reason(e)); }
+      }
+      var req = (HttpWebRequest)WebRequest.Create("http://" + (host.Contains(":") && !host.StartsWith("[") ? "[" + host + "]" : host) + ":" + port + "/api/push");
+      req.Proxy = null;
+      req.Method = "POST";
+      req.Timeout = timeoutMs;
+      req.ReadWriteTimeout = 30000;
+      req.ContentType = "application/json; charset=utf-8";
+      req.Accept = "application/json";
+      req.Headers["X-Share-Password-B64"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(password));
+      var body = Encoding.UTF8.GetBytes(envelopeJson);
+      string answer;
+      try
+      {
+        var send = Task.Run(async () =>
+        {
+          using (var w = await req.GetRequestStreamAsync()) await w.WriteAsync(body, 0, body.Length);
+          using (var r = await req.GetResponseAsync())
+          using (var sr = new StreamReader(r.GetResponseStream(), Encoding.UTF8))
+            return await sr.ReadToEndAsync();
+        });
+        // the other side derives the key (PBKDF2) and merges before it answers: a while
+        if (await Task.WhenAny(send, Task.Delay(timeoutMs + 30000)) != send) { req.Abort(); throw new ShareError("连不上 " + host + ":" + port + "：连接超时"); }
+        answer = await send;
+      }
+      catch (WebException e) when (e.Response is HttpWebResponse hr)
+      {
+        var code = (int)hr.StatusCode;
+        string msg = null;
+        try { using (var sr = new StreamReader(hr.GetResponseStream(), Encoding.UTF8)) msg = (Store.Json.Deserialize<Dictionary<string, object>>(sr.ReadToEnd())?["error"]) as string; } catch { }
+        hr.Dispose();
+        if (code == 401) throw new ShareError("密码不对（二维码或链接不完整？）");
+        if (code == 429) throw new ShareError("尝试次数太多，请等一分钟再试");
+        if (code == 410) throw new ShareError("对方已经收到过一份了：让对方重新点「等对方发过来」");
+        throw new ShareError(msg ?? "对方拒绝了（HTTP " + code + "）");
+      }
+      catch (WebException e) { throw new ShareError("连不上 " + host + ":" + port + "：" + Http.Reason(e)); }
+      catch (AggregateException e) when (e.InnerException is WebException we) { throw new ShareError("连不上 " + host + ":" + port + "：" + Http.Reason(we)); }
+      try { return (Store.Json.Deserialize<Dictionary<string, object>>(answer)?["text"] as string) ?? "对方已收到"; }
+      catch { return "对方已收到"; }
+    }
+
     /// "1.2.3.4", "1.2.3.4:48620" or a URL
     public static (string host, int port) Target(string input, int fallback)
     {
@@ -411,10 +480,24 @@ namespace TmuxWeb
     readonly Dictionary<string, (int count, DateTime until)> attempts = new Dictionary<string, (int, DateTime)>();
     public readonly int Port;
 
+    // receiving instead (POST /api/push): the password the code shows, what takes the bundle
+    readonly byte[] receivePassword;
+    readonly Func<Dictionary<string, object>, string> onPush;
+    int pushed; // 0 waiting, 1 taking one, 2 done: one bundle per code
+    bool Receiving => receivePassword != null;
+    int MaxBody => Receiving ? 8 * 1024 * 1024 : 16 * 1024;
+
     public ShareServer(ShareProtocol.Sealed s, int profiles, int port)
     {
       sealedBundle = s;
       profileCount = profiles;
+      Port = port;
+    }
+
+    public ShareServer(string password, int port, Func<Dictionary<string, object>, string> take)
+    {
+      receivePassword = Encoding.UTF8.GetBytes(password);
+      onPush = take;
       Port = port;
     }
 
@@ -462,7 +545,7 @@ namespace TmuxWeb
             var n = s.Read(chunk, 0, chunk.Length);
             if (n <= 0) return;
             buf.Write(chunk, 0, n);
-            if (buf.Length > 128 * 1024) { Send(s, 400, "text/plain; charset=utf-8", "请求太大"); return; }
+            if (buf.Length > MaxBody + 32 * 1024) { Send(s, 413, "text/plain; charset=utf-8", "请求太大"); return; }
             var data = buf.ToArray();
             if (head == null)
             {
@@ -472,7 +555,7 @@ namespace TmuxWeb
               bodyStart = end + 4;
               var m = System.Text.RegularExpressions.Regex.Match(head, @"(?im)^content-length:\s*(\d+)");
               length = m.Success ? int.Parse(m.Groups[1].Value) : 0;
-              if (length > 16 * 1024) { Send(s, 400, "text/plain; charset=utf-8", "请求不完整"); return; }
+              if (length > MaxBody) { Send(s, 413, "text/plain; charset=utf-8", "请求太大"); return; }
             }
             if (data.Length >= bodyStart + length)
             {
@@ -499,6 +582,7 @@ namespace TmuxWeb
         if (i > 0) headers[line.Substring(0, i).Trim()] = line.Substring(i + 1).Trim();
       }
       const string json = "application/json; charset=utf-8";
+      if (Receiving) { Receive(s, method, path, headers, body, ip); return; }
       if (method == "GET" && (path == "/" || path == "/index.html")) { Send(s, 200, "text/html; charset=utf-8", Page()); return; }
       if (method == "GET" && path == "/api/info")
       {
@@ -549,6 +633,65 @@ namespace TmuxWeb
       Send(s, 200, json, sealedBundle.envelopeJson, download ? "Content-Disposition: attachment; filename=\"tmux-web-config-share.json\"\r\n" : "");
     }
 
+    void Receive(Stream s, string method, string path, Dictionary<string, string> headers, string body, string ip)
+    {
+      const string json = "application/json; charset=utf-8";
+      if (method == "GET" && path == "/api/info")
+      {
+        Send(s, 200, json, Store.Json.Serialize(new Dictionary<string, object> { ["format"] = ShareProtocol.Format, ["version"] = ShareProtocol.Version.ToString(), ["service"] = "tmux-web", ["mode"] = "receive" }));
+        return;
+      }
+      if (method == "GET" && (path == "/" || path == "/index.html"))
+      {
+        Send(s, 200, "text/html; charset=utf-8", "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>tmux-web 接收配置</title><body style=\"font:16px/1.55 sans-serif;max-width:640px;margin:48px auto;padding:0 20px\"><h2>tmux-web 正在等待接收配置</h2><p>在另一台设备打开 tmux-web App → 共享配置 → 共享给其他设备 → 扫码发送，扫这台电脑上显示的二维码。</p></body>");
+        return;
+      }
+      if (method != "POST" || path != "/api/push") { Send(s, 404, "text/plain; charset=utf-8", "没有这个页面"); return; }
+      if (Blocked(ip)) { Send(s, 429, json, Err("尝试次数太多，请稍后再试")); return; }
+      byte[] pw = null;
+      try { if (headers.TryGetValue("x-share-password-b64", out var h)) pw = Convert.FromBase64String(h); } catch { }
+      if (pw == null || !Same(pw, receivePassword))
+      {
+        Failed(ip);
+        if (Blocked(ip)) Send(s, 429, json, Err("尝试次数太多，请稍后再试"));
+        else Send(s, 401, json, Err("密码不对"));
+        return;
+      }
+      lock (attempts) attempts.Remove(ip);
+      if (System.Threading.Interlocked.CompareExchange(ref pushed, 1, 0) != 0) { Send(s, 410, json, Err("已经收到过一份了")); return; }
+      try
+      {
+        var payload = ShareProtocol.Open(body, Encoding.UTF8.GetString(receivePassword));
+        var text = onPush(payload);
+        pushed = 2;
+        Send(s, 200, json, Store.Json.Serialize(new Dictionary<string, object> { ["ok"] = true, ["text"] = text }));
+      }
+      catch (Exception e)
+      {
+        pushed = 0; // a broken bundle: the sender may try again
+        Send(s, 400, json, Err(e is ShareError ? e.Message : "收到的内容解不开：" + e.Message));
+      }
+    }
+
+    /// the same bytes, in a time that doesn't tell how much matched
+    static bool Same(byte[] a, byte[] b)
+    {
+      var d = a.Length ^ b.Length;
+      for (var i = 0; i < Math.Min(a.Length, b.Length); i++) d |= a[i] ^ b[i];
+      return d == 0;
+    }
+
+    void Failed(string ip)
+    {
+      lock (attempts)
+      {
+        attempts.TryGetValue(ip, out var a);
+        a.count++;
+        if (a.count >= 5) { a.count = 0; a.until = DateTime.UtcNow.AddSeconds(60); }
+        attempts[ip] = a;
+      }
+    }
+
     bool Blocked(string ip)
     {
       lock (attempts) return attempts.TryGetValue(ip, out var a) && a.until > DateTime.UtcNow;
@@ -558,7 +701,7 @@ namespace TmuxWeb
 
     static void Send(Stream s, int status, string type, string body, string extra = "")
     {
-      var reason = status == 200 ? "OK" : status == 400 ? "Bad Request" : status == 401 ? "Unauthorized" : status == 404 ? "Not Found" : status == 429 ? "Too Many Requests" : "Error";
+      var reason = status == 200 ? "OK" : status == 400 ? "Bad Request" : status == 401 ? "Unauthorized" : status == 404 ? "Not Found" : status == 410 ? "Gone" : status == 413 ? "Payload Too Large" : status == 429 ? "Too Many Requests" : "Error";
       var b = Encoding.UTF8.GetBytes(body);
       var h = Encoding.UTF8.GetBytes($"HTTP/1.1 {status} {reason}\r\nContent-Type: {type}\r\nContent-Length: {b.Length}\r\nCache-Control: no-store\r\nConnection: close\r\n{extra}\r\n");
       s.Write(h, 0, h.Length);
@@ -664,6 +807,63 @@ namespace TmuxWeb
       Link = null;
       Addresses = new List<string>();
       Starting = false;
+    }
+
+    // ---- receiving: this device waits, the other one scans the code and sends
+
+    public const int ReceivePort = 48621;
+    public static ShareServer Receiver;
+    public static string ReceiveLink, ReceiveResult, ReceiveError;
+    public static List<string> ReceiveAddresses = new List<string>();
+
+    public static object ReceiveInfo => new
+    {
+      running = Receiver != null,
+      port = Receiver?.Port ?? 0,
+      addresses = ReceiveAddresses,
+      link = ReceiveLink,
+      result = ReceiveResult,
+      error = ReceiveError,
+    };
+
+    /// take: merges what came (on the UI thread) and says what it took; done: after that, from
+    /// the server's thread
+    public static void StartReceiving(Func<Dictionary<string, object>, string> take, Action done)
+    {
+      StopReceiving();
+      ReceiveResult = null;
+      ReceiveError = null;
+      var password = ShareProtocol.RandomPassword();
+      ShareServer server = null;
+      // the usual port, or the next free one
+      for (var port = ReceivePort; port < ReceivePort + 20 && server == null; port++)
+      {
+        ShareServer s = null;
+        s = new ShareServer(password, port, payload =>
+        {
+          var text = take(payload);
+          ReceiveResult = text;
+          // after the answer has gone out
+          Task.Delay(500).ContinueWith(_ => { if (Receiver == s) StopReceiving(keepResult: true); done(); });
+          return text;
+        });
+        try { s.Start(); server = s; }
+        catch (SocketException e) when (e.SocketErrorCode == SocketError.AddressAlreadyInUse) { }
+        catch (Exception e) { ReceiveError = "接收服务启动失败：" + e.Message; return; }
+      }
+      if (server == null) { ReceiveError = "端口 " + ReceivePort + "–" + (ReceivePort + 19) + " 都被占用了"; return; }
+      Receiver = server;
+      ReceiveAddresses = ShareServer.LocalIPv4();
+      ReceiveLink = ReceiveAddresses.Count == 0 ? null : new ShareLink { hosts = ReceiveAddresses, port = server.Port, password = password, receive = true }.Text;
+    }
+
+    public static void StopReceiving(bool keepResult = false)
+    {
+      Receiver?.Stop();
+      Receiver = null;
+      ReceiveLink = null;
+      ReceiveAddresses = new List<string>();
+      if (!keepResult) { ReceiveResult = null; ReceiveError = null; }
     }
   }
 

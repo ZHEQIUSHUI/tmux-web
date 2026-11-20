@@ -80,9 +80,18 @@ import java.security.SecureRandom
 @Composable
 fun ShareScreen(m: AppModel, a: Actions) {
   BackHandler { a.home() }
-  // a share link opened from outside (the camera app scanned the code): to the receiving side
-  var tab by remember { mutableIntStateOf(if (m.incomingShare != null) 1 else 0) }
-  LaunchedEffect(m.incomingShare) { if (m.incomingShare != null) tab = 1 }
+  // a share link opened from outside (the camera app scanned the code): to the receiving side;
+  // a receive link (a computer waiting to be sent to): to the sending side, with it as the target
+  var tab by remember { mutableIntStateOf(if (m.incomingShare != null && !m.incomingShare!!.receive) 1 else 0) }
+  var pushTarget by remember { mutableStateOf<ShareLink?>(null) }
+  LaunchedEffect(m.incomingShare) {
+    val l = m.incomingShare ?: return@LaunchedEffect
+    if (l.receive) {
+      pushTarget = l
+      m.incomingShare = null
+      tab = 0
+    } else tab = 1
+  }
   Scaffold(
     topBar = {
       TopAppBar(
@@ -96,14 +105,29 @@ fun ShareScreen(m: AppModel, a: Actions) {
         Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("共享给其他设备") })
         Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("从其他设备获取") })
       }
-      if (tab == 0) ShareSender(m) else ShareReceiver(m, a)
+      if (tab == 0) ShareSender(m, pushTarget) { pushTarget = it }
+      else ShareReceiver(m, a) { pushTarget = it; tab = 0 }
     }
   }
 }
 
 @Composable
-private fun ShareSender(m: AppModel) {
+private fun ShareSender(m: AppModel, pushTarget: ShareLink?, setPushTarget: (ShareLink?) -> Unit) {
   val scope = rememberCoroutineScope()
+  var pushing by remember { mutableStateOf(false) }
+  var pushError by remember { mutableStateOf<String?>(null) }
+  var pushed by remember { mutableStateOf<String?>(null) }
+  val scanTarget = rememberLauncherForActivityResult(ScanContract()) { r ->
+    val text = r.contents ?: return@rememberLauncherForActivityResult
+    val link = ShareLink.parse(text)
+    pushed = null
+    pushError = when {
+      link == null -> "这不是 tmux-web 的二维码"
+      !link.receive -> "这是对方的共享二维码：到「从其他设备获取」里扫它，是从对方取配置"
+      else -> null
+    }
+    if (link != null && link.receive) setPushTarget(link)
+  }
   val clipboard = LocalClipboardManager.current
   val context = LocalContext.current
   var selectedProfiles by remember { mutableStateOf(m.profiles.map { it.id }.toSet()) }
@@ -177,6 +201,76 @@ private fun ShareSender(m: AppModel) {
 
     item {
       ShareCard {
+        if (pushTarget == null) {
+          Text("对方是没有摄像头的电脑？", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+          Text("让对方在 tmux-web 的「共享配置 → 从其他设备获取」里点「等对方发过来」，扫它显示的二维码，再选好下面的服务器发送过去。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Spacer(Modifier.size(12.dp))
+          OutlinedButton(
+            onClick = {
+              pushError = null
+              scanTarget.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt("扫描对方电脑上的接收二维码").setBeepEnabled(false).setOrientationLocked(false))
+            },
+            modifier = Modifier.fillMaxWidth(),
+          ) { Text("扫码发送") }
+        } else {
+          Text("发送到对方", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+          Text("对方地址：${pushTarget.hosts.joinToString("、")}（端口 ${pushTarget.port}）。选好下面的服务器和私钥，点「发送」。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          pushed?.let {
+            Spacer(Modifier.size(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Icon(Icons.Filled.CheckCircle, null, tint = StateColor.ok)
+              Spacer(Modifier.size(8.dp))
+              Text("已发送：$it", style = MaterialTheme.typography.bodyMedium)
+            }
+          }
+          Spacer(Modifier.size(12.dp))
+          Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+              onClick = {
+                pushError = null
+                pushed = null
+                pushing = true
+                scope.launch {
+                  try {
+                    val payload = SharePayloadBuilder.build(m.profiles, m.keys, selectedProfiles, selectedKeys)
+                    pushed = withContext(Dispatchers.IO) { ShareClient.push(pushTarget, payload) }
+                    setPushTarget(null)
+                  } catch (e: Exception) {
+                    pushError = e.message ?: e.javaClass.simpleName
+                  } finally {
+                    pushing = false
+                  }
+                }
+              },
+              enabled = !pushing && selectedProfiles.isNotEmpty(),
+              modifier = Modifier.weight(1f),
+            ) {
+              if (pushing) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.size(9.dp))
+              }
+              Text(if (pushing) "正在发送…" else if (selectedProfiles.isEmpty()) "选择至少一个服务器" else "发送")
+            }
+            OutlinedButton(onClick = { setPushTarget(null); pushError = null }, enabled = !pushing) { Text("取消") }
+          }
+        }
+        pushError?.let {
+          Spacer(Modifier.size(10.dp))
+          LabeledError(it)
+        }
+        if (pushTarget == null) pushed?.let {
+          Spacer(Modifier.size(10.dp))
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.CheckCircle, null, tint = StateColor.ok)
+            Spacer(Modifier.size(8.dp))
+            Text("已发送：$it", style = MaterialTheme.typography.bodyMedium)
+          }
+        }
+      }
+    }
+
+    item {
+      ShareCard {
         Text("共享哪些配置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Text("选中的服务器会带上连接地址、账号、密码、EasyTier 网络信息和所用私钥。接收方会自动跳过完全相同的配置。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.size(12.dp))
@@ -218,9 +312,9 @@ private fun ShareSender(m: AppModel) {
       }
     }
 
-    item {
+    if (pushTarget == null) item {
       ShareCard {
-        Text("连接方式", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text("或者：开始共享，让对方来取", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.size(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
           OutlinedTextField(
@@ -268,7 +362,7 @@ private fun ShareSender(m: AppModel) {
 }
 
 @Composable
-private fun ShareReceiver(m: AppModel, a: Actions) {
+private fun ShareReceiver(m: AppModel, a: Actions, sendTo: (ShareLink) -> Unit) {
   val scope = rememberCoroutineScope()
   var host by remember { mutableStateOf("") }
   var port by remember { mutableStateOf(ShareProtocol.DEFAULT_PORT.toString()) }
@@ -305,12 +399,14 @@ private fun ShareReceiver(m: AppModel, a: Actions) {
       error = "这不是 tmux-web 的共享二维码"
       return@rememberLauncherForActivityResult
     }
+    // the other side is waiting to be sent to: choose what to send
+    if (link.receive) return@rememberLauncherForActivityResult sendTo(link)
     fill(link)
     receive { ShareClient.fetch(link) }
   }
   // opened from outside the app (any page can open a link): filled in, imported only on a tap
   LaunchedEffect(m.incomingShare) {
-    m.incomingShare?.let {
+    m.incomingShare?.takeIf { !it.receive }?.let {
       fill(it)
       m.incomingShare = null
       result = null
@@ -357,7 +453,7 @@ private fun ShareReceiver(m: AppModel, a: Actions) {
         Spacer(Modifier.size(8.dp))
         OutlinedTextField(
           host,
-          { v -> ShareLink.parse(v)?.let { fill(it) } ?: run { host = v } },
+          { v -> ShareLink.parse(v)?.let { if (it.receive) sendTo(it) else fill(it) } ?: run { host = v } },
           Modifier.fillMaxWidth(), label = { Text("对方 IP") }, placeholder = { Text("比如 192.168.1.23") }, singleLine = true,
         )
         Spacer(Modifier.size(10.dp))

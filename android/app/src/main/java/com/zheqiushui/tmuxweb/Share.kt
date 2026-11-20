@@ -66,7 +66,9 @@ data class SharedPayload(
         put(JSONObject().apply {
           put("id", k.id)
           put("name", k.name)
-          put("privateKey", k.privateKey)
+          // keys are kept trimmed here; ssh on the receiving side (Windows, Mac) wants the line
+          // break after the last line, or calls the key "invalid format"
+          put("privateKey", if (k.privateKey.isEmpty() || k.privateKey.endsWith("\n")) k.privateKey else k.privateKey + "\n")
           put("passphrase", k.passphrase)
         })
       }
@@ -668,6 +670,57 @@ object ShareClient {
     }
   }
 
+  /**
+   * Send a bundle to a device waiting for one (it showed a tmuxweb://receive code): to its
+   * addresses in turn. Answers what the other side says it took.
+   */
+  fun push(link: ShareLink, payload: SharedPayload): String {
+    val sealed = ShareProtocol.seal(payload, link.password)
+    var last: ShareException? = null
+    for (h in link.hosts) {
+      try {
+        return push(h, link.port, link.password, sealed.envelopeJson, if (link.hosts.size > 1) 3_000 else 8_000)
+      } catch (e: ShareException) {
+        if (e.cause == null) throw e
+        last = e
+      }
+    }
+    throw last ?: ShareException("二维码里没有地址")
+  }
+
+  private fun push(host: String, port: Int, password: String, envelopeJson: String, connectTimeout: Int): String {
+    val url = java.net.URL("http://${if (host.contains(':')) "[$host]" else host}:$port/api/push")
+    val c = url.openConnection() as java.net.HttpURLConnection
+    c.connectTimeout = connectTimeout
+    // the other side derives the key and merges before it answers
+    c.readTimeout = 30_000
+    c.instanceFollowRedirects = false
+    c.requestMethod = "POST"
+    c.doOutput = true
+    c.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+    c.setRequestProperty("Accept", "application/json")
+    c.setRequestProperty("X-Share-Password-B64", Base64.getEncoder().encodeToString(password.toByteArray(StandardCharsets.UTF_8)))
+    try {
+      val body = envelopeJson.toByteArray(StandardCharsets.UTF_8)
+      c.setFixedLengthStreamingMode(body.size)
+      c.outputStream.use { it.write(body) }
+      val code = c.responseCode
+      val answer = String(readLimited(if (code in 200..299) c.inputStream else c.errorStream), StandardCharsets.UTF_8)
+      val message = try { JSONObject(answer).optString(if (code in 200..299) "text" else "error") } catch (_: Exception) { "" }
+      if (code == 401) throw ShareException("密码不对（二维码不完整？）")
+      if (code == 429) throw ShareException("尝试次数太多，请等一分钟再试")
+      if (code == 410) throw ShareException("对方已经收到过一份了：让对方重新点「等对方发过来」")
+      if (code !in 200..299) throw ShareException(message.ifBlank { "对方拒绝了（HTTP $code）" })
+      return message.ifBlank { "对方已收到" }
+    } catch (e: ShareException) {
+      throw e
+    } catch (e: Exception) {
+      throw ShareException("连不上 $host:$port：${e.message ?: e.javaClass.simpleName}", e)
+    } finally {
+      c.disconnect()
+    }
+  }
+
   fun parseHost(input: String, fallbackPort: Int): Pair<String, Int> {
     var s = input.trim()
     if (s.isEmpty()) throw ShareException("填上对方的 IP 地址")
@@ -702,18 +755,21 @@ object ShareClient {
 }
 
 /**
- * Everything a receiver needs in one line, for the QR code: scanning it is enough.
- * tmuxweb://share?h=192.168.1.23,10.126.126.5&p=48620&k=<password>
+ * Everything the other side needs in one line, for the QR code: scanning it is enough.
+ * tmuxweb://share?h=192.168.1.23,10.126.126.5&p=48620&k=<password>   a device sharing: fetch from it
+ * tmuxweb://receive?h=…&p=…&k=…   a device waiting to be sent to (a computer without a camera): send to it
  */
-data class ShareLink(val hosts: List<String>, val port: Int, val password: String) {
-  override fun toString() = "$PREFIX?h=${hosts.joinToString(",")}&p=$port&k=${URLEncoder.encode(password, "UTF-8")}"
+data class ShareLink(val hosts: List<String>, val port: Int, val password: String, val receive: Boolean = false) {
+  override fun toString() = "${if (receive) RECEIVE_PREFIX else PREFIX}?h=${hosts.joinToString(",")}&p=$port&k=${URLEncoder.encode(password, "UTF-8")}"
 
   companion object {
     const val PREFIX = "tmuxweb://share"
+    const val RECEIVE_PREFIX = "tmuxweb://receive"
 
     fun parse(text: String): ShareLink? {
       val s = text.trim()
-      if (!s.startsWith("$PREFIX?")) return null
+      val receive = s.startsWith("$RECEIVE_PREFIX?")
+      if (!receive && !s.startsWith("$PREFIX?")) return null
       val q = s.substringAfter('?').split('&').mapNotNull { kv ->
         val parts = kv.split('=', limit = 2)
         if (parts.size != 2) null else parts[0] to (try { URLDecoder.decode(parts[1], "UTF-8") } catch (_: Exception) { return null })
@@ -722,7 +778,7 @@ data class ShareLink(val hosts: List<String>, val port: Int, val password: Strin
       val port = q["p"]?.toIntOrNull() ?: return null
       val password = q["k"].orEmpty()
       if (hosts.isEmpty() || port !in 1024..65535 || password.length < ShareProtocol.MIN_PASSWORD) return null
-      return ShareLink(hosts, port, password)
+      return ShareLink(hosts, port, password, receive)
     }
   }
 }

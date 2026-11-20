@@ -78,6 +78,14 @@ namespace TmuxWeb
         Answer(saved);
         return 0;
       }
+      // "Enter passphrase for key …": the key's saved passphrase, the same way
+      var phrase = Environment.GetEnvironmentVariable("TW_SSH_PASSPHRASE");
+      if (prompt.IndexOf("passphrase", StringComparison.OrdinalIgnoreCase) >= 0 && !string.IsNullOrEmpty(phrase) && !File.Exists(Mark(token) + "-key"))
+      {
+        try { File.WriteAllText(Mark(token) + "-key", ""); } catch { }
+        Answer(phrase);
+        return 0;
+      }
       // a yes/no question (a new host key with other settings): yes/no, not a password field
       try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { }
       Application.EnableVisualStyles();

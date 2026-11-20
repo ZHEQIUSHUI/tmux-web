@@ -143,6 +143,8 @@ namespace TmuxWeb
     public List<Profile> profiles = new List<Profile>();
     public List<SSHKey> keys = new List<SSHKey>();
     public Dictionary<string, string> passwords = new Dictionary<string, string>();
+    /// a key's passphrase, by key id: one that came with a shared key (ssh asks; the app answers)
+    public Dictionary<string, string> passphrases = new Dictionary<string, string>();
     public string current;
     public Dictionary<string, string> settings = new Dictionary<string, string>();
   }
@@ -181,6 +183,7 @@ namespace TmuxWeb
       data.profiles = data.profiles ?? new List<Profile>();
       data.keys = data.keys ?? new List<SSHKey>();
       data.passwords = data.passwords ?? new Dictionary<string, string>();
+      data.passphrases = data.passphrases ?? new Dictionary<string, string>();
       data.settings = data.settings ?? new Dictionary<string, string>();
     }
 
@@ -280,6 +283,15 @@ namespace TmuxWeb
     {
       foreach (var p in data.profiles) if (p.keyID == id) p.keyID = null;
       data.keys.RemoveAll(k => k.id == id);
+      data.passphrases.Remove(id);
+      Save();
+    }
+
+    public static string Passphrase(string keyID) => keyID != null && data.passphrases.TryGetValue(keyID, out var v) ? v : "";
+
+    public static void SetPassphrase(string keyID, string phrase)
+    {
+      if (string.IsNullOrEmpty(phrase)) data.passphrases.Remove(keyID); else data.passphrases[keyID] = phrase;
       Save();
     }
   }

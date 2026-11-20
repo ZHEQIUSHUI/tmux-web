@@ -3,6 +3,7 @@ package com.zheqiushui.tmuxweb
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.HttpURLConnection
 import java.net.ServerSocket
@@ -135,6 +136,25 @@ class ConfigShareTest {
     assertNull(ShareLink.parse("tmuxweb://share?h=1.2.3.4&p=80&k=abcdefgh"))
     assertNull(ShareLink.parse("tmuxweb://share?h=1.2.3.4&p=48620&k=abc"))
     assertEquals(ShareLink(listOf("1.2.3.4"), 48620, "abcdefgh"), ShareLink.parse("  tmuxweb://share?h=1.2.3.4&p=48620&k=abcdefgh\n"))
+  }
+
+  @Test
+  fun shareAndReceiveLinksRoundTrip() {
+    val share = ShareLink(listOf("192.168.1.23", "10.126.126.5"), 48620, "a b&c=d")
+    assertEquals(share, ShareLink.parse(share.toString()))
+    val receive = ShareLink(listOf("192.168.1.30"), 48621, "Xy7kq2mPz9aB", receive = true)
+    assertEquals("tmuxweb://receive?h=192.168.1.30&p=48621&k=Xy7kq2mPz9aB", receive.toString())
+    assertEquals(receive, ShareLink.parse(receive.toString()))
+    // a short password, a port out of range: not a link
+    assertEquals(null, ShareLink.parse("tmuxweb://receive?h=1.2.3.4&p=48621&k=abc"))
+    assertEquals(null, ShareLink.parse("tmuxweb://other?h=1.2.3.4&p=48621&k=abcdefgh"))
+  }
+
+  @Test
+  fun sharedKeysEndWithALineBreak() {
+    val k = SshKey(name = "k", privateKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----")
+    val json = SharedPayload(listOf(SharedKey(k.id, k.name, k.privateKey, "")), emptyList()).toJson()
+    assertTrue(json.getJSONArray("keys").getJSONObject(0).getString("privateKey").endsWith("-----\n"))
   }
 
   private companion object {

@@ -224,6 +224,7 @@ namespace TmuxWeb
       }
       foreach (var c in conns.Values) c.tunnel.Stop();
       ShareService.Stop();
+      ShareService.StopReceiving();
       tray.Visible = false;
     }
 
@@ -619,6 +620,7 @@ namespace TmuxWeb
         update = UpdateOffer,
         easyTier = EasyTierCore.Executable != null,
         share = ShareService.Info,
+        receive = ShareService.ReceiveInfo,
       });
     }
 
@@ -733,12 +735,49 @@ namespace TmuxWeb
               break;
             }
           case "shareStop": ShareService.Stop(); Publish(); break;
+          case "receiveStart":
+            ShareService.StartReceiving(
+              payload => (string)Invoke((Func<string>)(() =>
+              {
+                var text = ShareImport.Merge(payload);
+                StartProbing();
+                return text;
+              })),
+              () => BeginInvoke((Action)(() => { Publish(); BringBack(); Send(new { type = "share", tab = 1 }); })));
+            Publish();
+            break;
+          case "receiveStop": ShareService.StopReceiving(); Publish(); break;
+          case "sharePush":
+            {
+              try
+              {
+                var link = ShareLink.Parse(S(m, "link"));
+                if (link == null || !link.receive) throw new ShareError("这不是接收链接：要以 tmuxweb://receive? 开头");
+                var ps = ((System.Collections.IEnumerable)m["profiles"]).OfType<string>().ToList();
+                var ks = ((System.Collections.IEnumerable)m["keys"]).OfType<string>().ToList();
+                var payload = ShareImport.Payload(ps, ks, S(m, "passphrase") ?? "");
+                var sealedBundle = await Task.Run(() => ShareProtocol.Seal(payload, link.password));
+                string text = null;
+                Exception last = new ShareError("链接里没有地址");
+                foreach (var h in link.hosts)
+                {
+                  try { text = await ShareImport.Push(h, link.port, link.password, sealedBundle.envelopeJson, link.hosts.Count > 1 ? 4000 : 12000); break; }
+                  catch (ShareError e) when (e.Message.StartsWith("连不上")) { last = e; }
+                }
+                if (text == null) throw last;
+                Reply(req, new { ok = true, text });
+              }
+              catch (ShareError e) { Reply(req, new { error = e.Message }); }
+              catch (Exception e) { Reply(req, new { error = e.Message }); }
+              break;
+            }
           case "shareFetch":
             {
               try
               {
                 Dictionary<string, object> payload = null;
                 var link = ShareLink.Parse(S(m, "link"));
+                if (link != null && link.receive) throw new ShareError("这是对方的接收链接：到「共享给其他设备」里选好服务器，用它发送过去");
                 if (link != null)
                 {
                   Exception last = new ShareError("链接里没有地址");

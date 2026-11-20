@@ -171,7 +171,10 @@ class MainActivity : ComponentActivity(), Actions {
     openShareLink(intent)
   }
 
-  /** tmuxweb://share?… (the camera app scanned a share code): to the receiving side, filled in */
+  /**
+   * tmuxweb://share?… (the camera app scanned a share code): to the receiving side, filled in.
+   * tmuxweb://receive?… (a computer waiting for a config): to the sending side, with it as the target.
+   */
   private fun openShareLink(intent: Intent) {
     val link = intent.data?.toString()?.let(ShareLink::parse) ?: return
     model.incomingShare = link

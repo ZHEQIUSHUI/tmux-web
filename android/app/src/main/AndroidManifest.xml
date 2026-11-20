@@ -26,12 +26,13 @@
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
-      <!-- a config share QR code scanned with the camera app -->
+      <!-- a config share (or receive) QR code scanned with the camera app -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
         <category android:name="android.intent.category.BROWSABLE" />
         <data android:scheme="tmuxweb" android:host="share" />
+        <data android:scheme="tmuxweb" android:host="receive" />
       </intent-filter>
     </activity>
 

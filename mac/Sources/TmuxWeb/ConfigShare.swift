@@ -349,7 +349,10 @@ enum ImportedKeyFiles {
     let fm = FileManager.default
     try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     let file = dir.appendingPathComponent(UUID().uuidString + ".key")
-    guard fm.createFile(atPath: file.path, contents: Data(text.utf8), attributes: [.posixPermissions: 0o600]) else {
+    // ssh calls a key without the line break after its last line "invalid format" (the Android
+    // app sends keys trimmed)
+    let body = text.hasSuffix("\n") ? text : text + "\n"
+    guard fm.createFile(atPath: file.path, contents: Data(body.utf8), attributes: [.posixPermissions: 0o600]) else {
       throw ShareError("无法保存导入的私钥")
     }
     chmod(file.path, 0o600)

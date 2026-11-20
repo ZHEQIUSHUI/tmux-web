@@ -251,6 +251,8 @@ namespace TmuxWeb
       psi.EnvironmentVariables["TW_ASKPASS_TITLE"] = p.Title;
       var pw = Store.Password(p.id);
       if (pw.Length > 0) psi.EnvironmentVariables["TW_SSH_PASSWORD"] = pw; else psi.EnvironmentVariables.Remove("TW_SSH_PASSWORD");
+      var phrase = key != null ? Store.Passphrase(key.id) : "";
+      if (phrase.Length > 0) psi.EnvironmentVariables["TW_SSH_PASSPHRASE"] = phrase; else psi.EnvironmentVariables.Remove("TW_SSH_PASSPHRASE");
       if (!Run(psi, out var why)) { DropKeyCopy(); State = TunnelState.Of(TunnelKind.Failed, "无法启动 ssh：" + why); return; }
       var task = proc;
       // the forward listens once ssh is in: then the page can load
@@ -473,7 +475,7 @@ namespace TmuxWeb
         {
           var buf = new byte[200];
           var n = f.Read(buf, 0, buf.Length);
-          head = Encoding.UTF8.GetString(buf, 0, n).Trim();
+          head = Encoding.UTF8.GetString(buf, 0, n).TrimStart('\uFEFF').Trim();
         }
       }
       catch { return "读不到密钥文件：" + path; }
@@ -489,9 +491,23 @@ namespace TmuxWeb
       Directory.CreateDirectory(Dir);
       var copy = Path.Combine(Dir, id);
       try { File.Delete(copy); } catch { }
-      // ssh wants LF or CRLF, both fine; the bytes as they are
-      Private.WriteFile(copy, File.ReadAllBytes(path));
+      Private.WriteFile(copy, Readable(File.ReadAllBytes(path)));
       return copy;
+    }
+
+    /// The key as ssh reads it. LF or CRLF are both fine, but ssh calls a key "invalid format"
+    /// without the line break after its last line (keys pasted or shared from the Android app are
+    /// stored trimmed) or with a UTF-8 BOM in front (some editors save one).
+    public static byte[] Readable(byte[] key)
+    {
+      var start = key.Length >= 3 && key[0] == 0xEF && key[1] == 0xBB && key[2] == 0xBF ? 3 : 0;
+      var end = key.Length;
+      while (end > start && (key[end - 1] == ' ' || key[end - 1] == '\t')) end--;
+      var newline = end > start && key[end - 1] != '\n';
+      var r = new byte[end - start + (newline ? 1 : 0)];
+      Array.Copy(key, start, r, 0, end - start);
+      if (newline) r[r.Length - 1] = (byte)'\n';
+      return r;
     }
 
     public static void RemoveStale()
