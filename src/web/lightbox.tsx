@@ -53,7 +53,8 @@ export function Lightbox() {
       if (!a || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
       const root = a.closest('.chat, .fv-body') ?? document;
-      const links = [...root.querySelectorAll<HTMLAnchorElement>('a.md-img')];
+      // the images one can see: not those in a folded tool group (they are on the page, hidden)
+      const links = [...root.querySelectorAll<HTMLAnchorElement>('a.md-img')].filter((l) => l === a || (!l.closest('details:not([open])') && l.getClientRects().length > 0));
       setPics(links.map((l) => ({ url: l.getAttribute('href')!, alt: l.querySelector('img')?.alt ?? '' })));
       setAt(Math.max(0, links.indexOf(a)));
       setSlide({ dx: 0, dy: 0, ease: false });
