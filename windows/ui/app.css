@@ -315,6 +315,7 @@ svg { flex: none; }
   animation: pop 0.14s ease-out;
 }
 @keyframes pop { from { transform: scale(0.97); opacity: 0; } }
+#modal.still .dlg { animation: none; }
 .dlg.narrow { max-width: 460px; }
 .dlg-head { display: flex; align-items: center; gap: 12px; padding: 16px 22px; border-bottom: 1px solid var(--line); background: var(--panel2); }
 .dlg-head h2 { margin: 0; font-size: 17px; font-weight: 600; }

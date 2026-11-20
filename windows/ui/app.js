@@ -388,6 +388,9 @@ function setModal(html) {
   // a re-render of the same dialog keeps where it was scrolled to (else it jumps to the top
   // and back on every key or click: a flicker)
   const scrolled = [...el.querySelectorAll('.dlg-body')].map((b) => b.scrollTop);
+  // the pop-in animation is for opening only: a redraw of an open dialog (every key, every
+  // click) would play it again and the dialog would blink
+  el.classList.toggle('still', was && !!html);
   el.innerHTML = html;
   el.querySelectorAll('.dlg-body').forEach((b, i) => {
     if (scrolled[i]) b.scrollTop = scrolled[i];
