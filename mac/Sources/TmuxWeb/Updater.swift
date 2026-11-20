@@ -206,7 +206,8 @@ enum Updater {
       order = list.indices.filter { got[$0] > 0 }.sorted { got[$0] > got[$1] }.map { list[$0] }
       // the one whose version.json came first, when none got anywhere
       if let q = o.quickest, !order.contains(where: { $0.id == mirrors[q].id }) { order.append(mirrors[q]) }
-      order += list.filter { m in !order.contains { $0.id == m.id } }
+      let tried = Set(order.map(\.id))
+      order += list.filter { !tried.contains($0.id) }
     }
     for m in order {
       if Task.isCancelled { return }
@@ -214,15 +215,15 @@ enum Updater {
       let from = m.label
       let t = await MainActor.run { () -> Task<Data?, Never> in
         model.state = .downloading(from: from, done: 0, total: -1, speed: 0)
-        let t = Task {
+        let one = Task {
           await Download.run(req) { done, total, speed in
             Task { @MainActor in
               if case .downloading = model.state { model.state = .downloading(from: from, done: done, total: total > 0 ? total : size, speed: speed) }
             }
           }
         }
-        current = t
-        return t
+        current = one
+        return one
       }
       // 取消 stops this one too
       let d = await withTaskCancellationHandler { await t.value } onCancel: { t.cancel() }
