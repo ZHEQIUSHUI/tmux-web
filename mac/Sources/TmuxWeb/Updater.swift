@@ -170,9 +170,9 @@ enum Updater {
   }
 
   /// the download going on; 换一个渠道 stops it and the next channel goes on
-  @MainActor private static var current: Task<Data?, Never>?
+  @MainActor private static var fetching: Task<Data?, Never>?
 
-  @MainActor static func switchChannel() { current?.cancel() }
+  @MainActor static func switchChannel() { fetching?.cancel() }
 
   /// 更新 / 重试
   @MainActor static func update() {
@@ -222,12 +222,12 @@ enum Updater {
             }
           }
         }
-        current = one
+        fetching = one
         return one
       }
       // 取消 stops this one too
       let d = await withTaskCancellationHandler { await t.value } onCancel: { t.cancel() }
-      await MainActor.run { current = nil }
+      await MainActor.run { fetching = nil }
       if let d, sha.isEmpty || SHA256.hash(data: d).map({ String(format: "%02x", $0) }).joined() == sha {
         data = d
         break
