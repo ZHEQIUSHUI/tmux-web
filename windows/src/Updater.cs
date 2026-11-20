@@ -56,7 +56,50 @@ namespace TmuxWeb
 
     static void Say(MainForm form, string state, string text = null)
     {
-      form.Send(new { type = "update", state, text, version = offer?.version, notes = offer?.notes, current = Current });
+      form.Send(new
+      {
+        type = "update", state, text, version = offer?.version, notes = offer?.notes, current = Current,
+        channels = Channels(offer).Select(c => new { id = c.id, label = c.label }).ToArray(),
+        channel = Channel,
+      });
+    }
+
+    /// where the update is downloaded from: "auto" (all of them measured, the quickest one), or one
+    /// of Channels (the others after it if it fails)
+    public static string Channel => Store.Setting("updateChannel") ?? "auto";
+
+    /// A place the file can be had: (url, bearer token or null), or null when it can't serve it.
+    class Source { public string id, label; public Func<Offer, Task<Tuple<string, string>>> req; }
+
+    static Source Web(string id, string label, string prefix) =>
+      new Source { id = id, label = label, req = o => Task.FromResult(Tuple.Create(prefix + Github + o.file, (string)null)) };
+
+    static Source Ghcr(string id, string label, string host) => new Source
+    {
+      id = id,
+      label = label,
+      req = async o =>
+      {
+        if (string.IsNullOrEmpty(o.sha256)) return null;
+        var t = await GhcrToken();
+        return t == null ? null : Tuple.Create("https://" + host + "/v2/" + Image + "/blobs/sha256:" + o.sha256, t);
+      },
+    };
+
+    /// in the order they're tried when none was picked (or the picked one fails)
+    static List<Source> Channels(Offer o)
+    {
+      var list = new List<Source>();
+      if (o?.server != null)
+        list.Add(new Source { id = "server", label = "已连接的服务器", req = x => Task.FromResult(Tuple.Create(x.server + "/_tw/api/app/download/" + Uri.EscapeDataString(x.file), (string)null)) });
+      list.Add(Ghcr("nju", "南京大学镜像（ghcr.nju.edu.cn）", "ghcr.nju.edu.cn"));
+      list.Add(Web("ghfast", "ghfast.top", Proxies[0]));
+      list.Add(Web("ghproxy", "gh-proxy.com", Proxies[1]));
+      list.Add(Web("llkk", "gh.llkk.cc", Proxies[2]));
+      list.Add(Web("ghproxynet", "ghproxy.net", Proxies[3]));
+      list.Add(Web("github", "GitHub 直连", ""));
+      list.Add(Ghcr("ghcr", "ghcr.io", "ghcr.io"));
+      return list;
     }
 
     /// Look for a new version (at most every 6 hours unless asked); not asked: say nothing if none.
@@ -111,8 +154,13 @@ namespace TmuxWeb
       Say(form, "none");
     }
 
+    /// the download going on: 换一个渠道 stops it and the next channel goes on
+    static CancellationTokenSource current;
+
+    public static void SwitchChannel() => current?.Cancel();
+
     /// download, check, unpack; then a script waits for us to quit, copies it over this folder and starts it
-    public static async void Install(MainForm form)
+    public static async void Install(MainForm form, string channel)
     {
       var o = offer;
       if (o == null || busy) return;
@@ -122,31 +170,36 @@ namespace TmuxWeb
         Say(form, "failed", "没有权限写入 App 所在的文件夹（" + appDir + "）。把 tmux-web 文件夹放到自己的目录里（比如「文档」），或从 GitHub 下载新版本手动替换。");
         return;
       }
+      if (channel != null) Store.SetSetting("updateChannel", channel);
       busy = true;
       try
       {
-        Say(form, "downloading", "0");
-        var urls = new List<string>();
-        if (o.server != null) urls.Add(o.server + "/_tw/api/app/download/" + Uri.EscapeDataString(o.file));
-        // GitHub's proxies, GitHub, and the release in GHCR (Nanjing University's mirror first)
-        urls.Add(Proxies[0] + Github + o.file);
-        if (!string.IsNullOrEmpty(o.sha256)) urls.AddRange(GhcrHosts.Select(h => "ghcr:" + h));
-        urls.AddRange(Proxies.Skip(1).Select(p => p + Github + o.file));
-        byte[] data = null;
-        foreach (var u in urls)
+        Progress(form, o, "", 0, -1, 0);
+        var all = Channels(o);
+        var picked = all.FirstOrDefault(c => c.id == Channel);
+        var order = new List<Source>();
+        if (picked != null) order.Add(picked);
+        else
         {
-          string token = null, url = u;
-          if (u.StartsWith("ghcr:"))
-          {
-            token = await GhcrToken();
-            if (token == null) continue;
-            url = "https://" + u.Substring(5) + "/v2/" + Image + "/blobs/sha256:" + o.sha256;
-          }
-          data = await Download(url, o.size, pct => Say(form, "downloading", pct.ToString()), token);
+          // 自动: a moment of every one at once; the quickest first, then the rest by how they did
+          Progress(form, o, "正在测速", 0, -1, 0);
+          var got = await Measure(o, all);
+          order.AddRange(all.Select((c, i) => new { c, n = got[i] }).Where(x => x.n > 0).OrderByDescending(x => x.n).Select(x => x.c));
+        }
+        order.AddRange(all.Where(c => !order.Contains(c)));
+        byte[] data = null;
+        foreach (var src in order)
+        {
+          var r = await src.req(o);
+          if (r == null) continue;
+          Progress(form, o, src.label, 0, -1, 0);
+          using (current = new CancellationTokenSource())
+            data = await Fetch(r.Item1, r.Item2, long.MaxValue, current.Token, (done, total, speed) => Progress(form, o, src.label, done, total > 0 ? total : o.size, speed));
+          current = null;
           if (data == null) continue;
           var sha = Hex(SHA256.Create().ComputeHash(data));
           if (string.IsNullOrEmpty(o.sha256) || sha == o.sha256) break;
-          Log.Write("update: sha mismatch from " + u);
+          Log.Write("update: sha mismatch from " + r.Item1);
           data = null;
         }
         if (data == null) { Say(form, "failed", "下载失败（服务器、GitHub 和镜像都没下载下来，或文件校验不对），稍后再试。"); return; }
@@ -277,25 +330,97 @@ namespace TmuxWeb
       return null;
     }
 
-    static async Task<byte[]> Download(string url, long size, Action<int> progress, string bearer = null)
+    static void Progress(MainForm form, Offer o, string from, long done, long total, long speed)
     {
+      var pct = total > 0 ? (int)Math.Min(100, done * 100 / total) : 0;
+      form.Send(new { type = "update", state = "downloading", text = pct.ToString(), version = o.version, current = Current, from, done, total, speed });
+    }
+
+    /// how much of the file each channel gives in a few seconds (all at once; one that has half a
+    /// megabyte already ends it)
+    static async Task<long[]> Measure(Offer o, List<Source> all)
+    {
+      const long Enough = 512 * 1024;
+      var got = new long[all.Count];
+      using (var stop = new CancellationTokenSource())
+      {
+        var runs = all.Select(async (c, i) =>
+        {
+          try
+          {
+            var r = await c.req(o);
+            if (r == null) return;
+            await Fetch(r.Item1, r.Item2, Enough, stop.Token, (done, total, speed) =>
+            {
+              got[i] = done;
+              if (done >= Enough || (total > 0 && done >= total)) stop.Cancel();
+            });
+          }
+          catch { }
+        }).ToList();
+        await Task.WhenAny(Task.WhenAll(runs), Task.Delay(6000));
+        stop.Cancel();
+      }
+      return got;
+    }
+
+    /// a file, or its first `max` bytes; null when it fails or is stopped. `progress`(bytes so far,
+    /// total or -1, bytes a second), a few times a second
+    static async Task<byte[]> Fetch(string url, string bearer, long max, CancellationToken stop, Action<long, long, long> progress)
+    {
+      HttpWebRequest req = null;
       try
       {
-        using (var c = new TimedClient(30000))
+        req = (HttpWebRequest)WebRequest.Create(url);
+        req.UserAgent = "tmux-web-windows";
+        req.Timeout = 30000;
+        req.ReadWriteTimeout = 60000;
+        if (bearer != null) req.Headers[HttpRequestHeader.Authorization] = "Bearer " + bearer;
+        using (stop.Register(() => { try { req.Abort(); } catch { } }))
         {
-          if (bearer != null) c.Headers[HttpRequestHeader.Authorization] = "Bearer " + bearer;
-          var last = -1;
-          c.DownloadProgressChanged += (s, e) =>
+          var rt = req.GetResponseAsync();
+          // async requests don't keep to Timeout
+          if (await Task.WhenAny(rt, Task.Delay(30000, stop)) != rt) { req.Abort(); return null; }
+          using (var res = (HttpWebResponse)await rt)
+          using (var s = res.GetResponseStream())
           {
-            var total = e.TotalBytesToReceive > 0 ? e.TotalBytesToReceive : size;
-            if (total <= 0) return;
-            var pct = (int)(e.BytesReceived * 100 / total);
-            if (pct != last) { last = pct; progress(pct); }
-          };
-          return await c.DownloadDataTaskAsync(url);
+            if (res.StatusCode != HttpStatusCode.OK) return null;
+            var total = res.ContentLength;
+            var ms = new MemoryStream(total > 0 && total < 1 << 30 ? (int)Math.Min(total, max) : 0);
+            var buf = new byte[65536];
+            var watch = Stopwatch.StartNew();
+            long lastAt = 0, lastDone = 0, speed = 0;
+            progress(0, total, 0);
+            while (ms.Length < max)
+            {
+              var read = s.ReadAsync(buf, 0, buf.Length, stop);
+              // a stalled connection: give up after a minute without a byte
+              if (await Task.WhenAny(read, Task.Delay(60000, stop)) != read) return null;
+              var n = await read;
+              if (n <= 0) break;
+              ms.Write(buf, 0, n);
+              var now = watch.ElapsedMilliseconds;
+              if (now - lastAt >= 250)
+              {
+                var sp = (ms.Length - lastDone) * 1000 / Math.Max(1, now - lastAt);
+                speed = speed == 0 ? sp : (speed * 2 + sp) / 3;
+                lastAt = now;
+                lastDone = ms.Length;
+                progress(ms.Length, total, speed);
+              }
+            }
+            if (stop.IsCancellationRequested) return null;
+            progress(ms.Length, total, speed);
+            if (max == long.MaxValue && total > 0 && ms.Length != total) return null;
+            return ms.ToArray();
+          }
         }
       }
-      catch (Exception e) { Log.Write("update download " + url + ": " + e.Message); return null; }
+      catch (Exception e)
+      {
+        if (!stop.IsCancellationRequested) Log.Write("update download " + url + ": " + e.Message);
+        return null;
+      }
     }
 
     class TimedClient : WebClient

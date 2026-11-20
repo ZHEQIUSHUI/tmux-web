@@ -15,20 +15,39 @@ enum Updater {
 
   /// A place the release can be had: its version.json, and how to ask it for a file.
   private struct Mirror {
+    let id: String
+    let label: String
     let version: () async -> [String: Any]?
     let file: (_ name: String, _ sha: String) async -> URLRequest?
   }
 
   /// in the order they're tried for a file when none is known to be quicker
   private static let mirrors: [Mirror] = {
-    func ghcr(_ host: String) -> Mirror {
-      Mirror(version: { await ghcrVersion(host) }, file: { _, sha in await ghcrBlob(host, sha) })
+    func ghcr(_ id: String, _ label: String, _ host: String) -> Mirror {
+      Mirror(id: id, label: label, version: { await ghcrVersion(host) }, file: { _, sha in await ghcrBlob(host, sha) })
     }
-    func web(_ prefix: String) -> Mirror {
-      Mirror(version: { await json(prefix + github + "version.json") }, file: { name, _ in URLRequest(url: URL(string: prefix + github + name)!, timeoutInterval: 30) })
+    func web(_ id: String, _ label: String, _ prefix: String) -> Mirror {
+      Mirror(id: id, label: label, version: { await json(prefix + github + "version.json") }, file: { name, _ in URLRequest(url: URL(string: prefix + github + name)!, timeoutInterval: 30) })
     }
-    return [ghcr("ghcr.nju.edu.cn")] + proxies.map(web) + [web(""), ghcr("ghcr.io")]
+    return [ghcr("nju", "南京大学镜像（ghcr.nju.edu.cn）", "ghcr.nju.edu.cn"),
+            web("ghfast", "ghfast.top", proxies[0]), web("ghproxy", "gh-proxy.com", proxies[1]),
+            web("llkk", "gh.llkk.cc", proxies[2]), web("ghproxynet", "ghproxy.net", proxies[3]),
+            web("github", "GitHub 直连", ""), ghcr("ghcr", "ghcr.io", "ghcr.io")]
   }()
+
+  /// our server, while connected: it fetches the file from the quickest mirror itself
+  private static func server(_ base: String) -> Mirror {
+    Mirror(id: "server", label: "已连接的服务器", version: { nil }, file: { name, _ in URLRequest(url: URL(string: "\(base)/_tw/api/app/download/\(name)")!, timeoutInterval: 300) })
+  }
+
+  /// (id, label) of the channels 更新 can download from; "auto" measures them all and takes the quickest
+  @MainActor static var channels: [(String, String)] {
+    [("auto", "自动（测速，用最快的）")] + all(offer?.base).map { ($0.id, $0.label) }
+  }
+
+  private static func all(_ base: String?) -> [Mirror] {
+    (base.map { [server($0)] } ?? []) + mirrors
+  }
 
   /// version.json from every mirror at once: the first answer, and which mirror gave it
   private static func raceVersion() async -> ([String: Any], Int)? {
@@ -108,6 +127,8 @@ enum Updater {
         }
         if !asked, d.string(forKey: "updateSkipped") == version { return }
         offer = Offer(base: base, mac: mac, version: version, quickest: quick)
+        // a server picked last time, none connected now
+        if !channels.contains(where: { $0.0 == model.channel }) { model.channel = "auto" }
         let notes = (info["notes"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? ""
         if asked { model.state = .offer(version, notes) } else { present(.offer(version, notes), over: window) }
       }
@@ -148,9 +169,15 @@ enum Updater {
     close()
   }
 
+  /// the download going on; 换一个渠道 stops it and the next channel goes on
+  @MainActor private static var current: Task<Data?, Never>?
+
+  @MainActor static func switchChannel() { current?.cancel() }
+
   /// 更新 / 重试
   @MainActor static func update() {
     guard let o = offer else { return }
+    UserDefaults.standard.set(model.channel, forKey: "updateChannel")
     let app = Bundle.main.bundlePath
     // started from Downloads without moving it: macOS runs a read-only copy we can't replace
     if app.contains("/AppTranslocation/") || !FileManager.default.isWritableFile(atPath: (app as NSString).deletingLastPathComponent) {
@@ -158,30 +185,48 @@ enum Updater {
       return
     }
     model.state = .downloading(from: "", done: 0, total: -1, speed: 0)
-    job = Task { await install(o) }
+    let picked = model.channel
+    job = Task { await install(o, picked) }
   }
 
-  private static func install(_ o: Offer) async {
+  private static func install(_ o: Offer, _ picked: String) async {
     let name = o.mac["file"] as? String ?? "tmux-web-mac.zip"
     let sha = (o.mac["sha256"] as? String ?? "").lowercased()
     let size = (o.mac["size"] as? NSNumber)?.int64Value ?? -1
     var data: Data?
-    // our server (it fetches from the quickest mirror itself), then the mirrors, the quick one first
-    var order = Array(mirrors.indices)
-    if let q = o.quickest { order = [q] + order.filter { $0 != q } }
-    var tries: [() async -> URLRequest?] = []
-    if let base = o.base { tries.append { URLRequest(url: URL(string: "\(base)/_tw/api/app/download/\(name)")!, timeoutInterval: 300) } }
-    tries += order.map { i in { await mirrors[i].file(name, sha) } }
-    for next in tries {
+    let list = all(o.base)
+    var order: [Mirror]
+    if let first = list.first(where: { $0.id == picked }) {
+      // the one picked, then the others if it fails
+      order = [first] + list.filter { $0.id != first.id }
+    } else {
+      // 自动: a few seconds of every one at once; the quickest first, then the rest by how they did
+      await MainActor.run { model.state = .measuring }
+      let got = await measure(list, name, sha)
+      order = list.indices.filter { got[$0] > 0 }.sorted { got[$0] > got[$1] }.map { list[$0] }
+      // the one whose version.json came first, when none got anywhere
+      if let q = o.quickest, !order.contains(where: { $0.id == mirrors[q].id }) { order.append(mirrors[q]) }
+      order += list.filter { m in !order.contains { $0.id == m.id } }
+    }
+    for m in order {
       if Task.isCancelled { return }
-      guard let req = await next() else { continue }
-      let from = o.base.map { req.url!.absoluteString.hasPrefix($0) } == true ? "服务器" : req.url?.host ?? ""
-      await MainActor.run { model.state = .downloading(from: from, done: 0, total: -1, speed: 0) }
-      let d = await Download.run(req) { done, total, speed in
-        Task { @MainActor in
-          if case .downloading = model.state { model.state = .downloading(from: from, done: done, total: total > 0 ? total : size, speed: speed) }
+      guard let req = await m.file(name, sha) else { continue }
+      let from = m.label
+      let t = await MainActor.run { () -> Task<Data?, Never> in
+        model.state = .downloading(from: from, done: 0, total: -1, speed: 0)
+        let t = Task {
+          await Download.run(req) { done, total, speed in
+            Task { @MainActor in
+              if case .downloading = model.state { model.state = .downloading(from: from, done: done, total: total > 0 ? total : size, speed: speed) }
+            }
+          }
         }
+        current = t
+        return t
       }
+      // 取消 stops this one too
+      let d = await withTaskCancellationHandler { await t.value } onCancel: { t.cancel() }
+      await MainActor.run { current = nil }
       if let d, sha.isEmpty || SHA256.hash(data: d).map({ String(format: "%02x", $0) }).joined() == sha {
         data = d
         break
@@ -224,6 +269,60 @@ enum Updater {
       NSApp.terminate(nil)
       // still here (something else held it up): the swap waits for us, so go anyway
       DispatchQueue.main.asyncAfter(deadline: .now() + 3) { exit(0) }
+    }
+  }
+
+  /// how much of the file each one gives in a few seconds (all at once; one with half a megabyte ends it)
+  private static func measure(_ all: [Mirror], _ name: String, _ sha: String) async -> [Int] {
+    let enough = 512 * 1024
+    let got = Counts(all.count)
+    await withTaskGroup(of: Bool.self) { g in
+      for (i, m) in all.enumerated() {
+        g.addTask {
+          guard var req = await m.file(name, sha) else { return false }
+          req.timeoutInterval = 6
+          guard let res = try? await URLSession.shared.bytes(for: req), (res.1 as? HTTPURLResponse)?.statusCode == 200 else { return false }
+          let bytes = res.0
+          var chunk = 0
+          do {
+            for try await _ in bytes {
+              chunk += 1
+              // a byte at a time: counted every 16 KB
+              if chunk == 16384 {
+                chunk = 0
+                if got.add(i, 16384) >= enough { return true }
+              }
+            }
+          } catch {}
+          return false
+        }
+      }
+      // whatever they got by then
+      g.addTask {
+        try? await Task.sleep(nanoseconds: 6_000_000_000)
+        return true
+      }
+      for await done in g where done { break }
+      g.cancelAll()
+    }
+    return got.all
+  }
+
+  /// bytes per channel, counted from several tasks
+  private final class Counts: @unchecked Sendable {
+    private var n: [Int]
+    private let lock = NSLock()
+    init(_ count: Int) { n = Array(repeating: 0, count: count) }
+    func add(_ i: Int, _ k: Int) -> Int {
+      lock.lock()
+      defer { lock.unlock() }
+      n[i] += k
+      return n[i]
+    }
+    var all: [Int] {
+      lock.lock()
+      defer { lock.unlock() }
+      return n
     }
   }
 
@@ -324,11 +423,15 @@ private final class Download: NSObject, URLSessionDataDelegate {
     case latest
     case failed(String, String, retry: Bool)
     case offer(String, String)
+    /// 自动: each channel gets a few seconds; the quickest one is used
+    case measuring
     /// `total` < 0: not known yet (connecting, or the server is fetching it first)
     case downloading(from: String, done: Int64, total: Int64, speed: Int64)
     case installing
   }
   @Published var state: State = .checking
+  /// where 更新 downloads from (remembered once it's used)
+  @Published var channel = UserDefaults.standard.string(forKey: "updateChannel") ?? "auto"
 }
 
 /// The update, from 检查更新 to the restart: what was found, the download's progress, what went wrong.
@@ -362,7 +465,7 @@ struct UpdateView: View {
     case .latest: return "已是最新版本"
     case .failed(let t, _, _): return t
     case .offer(let v, _): return "发现新版本 \(v)"
-    case .downloading: return "正在下载更新…"
+    case .downloading, .measuring: return "正在下载更新…"
     case .installing: return "正在安装…"
     }
   }
@@ -390,6 +493,17 @@ struct UpdateView: View {
           .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
           .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.08)))
       }
+      VStack(alignment: .leading, spacing: 4) {
+        Picker("下载渠道", selection: $model.channel) {
+          ForEach(Array(Updater.channels.enumerated()), id: \.offset) { Text($0.element.1).tag($0.element.0) }
+        }
+        Text("选中的渠道下载失败时，会自动换其他渠道").font(.caption).foregroundStyle(.secondary)
+      }
+    case .measuring:
+      VStack(alignment: .leading, spacing: 6) {
+        ProgressView().progressViewStyle(.linear)
+        Text("正在给各个渠道测速，挑最快的…")
+      }
     case .downloading(let from, let done, let total, let speed):
       VStack(alignment: .leading, spacing: 6) {
         if total > 0 {
@@ -402,7 +516,7 @@ struct UpdateView: View {
           }
         } else {
           ProgressView().progressViewStyle(.linear)
-          Text(from.isEmpty ? "正在准备…" : done > 0 ? "已下载 \(mb(done))" : from == "服务器" ? "服务器正在取安装包…" : "正在连接…")
+          Text(from.isEmpty ? "正在准备…" : done > 0 ? "已下载 \(mb(done))" : from == "已连接的服务器" ? "服务器正在取安装包…" : "正在连接…")
         }
         if !from.isEmpty { Text("来源：\(from)").font(.caption).foregroundStyle(.secondary) }
       }
@@ -416,7 +530,10 @@ struct UpdateView: View {
 
   @ViewBuilder private var buttons: some View {
     switch model.state {
-    case .checking, .downloading:
+    case .checking, .measuring:
+      Button("取消") { Updater.close() }.keyboardShortcut(.cancelAction)
+    case .downloading(let from, _, _, _):
+      if !from.isEmpty { Button("换一个渠道") { Updater.switchChannel() } }
       Button("取消") { Updater.close() }.keyboardShortcut(.cancelAction)
     case .latest:
       Button("好") { Updater.close() }.keyboardShortcut(.defaultAction)

@@ -1123,6 +1123,9 @@ $('#modal').addEventListener('click', async (e) => {
 // ---------- updates
 
 let lastNotes = '';
+let upChannel = null; // the channel picked in the dialog (the app remembers it once 更新 is clicked)
+const mbs = (b) => (b / 1048576).toFixed(1) + ' MB';
+const rate = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB/s' : Math.round(b / 1024) + ' KB/s');
 function openUpdate(u) {
   if (u.notes) lastNotes = u.notes;
   if (u.state === 'none') {
@@ -1133,7 +1136,30 @@ function openUpdate(u) {
     // another dialog is open: the toolbar's 新版本 brings it up later
     return;
   }
-  modal = { kind: u.state === 'downloading' || u.state === 'installing' ? 'updating' : 'update' };
+  if (u.state === 'downloading') {
+    const pct = +u.text || 0;
+    const from = u.from || '';
+    const live =
+      from === '正在测速'
+        ? '<div class="inline"><span class="spin"></span>正在给各个渠道测速，挑最快的…</div>'
+        : `<div>正在下载 ${esc(u.version || '')}… ${pct}%</div><div class="progress"><div style="width:${pct}%"></div></div>
+          <div class="small-dim">${from ? `来源：${esc(from)}` : '正在准备…'}${u.total > 0 ? ` · ${mbs(u.done || 0)} / ${mbs(u.total)}` : u.done > 0 ? ` · 已下载 ${mbs(u.done)}` : ''}${u.speed > 0 ? ` · ${rate(u.speed)}` : ''}</div>`;
+    // progress comes a few times a second: only the numbers change, so the button stays clickable
+    const el = modal && modal.kind === 'updating' && $('#modal .up-live');
+    if (el) {
+      put(el, live);
+      const sw = $('#modal [data-uswitch]');
+      if (sw) sw.disabled = from === '正在测速' || !from;
+      return;
+    }
+    modal = { kind: 'updating' };
+    setModal(`<div class="dlg narrow"><div class="dlg-head"><img src="icon.png" width="38" height="38" style="border-radius:9px"><div><h2>检查更新</h2></div></div>
+      <div class="dlg-body"><div class="up-live" style="display:flex;flex-direction:column;gap:8px">${live}</div></div>
+      <div class="dlg-foot"><div class="msg">太慢可以换一个</div><button class="btn" data-uswitch ${from && from !== '正在测速' ? '' : 'disabled'}>换一个渠道</button></div></div>`);
+    $('#modal .up-live')._html = live;
+    return;
+  }
+  modal = { kind: u.state === 'installing' ? 'updating' : 'update' };
   let body = '', foot = '';
   if (u.state === 'checking') {
     body = '<div class="inline"><span class="spin"></span>正在检查新版本…</div>';
@@ -1142,11 +1168,13 @@ function openUpdate(u) {
     body = `<div>已经是最新版本（${esc(u.current || S.version)}）。</div>`;
     foot = '<button class="btn primary" data-ucancel>好</button>';
   } else if (u.state === 'offer') {
-    body = `<div>tmux-web ${esc(u.version)} 可以更新了（现在是 ${esc(u.current || S.version)}）。更新时 App 会退出并自动重新打开，已连接的服务器需要重新连接。</div>${lastNotes ? `<div class="notes">${esc(lastNotes)}</div>` : ''}`;
+    const chans = [{ id: 'auto', label: '自动（测速，用最快的）' }, ...(u.channels || [])];
+    const cur = chans.some((c) => c.id === upChannel) ? upChannel : chans.some((c) => c.id === u.channel) ? u.channel : 'auto';
+    upChannel = cur;
+    body = `<div>tmux-web ${esc(u.version)} 可以更新了（现在是 ${esc(u.current || S.version)}）。更新时 App 会退出并自动重新打开，已连接的服务器需要重新连接。</div>${lastNotes ? `<div class="notes">${esc(lastNotes)}</div>` : ''}
+      <label class="row-f"><span>下载渠道</span><select class="field" data-uchan>${chans.map((c) => `<option value="${esc(c.id)}" ${c.id === cur ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select></label>
+      <div class="small-dim">选中的渠道下载失败时，会自动换其他渠道；会记住这次的选择。</div>`;
     foot = '<button class="btn quiet" data-uskip>跳过这个版本</button><div class="msg"></div><button class="btn" data-ucancel>以后再说</button><button class="btn primary" data-ugo>更新</button>';
-  } else if (u.state === 'downloading') {
-    const pct = +u.text || 0;
-    body = `<div>正在下载 ${esc(u.version || '')}… ${pct}%</div><div class="progress"><div style="width:${pct}%"></div></div>`;
   } else if (u.state === 'installing') {
     body = '<div class="inline"><span class="spin"></span>正在安装，App 马上会重新打开…</div>';
   } else if (u.state === 'failed') {
@@ -1156,11 +1184,18 @@ function openUpdate(u) {
   setModal(`<div class="dlg narrow"><div class="dlg-head"><img src="icon.png" width="38" height="38" style="border-radius:9px"><div><h2>${u.state === 'offer' ? '有新版本' : '检查更新'}</h2></div></div>
     <div class="dlg-body">${body}</div>${foot ? `<div class="dlg-foot">${foot.includes('class="msg"') ? '' : '<div class="msg"></div>'}${foot}</div>` : ''}</div>`);
 }
+$('#modal').addEventListener('change', (e) => {
+  if (modal && modal.kind === 'update' && e.target.dataset.uchan !== undefined) upChannel = e.target.value;
+});
 $('#modal').addEventListener('click', (e) => {
   if (!modal || (modal.kind !== 'update' && modal.kind !== 'updating')) return;
   if (e.target.closest('[data-ucancel]')) closeModal();
-  else if (e.target.closest('[data-ugo]')) post({ op: 'installUpdate' });
-  else if (e.target.closest('[data-uskip]')) {
+  else if (e.target.closest('[data-ugo]')) post({ op: 'installUpdate', channel: upChannel || 'auto' });
+  else if (e.target.closest('[data-uswitch]')) {
+    const b = e.target.closest('[data-uswitch]');
+    b.disabled = true;
+    post({ op: 'updateSwitch' });
+  } else if (e.target.closest('[data-uskip]')) {
     post({ op: 'skipUpdate' });
     closeModal();
   }

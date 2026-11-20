@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,12 +16,16 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -58,9 +63,11 @@ object Updater {
   private const val IMAGE = "zheqiushui/tmux-web-app"
 
   /** A place the release can be had: its version.json, and how to ask it for a file (url, headers). */
-  private class Mirror(val version: () -> JSONObject?, val file: (name: String, sha: String) -> Pair<String, Map<String, String>>?)
+  private class Mirror(val id: String, val label: String, val version: () -> JSONObject?, val file: (name: String, sha: String) -> Pair<String, Map<String, String>>?)
 
-  private fun ghcr(host: String) = Mirror(
+  private fun ghcr(id: String, label: String, host: String) = Mirror(
+    id,
+    label,
     version = {
       ghcrToken()?.let { t ->
         fetchJson("https://$host/v2/$IMAGE/manifests/latest", mapOf("Authorization" to "Bearer $t", "Accept" to "application/vnd.oci.image.manifest.v1+json"))
@@ -71,10 +78,23 @@ object Updater {
     file = { _, sha -> if (sha.isEmpty()) null else ghcrToken()?.let { "https://$host/v2/$IMAGE/blobs/sha256:$sha" to mapOf("Authorization" to "Bearer $it") } },
   )
 
-  private fun web(prefix: String) = Mirror(version = { fetchJson(prefix + GITHUB + "version.json") }, file = { name, _ -> prefix + GITHUB + name to emptyMap() })
+  private fun web(id: String, label: String, prefix: String) =
+    Mirror(id, label, version = { fetchJson(prefix + GITHUB + "version.json") }, file = { name, _ -> prefix + GITHUB + name to emptyMap() })
 
-  /** in the order they're tried for a file when none is known to be quicker */
-  private val MIRRORS = listOf(ghcr("ghcr.nju.edu.cn")) + PROXIES.map { web(it) } + listOf(web(""), ghcr("ghcr.io"))
+  /** in the order they're tried for a file when none was picked (or the picked one fails) */
+  private val MIRRORS = listOf(ghcr("nju", "南京大学镜像（ghcr.nju.edu.cn）", "ghcr.nju.edu.cn")) +
+    listOf("ghfast" to "ghfast.top", "ghproxy" to "gh-proxy.com", "llkk" to "gh.llkk.cc", "ghproxynet" to "ghproxy.net").mapIndexed { i, (id, label) -> web(id, label, PROXIES[i]) } +
+    listOf(web("github", "GitHub 直连", ""), ghcr("ghcr", "ghcr.io", "ghcr.io"))
+
+  /** our server, while connected: it fetches the file from the quickest mirror itself */
+  private fun server(b: String) = Mirror("server", "已连接的服务器", version = { null }, file = { name, _ -> "$b/_tw/api/app/download/$name" to emptyMap() })
+
+  /** (id, label) of the channels 更新 can download from now; "auto" measures them all and takes the quickest */
+  val channels: List<Pair<String, String>>
+    get() = listOf("auto" to "自动（测速，用最快的）") + (listOfNotNull(base?.let { server(it) }) + MIRRORS).map { it.id to it.label }
+
+  /** the channel picked last time */
+  fun channel(c: Context): String = c.getSharedPreferences("updates", Context.MODE_PRIVATE).getString("channel", "auto") ?: "auto"
 
   private fun ghcrToken(): String? = fetchJson("https://ghcr.io/token?service=ghcr.io&scope=repository:$IMAGE:pull")?.optString("token")?.ifEmpty { null }
 
@@ -95,6 +115,8 @@ object Updater {
     data class Latest(val version: String) : Ui
     data class Failed(val title: String, val text: String, val retry: Boolean) : Ui
     data class Offer(val version: String, val notes: String) : Ui
+    /** each channel gets a few seconds; the quickest one is used */
+    data class Measuring(val version: String) : Ui
     /** `total` < 0: not known yet (still connecting, or the server is fetching it first) */
     data class Downloading(val version: String, val from: String, val done: Long, val total: Long, val speed: Long) : Ui
     data class Ready(val version: String) : Ui
@@ -115,6 +137,8 @@ object Updater {
   private var apk: File? = null
   /** the download going on; another number (取消, or a new one) stops it */
   @Volatile private var job = 0
+  /** 换一个渠道: the download going on stops and the next channel goes on */
+  @Volatile private var switched = false
 
   /**
    * At most every 6 hours on its own; `asked` (检查更新): now, saying what came of it, and a skipped
@@ -122,7 +146,7 @@ object Updater {
    */
   fun checkSoon(a: Activity, base: String?, asked: Boolean = false) {
     // already downloading or downloaded: bring that back instead
-    if (ui is Ui.Downloading || ui is Ui.Ready) {
+    if (ui is Ui.Downloading || ui is Ui.Measuring || ui is Ui.Ready) {
       if (asked) hidden = false
       return
     }
@@ -176,8 +200,13 @@ object Updater {
     ui = null
   }
 
-  /** 更新: download (with progress), check it, then the system installer */
-  fun download(a: Activity) {
+  /** 换一个渠道 */
+  fun switchChannel() {
+    switched = true
+  }
+
+  /** 更新: download (with progress) from `channel` (or the one picked last time), check it, then the system installer */
+  fun download(a: Activity, channel: String? = null) {
     val info = info ?: return
     val android = info.optJSONObject("android") ?: return
     val version = info.optString("version")
@@ -185,6 +214,9 @@ object Updater {
     val sha = android.optString("sha256")
     val size = android.optLong("size", -1)
     val app = a.applicationContext
+    val prefs = a.getSharedPreferences("updates", Context.MODE_PRIVATE)
+    if (channel != null) prefs.edit().putString("channel", channel).apply()
+    val picked = channel ?: channel(a)
     val id = ++job
     val gone = { job != id }
     // progress of this download, unless it was stopped
@@ -194,15 +226,24 @@ object Updater {
     Thread {
       val dir = File(app.cacheDir, "updates").apply { mkdirs() }
       val file = File(dir, "tmux-web.apk")
-      // our server (it fetches from the quickest mirror itself), then the mirrors, the quick one first
-      val order = MIRRORS.indices.sortedBy { if (it == quickest) -1 else it }
-      val tries = listOfNotNull(base?.let { b -> { "$b/_tw/api/app/download/$name" to emptyMap<String, String>() } }) + order.map { i -> { MIRRORS[i].file(name, sha) } }
-      val ok = tries.any { next ->
+      val all = listOfNotNull(base?.let { server(it) }) + MIRRORS
+      val first = all.firstOrNull { it.id == picked }
+      val order = if (first != null) listOf(first) + (all - first)
+      else {
+        // 自动: a few seconds of every one at once; the quickest first, then the rest by how they did
+        show(Ui.Measuring(version))
+        val got = measure(all, name, sha, gone)
+        val measured = all.indices.filter { got[it] > 0 }.sortedByDescending { got[it] }.map { all[it] }
+        // the one whose version.json came first, when none got anywhere
+        val quick = quickest?.let { MIRRORS[it] }
+        measured + listOfNotNull(quick).filter { it !in measured } + all.filter { it !in measured && it != quick }
+      }
+      val ok = order.any { m ->
         if (gone()) return@any false
-        val (url, headers) = next() ?: return@any false
-        val from = if (base != null && url.startsWith(base!!)) "服务器" else Uri.parse(url).host ?: url
-        show(Ui.Downloading(version, from, 0, -1, 0))
-        fetchFile(url, file, headers, gone) { done, total, speed -> show(Ui.Downloading(version, from, done, if (total > 0) total else size, speed)) } &&
+        val (url, headers) = m.file(name, sha) ?: return@any false
+        switched = false
+        show(Ui.Downloading(version, m.label, 0, -1, 0))
+        fetchFile(url, file, headers, { gone() || switched }) { done, total, speed -> show(Ui.Downloading(version, m.label, done, if (total > 0) total else size, speed)) } &&
           (sha.isEmpty() || sha256(file).equals(sha, ignoreCase = true))
       }
       if (gone()) return@Thread file.delete().let {}
@@ -219,6 +260,38 @@ object Updater {
         if (!a.isFinishing && a.packageManager.canRequestPackageInstalls()) install(a)
       }
     }.start()
+  }
+
+  /** how much of the file each one gives in a few seconds (all at once; one with half a megabyte ends it) */
+  private fun measure(all: List<Mirror>, name: String, sha: String, gone: () -> Boolean): LongArray {
+    val enough = 512 * 1024L
+    val got = java.util.concurrent.atomic.AtomicLongArray(all.size)
+    val stop = java.util.concurrent.atomic.AtomicBoolean(false)
+    val threads = all.mapIndexed { i, m ->
+      Thread {
+        runCatching {
+          val (url, headers) = m.file(name, sha) ?: return@Thread
+          val c = URL(url).openConnection() as HttpURLConnection
+          c.connectTimeout = 6_000
+          c.readTimeout = 6_000
+          headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
+          if (c.responseCode != 200) return@Thread
+          c.inputStream.use { s ->
+            val buf = ByteArray(16384)
+            while (!stop.get() && !gone()) {
+              val n = s.read(buf)
+              if (n < 0) break
+              if (got.addAndGet(i, n.toLong()) >= enough) stop.set(true)
+            }
+          }
+          c.disconnect()
+        }
+      }.apply { isDaemon = true; start() }
+    }
+    val until = System.currentTimeMillis() + 6_000
+    while (!stop.get() && !gone() && System.currentTimeMillis() < until && threads.any { it.isAlive }) Thread.sleep(100)
+    stop.set(true)
+    return LongArray(all.size) { got.get(it) }
   }
 
   /** the system installer; the first time, the setting that allows it */
@@ -248,36 +321,51 @@ object Updater {
     c.connectTimeout = 10_000
     c.readTimeout = 60_000
     headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
-    if (c.responseCode != 200) false
-    else {
-      val total = c.contentLengthLong
-      var done = 0L
-      var lastAt = System.nanoTime()
-      var lastDone = 0L
-      var speed = 0L
-      progress(0, total, 0)
-      c.inputStream.use { i ->
-        to.outputStream().use { o ->
-          val buf = ByteArray(65536)
-          while (true) {
-            if (stop()) throw java.io.IOException("cancelled")
-            val n = i.read(buf)
-            if (n < 0) break
-            o.write(buf, 0, n)
-            done += n
-            val now = System.nanoTime()
-            if (now - lastAt > 200_000_000L) {
-              val s = (done - lastDone) * 1_000_000_000L / (now - lastAt)
-              speed = if (speed == 0L) s else (speed * 2 + s) / 3
-              lastAt = now
-              lastDone = done
-              progress(done, total, speed)
+    // 取消 / 换一个渠道 while it waits for a byte: hang up
+    var finished = false
+    Thread {
+      while (!finished) {
+        if (stop()) {
+          runCatching { c.disconnect() }
+          break
+        }
+        Thread.sleep(200)
+      }
+    }.apply { isDaemon = true; start() }
+    try {
+      if (c.responseCode != 200) false
+      else {
+        val total = c.contentLengthLong
+        var done = 0L
+        var lastAt = System.nanoTime()
+        var lastDone = 0L
+        var speed = 0L
+        progress(0, total, 0)
+        c.inputStream.use { i ->
+          to.outputStream().use { o ->
+            val buf = ByteArray(65536)
+            while (true) {
+              if (stop()) throw java.io.IOException("cancelled")
+              val n = i.read(buf)
+              if (n < 0) break
+              o.write(buf, 0, n)
+              done += n
+              val now = System.nanoTime()
+              if (now - lastAt > 200_000_000L) {
+                val s = (done - lastDone) * 1_000_000_000L / (now - lastAt)
+                speed = if (speed == 0L) s else (speed * 2 + s) / 3
+                lastAt = now
+                lastDone = done
+                progress(done, total, speed)
+              }
             }
           }
         }
+        progress(done, total, speed)
+        !stop() && (total < 0 || done == total)
       }
-      progress(done, total, speed)
-      total < 0 || done == total
+    } finally {
+      finished = true
     }
   } catch (_: Exception) {
     false
@@ -314,9 +402,12 @@ fun UpdateDialog() {
     owner.lifecycle.addObserver(o)
     onDispose { owner.lifecycle.removeObserver(o) }
   }
-  val busy = u is Updater.Ui.Checking || u is Updater.Ui.Downloading
+  val busy = u is Updater.Ui.Checking || u is Updater.Ui.Downloading || u is Updater.Ui.Measuring
+  // the channel 更新 downloads from (remembered once it's used)
+  var picked by remember { mutableStateOf(Updater.channel(a)) }
+  var picking by remember { mutableStateOf(false) }
   AlertDialog(
-    onDismissRequest = { if (u is Updater.Ui.Downloading) Updater.hide() else if (!busy) Updater.dismiss() },
+    onDismissRequest = { if (u is Updater.Ui.Downloading || u is Updater.Ui.Measuring) Updater.hide() else if (!busy) Updater.dismiss() },
     properties = DialogProperties(dismissOnClickOutside = !busy),
     icon = when (u) {
       is Updater.Ui.Latest, is Updater.Ui.Ready -> ({ Icon(Icons.Filled.CheckCircle, null, tint = MaterialTheme.colorScheme.primary) })
@@ -331,6 +422,7 @@ fun UpdateDialog() {
           is Updater.Ui.Failed -> u.title
           is Updater.Ui.Offer -> "发现新版本 ${u.version}"
           is Updater.Ui.Downloading -> "正在下载 ${u.version}"
+          is Updater.Ui.Measuring -> "正在下载 ${u.version}"
           is Updater.Ui.Ready -> "${u.version} 已下载"
         },
       )
@@ -346,6 +438,33 @@ fun UpdateDialog() {
         is Updater.Ui.Offer -> Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
           Text("当前版本 ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
           Text(u.notes)
+          val chans = Updater.channels
+          val label = chans.firstOrNull { it.first == picked }?.second ?: chans.first().second
+          Column {
+            Text("下载渠道", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Box {
+              OutlinedButton(onClick = { picking = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(label, Modifier.weight(1f), maxLines = 1)
+                Icon(Icons.Filled.ArrowDropDown, null)
+              }
+              DropdownMenu(expanded = picking, onDismissRequest = { picking = false }) {
+                chans.forEach { (id, l) ->
+                  DropdownMenuItem(
+                    text = { Text(l, fontWeight = if (id == picked) FontWeight.SemiBold else null) },
+                    onClick = {
+                      picked = id
+                      picking = false
+                    },
+                  )
+                }
+              }
+            }
+            Text("选中的渠道下载失败时，会自动换其他渠道", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          }
+        }
+        is Updater.Ui.Measuring -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+          LinearProgressIndicator(Modifier.fillMaxWidth())
+          Text("正在给各个渠道测速，挑最快的…")
         }
         is Updater.Ui.Downloading -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
           if (u.total > 0) {
@@ -361,7 +480,7 @@ fun UpdateDialog() {
               when {
                 u.from.isEmpty() -> "正在准备…"
                 u.done > 0 -> "已下载 ${mb(u.done)}"
-                u.from == "服务器" -> "服务器正在取安装包…"
+                u.from == "已连接的服务器" -> "服务器正在取安装包…"
                 else -> "正在连接…"
               },
             )
@@ -376,7 +495,8 @@ fun UpdateDialog() {
     },
     confirmButton = {
       when (u) {
-        is Updater.Ui.Offer -> TextButton(onClick = { Updater.download(a) }) { Text("更新") }
+        is Updater.Ui.Offer -> TextButton(onClick = { Updater.download(a, picked) }) { Text("更新") }
+        is Updater.Ui.Measuring -> TextButton(onClick = { Updater.hide() }) { Text("后台下载") }
         is Updater.Ui.Downloading -> TextButton(onClick = { Updater.hide() }) { Text("后台下载") }
         is Updater.Ui.Ready -> TextButton(onClick = { Updater.install(a) }) { Text(if (allowed) "安装" else "去设置") }
         is Updater.Ui.Failed -> if (u.retry) TextButton(onClick = { Updater.download(a) }) { Text("重试") } else TextButton(onClick = { Updater.dismiss() }) { Text("好") }
@@ -390,7 +510,11 @@ fun UpdateDialog() {
           TextButton(onClick = { Updater.skip(a) }) { Text("跳过这个版本") }
           TextButton(onClick = { Updater.dismiss() }) { Text("以后") }
         }
-        is Updater.Ui.Downloading -> TextButton(onClick = { Updater.cancel() }) { Text("取消") }
+        is Updater.Ui.Downloading -> Row {
+          if (u.from.isNotEmpty()) TextButton(onClick = { Updater.switchChannel() }) { Text("换一个渠道") }
+          TextButton(onClick = { Updater.cancel() }) { Text("取消") }
+        }
+        is Updater.Ui.Measuring -> TextButton(onClick = { Updater.cancel() }) { Text("取消") }
         is Updater.Ui.Ready -> TextButton(onClick = { Updater.dismiss() }) { Text("以后") }
         is Updater.Ui.Failed -> if (u.retry) TextButton(onClick = { Updater.dismiss() }) { Text("关闭") }
         Updater.Ui.Checking -> TextButton(onClick = { Updater.dismiss() }) { Text("取消") }

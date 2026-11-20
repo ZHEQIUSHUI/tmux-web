@@ -718,7 +718,8 @@ namespace TmuxWeb
           case "tabMenu": ShowTabMenu(id, Pt(m)); break;
           case "openInBrowser": { var c = Active; if (c?.loadedBase != null) Browser(c.loadedBase + "/"); break; }
           case "checkUpdates": Updater.Check(this, Active?.loadedBase ?? conns.Values.Select(c => c.loadedBase).FirstOrDefault(x => x != null), true); break;
-          case "installUpdate": Updater.Install(this); break;
+          case "installUpdate": Updater.Install(this, S(m, "channel")); break;
+          case "updateSwitch": Updater.SwitchChannel(); break;
           case "skipUpdate": Updater.Skip(this); break;
           case "link": Browser(S(m, "url")); break;
           case "openLog": if (File.Exists(Log.FilePath)) Process.Start("notepad.exe", "\"" + Log.FilePath + "\""); break;
