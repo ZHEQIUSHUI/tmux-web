@@ -60,6 +60,12 @@ export function SessionPane({ me, session, folders, narrow, onBack, onNewAt, onC
             {narrow ? '' : ` · ${session.host}:${session.cwd}`}
           </span>
         </div>
+        {/* left of the view buttons: showing only on the chat, it mustn't move them when it goes */}
+        {tab === 'chat' && session.agent !== 'bash' && (
+          <button class={`icon-btn ${search ? 'on' : ''}`} onClick={() => setSearch((v) => !v)} aria-label="搜索聊天记录" title="搜索聊天记录">
+            <Icon.search />
+          </button>
+        )}
         {narrow ? (
           <div class="view-switch">
             {VIEWS.map(([t, label, I]) => (
@@ -76,11 +82,6 @@ export function SessionPane({ me, session, folders, narrow, onBack, onNewAt, onC
               </button>
             ))}
           </div>
-        )}
-        {tab === 'chat' && session.agent !== 'bash' && (
-          <button class={`icon-btn ${search ? 'on' : ''}`} onClick={() => setSearch((v) => !v)} aria-label="搜索聊天记录" title="搜索聊天记录">
-            <Icon.search />
-          </button>
         )}
         <button class="icon-btn" onClick={() => setSettings(true)} aria-label="设置">
           <Icon.more />
