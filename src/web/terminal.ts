@@ -127,7 +127,8 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
   document.addEventListener('visibilitychange', onVisible);
   addEventListener('online', onVisible);
 
-  term.onData((d) => {
+  let sent = 0;
+  const typed = (d: string) => {
     if ((mods.ctrl || mods.alt) && d.length === 1) {
       if (mods.ctrl) {
         const c = d.toLowerCase().charCodeAt(0);
@@ -140,7 +141,49 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
       onModifiersUsed();
     }
     sendInput(d);
+  };
+  term.onData((d) => {
+    sent++;
+    typed(d);
   });
+
+  // iPhone keyboards: each key first sends a keydown xterm can't read (key "Unidentified"), and
+  // xterm then drops the text in the input event that follows, since a keydown was seen; words
+  // picked from the IME may not get through either. Whatever the textarea receives that xterm
+  // didn't send, we send.
+  const ta = el.querySelector('textarea')!;
+  let sentAtKey = 0;
+  let imeKey = false;
+  // a composition just ended: its text is sent (or checked) by the compositionend handler
+  let composed = false;
+  const missed = (d: string, at: number) => sent === at && typed(d);
+  ta.addEventListener('keydown', (e) => {
+    sentAtKey = sent;
+    imeKey = e.keyCode === 229;
+    composed = false;
+  }, true);
+  ta.addEventListener('compositionstart', () => {
+    composed = false;
+  }, true);
+  ta.addEventListener('keyup', () => {
+    imeKey = false;
+  }, true);
+  // registered after xterm's own listeners, so it has had its chance at this event
+  ta.addEventListener('input', (e) => {
+    const ev = e as InputEvent;
+    if (ev.isComposing || imeKey || composed) return;
+    const d = ev.inputType === 'insertText' ? ev.data : ev.inputType === 'insertLineBreak' ? '\r' : ev.inputType === 'deleteContentBackward' ? '\x7f' : null;
+    if (d) missed(d, sentAtKey);
+    // the next input without a keydown of its own is compared from here
+    sentAtKey = sent;
+  }, true);
+  // xterm sends a finished composition a moment later; check after that
+  ta.addEventListener('compositionend', (e) => {
+    const d = e.data;
+    const at = sent;
+    composed = true;
+    if (d) setTimeout(() => missed(d, at), 50);
+  }, true);
 
   const zoom = (delta: number) => {
     const size = Math.max(MIN_FONT, Math.min(MAX_FONT, Math.round((term.options.fontSize! + delta) * 2) / 2));
