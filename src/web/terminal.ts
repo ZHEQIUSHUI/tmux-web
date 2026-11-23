@@ -292,7 +292,15 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
       lines.push(l);
       if (lines.length > 200) lines.splice(1, 1);
       pre.textContent = lines.slice(-25).join('\n');
+      // also saved on the host (the session's .tmux-web/uploads), a moment after typing stops
+      clearTimeout(upload);
+      upload = window.setTimeout(() => {
+        fetch(`/_tw/api/sessions/${sessionId}/upload`, { method: 'POST', headers: { 'x-file-name': 'kbdebug.txt' }, body: lines.join('\n') })
+          .then((r) => (copy.textContent = r.ok ? '已上传' : `上传失败 ${r.status}`))
+          .catch(() => (copy.textContent = '上传失败'));
+      }, 2000);
     };
+    let upload = 0;
     copy.onclick = () => {
       const text = lines.join('\n');
       navigator.clipboard?.writeText(text).then(() => (copy.textContent = '已复制'), () => prompt('复制下面的内容', text));
