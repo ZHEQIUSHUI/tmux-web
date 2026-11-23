@@ -2105,22 +2105,34 @@ a.btn {
   background: #262a32;
   color: #aab0bb;
 }
-.acc-input {
-  flex: none;
-  width: 72px;
-  height: 38px;
-  padding: 0 8px;
-  border-radius: 8px;
-  border: 1px solid #3a3f48;
-  background: #14161b;
-  color: #e3e6ec;
+/* iPhone / iPad: the terminal's own input, at the cursor; only a word being composed shows */
+.term-input {
+  position: absolute;
+  z-index: 10;
+  width: 1em;
+  height: 1.4em;
+  padding: 0 2px;
+  margin: 0;
+  border: 0;
+  resize: none;
+  overflow: hidden;
+  white-space: nowrap;
+  pointer-events: none;
   /* 16px: iOS zooms the page into smaller inputs on focus */
-  font-size: 16px;
+  font: 16px/1.4em var(--mono);
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+}
+.term-input:focus {
   outline: none;
 }
-.acc-input:focus {
-  border-color: var(--accent);
-  width: 110px;
+.term-input.composing {
+  min-width: 2em;
+  max-width: 90%;
+  background: #2c3039;
+  color: #fff;
+  border-radius: 3px;
 }
 .acc-sep {
   flex: none;

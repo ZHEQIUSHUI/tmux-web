@@ -32,7 +32,7 @@ function savedFont(narrow: boolean): number {
   return narrow ? 11.5 : 13;
 }
 
-export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: string) => void, onModifiersUsed: () => void): TermHandle {
+export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: string) => void, onModifiersUsed: () => void, ownInput = false): TermHandle {
   const narrow = matchMedia('(max-width: 760px)').matches;
   // always dark, like a real terminal app: agent TUIs are designed for it
   const term = new Terminal({
@@ -317,7 +317,63 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
     dbg(`start focus=${at()}`);
   }
 
-  const input = () => el.querySelector('textarea');
+  // iPhone and iPad drop the keyboard's letters on their way into xterm's textarea (transparent,
+  // tucked behind the screen; only Enter gets through), so there we type into a textarea of our
+  // own, lying at the cursor: invisible, except for the pinyin of a word being composed. Whatever
+  // lands in it goes to the terminal right away.
+  let own: HTMLTextAreaElement | null = null;
+  if (ownInput) {
+    const box = (own = document.createElement('textarea'));
+    box.className = 'term-input';
+    for (const [k, v] of [['autocomplete', 'off'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['spellcheck', 'false'], ['aria-label', '终端输入']]) box.setAttribute(k, v);
+    // kept in the box, so that a backspace with nothing typed still has something to delete
+    const KEEP = '\u200b';
+    box.value = KEEP;
+    term.element!.appendChild(box);
+    let composing = false;
+    const place = () => {
+      box.style.left = ta.style.left || '0px';
+      box.style.top = ta.style.top || '0px';
+    };
+    const flush = () => {
+      if (composing) return;
+      const v = box.value;
+      box.style.width = '';
+      if (v === KEEP) return;
+      if (!v.includes(KEEP)) sendInput('\x7f');
+      const text = v.split(KEEP).join('');
+      if (text) typed(text);
+      box.value = KEEP;
+      box.setSelectionRange(1, 1);
+    };
+    box.addEventListener('input', () => {
+      // monospace: a Latin letter is about 0.6em wide, a Chinese character 1em
+      if (composing) box.style.width = [...box.value].reduce((w, c) => w + (c.charCodeAt(0) > 0x2e80 ? 1 : 0.6), 0.6) + 'em';
+      else flush();
+    });
+    box.addEventListener('compositionstart', () => {
+      composing = true;
+      place();
+      box.classList.add('composing');
+    });
+    box.addEventListener('compositionend', () => {
+      composing = false;
+      box.classList.remove('composing');
+      setTimeout(flush, 0);
+    });
+    const KEYS: Record<string, string> = { Enter: '\r', Tab: '\t', Escape: '\x1b', ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D' };
+    box.addEventListener('keydown', (e) => {
+      if (composing || e.isComposing || e.keyCode === 229 || !KEYS[e.key]) return;
+      e.preventDefault();
+      typed(KEYS[e.key]);
+    });
+    box.addEventListener('focus', place);
+    term.onCursorMove(() => !composing && place());
+    // a tap on the screen opens the keyboard on our box; xterm mustn't take the focus back
+    el.addEventListener('mousedown', (e) => (e.stopPropagation(), e.preventDefault()), true);
+    el.addEventListener('click', () => box.focus());
+  }
+  const input = () => own ?? el.querySelector('textarea');
 
   return {
     dispose() {
@@ -330,21 +386,21 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
       cancelAnimationFrame(glide);
       term.dispose();
     },
-    focus: () => term.focus(),
+    focus: () => (own ?? term).focus(),
     fit: refit,
     // no focus here: tapping arrows to walk a menu shouldn't pop up the phone keyboard
     send: (d) => sendInput(d),
     type: (d) => typed(d),
     setModifiers: (m) => {
       mods = m;
-      if (m.ctrl || m.alt) term.focus();
+      if (m.ctrl || m.alt) (own ?? term).focus();
     },
     toggleKeyboard: () => {
       if (document.activeElement === input()) {
-        term.blur();
+        (own ?? term).blur();
         return false;
       }
-      term.focus();
+      (own ?? term).focus();
       return true;
     },
     zoom,
