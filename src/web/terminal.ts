@@ -8,8 +8,6 @@ export interface TermHandle {
   fit(): void;
   /** send raw input, as if typed */
   send(data: string): void;
-  /** typed text from an input of our own: the sticky modifiers apply to it */
-  type(data: string): void;
   /** sticky modifiers for on-screen keyboards: applied to the next typed key */
   setModifiers(m: { ctrl: boolean; alt: boolean }): void;
   /** show/hide the phone keyboard (focus/blur the terminal's input) */
@@ -47,7 +45,6 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
   term.open(el);
 
   let ws: WebSocket | null = null;
-  let dbg: ((l: string) => void) | null = null;
   let disposed = false;
   let retry = 0;
   let canWrite = false;
@@ -61,7 +58,6 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
     if (ws?.readyState === WebSocket.OPEN && canWrite && !fixedSize) ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
   };
   const sendInput = (d: string) => {
-    dbg?.(`send ${JSON.stringify(d)} ws=${ws?.readyState} write=${canWrite}`);
     if (ws?.readyState === WebSocket.OPEN && canWrite) ws.send(enc.encode(d));
   };
   const refit = () => {
@@ -131,7 +127,6 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
   document.addEventListener('visibilitychange', onVisible);
   addEventListener('online', onVisible);
 
-  let sent = 0;
   const typed = (d: string) => {
     if ((mods.ctrl || mods.alt) && d.length === 1) {
       if (mods.ctrl) {
@@ -146,48 +141,7 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
     }
     sendInput(d);
   };
-  term.onData((d) => {
-    sent++;
-    typed(d);
-  });
-
-  // iPhone keyboards: each key first sends a keydown xterm can't read (key "Unidentified"), and
-  // xterm then drops the text in the input event that follows, since a keydown was seen; words
-  // picked from the IME may not get through either. Whatever the textarea receives that xterm
-  // didn't send, we send.
-  const ta = el.querySelector('textarea')!;
-  let sentAtKey = 0;
-  let imeKey = false;
-  // a composition just ended: its text is sent (or checked) by the compositionend handler
-  let composed = false;
-  const missed = (d: string, at: number) => sent === at && typed(d);
-  ta.addEventListener('keydown', (e) => {
-    sentAtKey = sent;
-    imeKey = e.keyCode === 229;
-    composed = false;
-  }, true);
-  ta.addEventListener('compositionstart', () => {
-    composed = false;
-  }, true);
-  ta.addEventListener('keyup', () => {
-    imeKey = false;
-  }, true);
-  // registered after xterm's own listeners, so it has had its chance at this event
-  ta.addEventListener('input', (e) => {
-    const ev = e as InputEvent;
-    if (ev.isComposing || imeKey || composed) return;
-    const d = ev.inputType === 'insertText' ? ev.data : ev.inputType === 'insertLineBreak' ? '\r' : ev.inputType === 'deleteContentBackward' ? '\x7f' : null;
-    if (d) missed(d, sentAtKey);
-    // the next input without a keydown of its own is compared from here
-    sentAtKey = sent;
-  }, true);
-  // xterm sends a finished composition a moment later; check after that
-  ta.addEventListener('compositionend', (e) => {
-    const d = e.data;
-    const at = sent;
-    composed = true;
-    if (d) setTimeout(() => missed(d, at), 50);
-  }, true);
+  term.onData(typed);
 
   const zoom = (delta: number) => {
     const size = Math.max(MIN_FONT, Math.min(MAX_FONT, Math.round((term.options.fontSize! + delta) * 2) / 2));
@@ -279,44 +233,6 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
   ro.observe(el);
   connect();
 
-  // temporary keyboard diagnostics: open the page with ?kbdebug=1
-  if (/[?&]kbdebug/.test(location.search)) {
-    const box = document.createElement('div');
-    box.style.cssText = 'position:absolute;left:0;right:0;top:0;max-height:45%;overflow:auto;z-index:50;background:rgba(0,0,0,.85);color:#7f7;font:11px/1.3 monospace;white-space:pre-wrap;padding:4px;';
-    const copy = document.createElement('button');
-    copy.textContent = '复制';
-    copy.style.cssText = 'position:sticky;top:0;float:right;';
-    const pre = document.createElement('div');
-    box.append(copy, pre);
-    el.parentElement!.append(box);
-    const lines: string[] = [navigator.userAgent];
-    dbg = (l: string) => {
-      lines.push(l);
-      if (lines.length > 200) lines.splice(1, 1);
-      pre.textContent = lines.slice(-25).join('\n');
-      // also saved on the host (the session's .tmux-web/uploads), a moment after typing stops
-      clearTimeout(upload);
-      upload = window.setTimeout(() => {
-        fetch(`/_tw/api/sessions/${sessionId}/upload`, { method: 'POST', headers: { 'x-file-name': 'kbdebug.txt' }, body: lines.join('\n') })
-          .then((r) => (copy.textContent = r.ok ? '已上传' : `上传失败 ${r.status}`))
-          .catch(() => (copy.textContent = '上传失败'));
-      }, 2000);
-    };
-    let upload = 0;
-    copy.onclick = () => {
-      const text = lines.join('\n');
-      navigator.clipboard?.writeText(text).then(() => (copy.textContent = '已复制'), () => prompt('复制下面的内容', text));
-    };
-    const at = () => (document.activeElement === ta ? 'ta' : document.activeElement?.tagName.toLowerCase());
-    for (const t of ['keydown', 'keypress', 'keyup', 'beforeinput', 'input', 'compositionstart', 'compositionupdate', 'compositionend', 'focus', 'blur']) {
-      ta.addEventListener(t, (e: any) => {
-        dbg!(`${t} key=${e.key ?? ''} code=${e.keyCode ?? ''} type=${e.inputType ?? ''} data=${JSON.stringify(e.data ?? null)} comp=${e.isComposing ?? ''} val=${JSON.stringify(ta.value.slice(-8))} prevented=${e.defaultPrevented} focus=${at()}`);
-      }, true);
-    }
-    document.addEventListener('focusin', () => dbg!(`focusin ${at()}`));
-    dbg(`start focus=${at()}`);
-  }
-
   // iPhone and iPad drop the keyboard's letters on their way into xterm's textarea (transparent,
   // tucked behind the screen; only Enter gets through), so there we type into a textarea of our
   // own, lying at the cursor: invisible, except for the pinyin of a word being composed. Whatever
@@ -331,6 +247,7 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
     box.value = KEEP;
     term.element!.appendChild(box);
     let composing = false;
+    const ta = el.querySelector('textarea')!;
     const place = () => {
       box.style.left = ta.style.left || '0px';
       box.style.top = ta.style.top || '0px';
@@ -390,7 +307,6 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
     fit: refit,
     // no focus here: tapping arrows to walk a menu shouldn't pop up the phone keyboard
     send: (d) => sendInput(d),
-    type: (d) => typed(d),
     setModifiers: (m) => {
       mods = m;
       if (m.ctrl || m.alt) (own ?? term).focus();
