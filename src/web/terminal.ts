@@ -45,6 +45,7 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
   term.open(el);
 
   let ws: WebSocket | null = null;
+  let dbg: ((l: string) => void) | null = null;
   let disposed = false;
   let retry = 0;
   let canWrite = false;
@@ -58,6 +59,7 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
     if (ws?.readyState === WebSocket.OPEN && canWrite && !fixedSize) ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
   };
   const sendInput = (d: string) => {
+    dbg?.(`send ${JSON.stringify(d)} ws=${ws?.readyState} write=${canWrite}`);
     if (ws?.readyState === WebSocket.OPEN && canWrite) ws.send(enc.encode(d));
   };
   const refit = () => {
@@ -274,6 +276,36 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
   });
   ro.observe(el);
   connect();
+
+  // temporary keyboard diagnostics: open the page with ?kbdebug=1
+  if (/[?&]kbdebug/.test(location.search)) {
+    const box = document.createElement('div');
+    box.style.cssText = 'position:absolute;left:0;right:0;top:0;max-height:45%;overflow:auto;z-index:50;background:rgba(0,0,0,.85);color:#7f7;font:11px/1.3 monospace;white-space:pre-wrap;padding:4px;';
+    const copy = document.createElement('button');
+    copy.textContent = '复制';
+    copy.style.cssText = 'position:sticky;top:0;float:right;';
+    const pre = document.createElement('div');
+    box.append(copy, pre);
+    el.parentElement!.append(box);
+    const lines: string[] = [navigator.userAgent];
+    dbg = (l: string) => {
+      lines.push(l);
+      if (lines.length > 200) lines.splice(1, 1);
+      pre.textContent = lines.slice(-25).join('\n');
+    };
+    copy.onclick = () => {
+      const text = lines.join('\n');
+      navigator.clipboard?.writeText(text).then(() => (copy.textContent = '已复制'), () => prompt('复制下面的内容', text));
+    };
+    const at = () => (document.activeElement === ta ? 'ta' : document.activeElement?.tagName.toLowerCase());
+    for (const t of ['keydown', 'keypress', 'keyup', 'beforeinput', 'input', 'compositionstart', 'compositionupdate', 'compositionend', 'focus', 'blur']) {
+      ta.addEventListener(t, (e: any) => {
+        dbg!(`${t} key=${e.key ?? ''} code=${e.keyCode ?? ''} type=${e.inputType ?? ''} data=${JSON.stringify(e.data ?? null)} comp=${e.isComposing ?? ''} val=${JSON.stringify(ta.value.slice(-8))} prevented=${e.defaultPrevented} focus=${at()}`);
+      }, true);
+    }
+    document.addEventListener('focusin', () => dbg!(`focusin ${at()}`));
+    dbg(`start focus=${at()}`);
+  }
 
   const input = () => el.querySelector('textarea');
 
