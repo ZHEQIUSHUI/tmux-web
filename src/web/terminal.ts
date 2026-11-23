@@ -8,6 +8,8 @@ export interface TermHandle {
   fit(): void;
   /** send raw input, as if typed */
   send(data: string): void;
+  /** typed text from an input of our own: the sticky modifiers apply to it */
+  type(data: string): void;
   /** sticky modifiers for on-screen keyboards: applied to the next typed key */
   setModifiers(m: { ctrl: boolean; alt: boolean }): void;
   /** show/hide the phone keyboard (focus/blur the terminal's input) */
@@ -332,6 +334,7 @@ export function mountTerminal(el: HTMLElement, sessionId: number, onState: (s: s
     fit: refit,
     // no focus here: tapping arrows to walk a menu shouldn't pop up the phone keyboard
     send: (d) => sendInput(d),
+    type: (d) => typed(d),
     setModifiers: (m) => {
       mods = m;
       if (m.ctrl || m.alt) term.focus();

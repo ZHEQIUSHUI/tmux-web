@@ -2105,6 +2105,23 @@ a.btn {
   background: #262a32;
   color: #aab0bb;
 }
+.acc-input {
+  flex: none;
+  width: 72px;
+  height: 38px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid #3a3f48;
+  background: #14161b;
+  color: #e3e6ec;
+  /* 16px: iOS zooms the page into smaller inputs on focus */
+  font-size: 16px;
+  outline: none;
+}
+.acc-input:focus {
+  border-color: var(--accent);
+  width: 110px;
+}
 .acc-sep {
   flex: none;
   width: 1px;
