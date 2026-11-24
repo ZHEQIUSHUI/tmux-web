@@ -199,6 +199,17 @@ route('PUT', '/_tw/api/sessions/:id/folder', async (req, res, [id]) => {
   sendJson(req, res, 200, { ok: true });
 });
 
+/** Take a session out of 最近 (hidden: true) until it is used again, or put it back. */
+route('PUT', '/_tw/api/sessions/:id/recent', async (req, res, [id]) => {
+  const user = requireUser(req);
+  const { row, live } = sessionFor(user, id, 'view');
+  const { hidden } = await readJson(req);
+  if (hidden) q.hideRecent.run(user.id, row.id, live.activityAt || row.created_at);
+  else q.unhideRecent.run(user.id, row.id);
+  hub.emit('list');
+  sendJson(req, res, 200, { ok: true });
+});
+
 // --- folders (personal) ---
 
 route('GET', '/_tw/api/folders', (req, res) => {

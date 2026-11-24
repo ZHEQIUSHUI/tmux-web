@@ -26,6 +26,8 @@ export interface SessionInfo {
   note: string;
   /** your folder for it (folders are personal) */
   folderId: number | null;
+  /** taken out of 最近 at this activity time; back once there is newer activity */
+  recentHiddenAt: number | null;
   /** creator, or an admin who explicitly enabled cross-account access */
   canManage: boolean;
   /** for adopted sessions: the user's tmux session (and -L socket if not default) */

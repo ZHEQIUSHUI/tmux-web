@@ -543,6 +543,7 @@ export function canManageSession(user: UserRow, row: SessionRow): boolean {
 export function sessionView(user: UserRow) {
   const groups = groupIdsOf(user.id);
   const folderOf = new Map(q.folderAssignments.all(user.id).map((a) => [a.session_id, a.folder_id]));
+  const hiddenAt = new Map(q.recentHidden.all(user.id).map((h) => [h.session_id, h.activity_at]));
   const owners = new Map(q.users.all().map((u) => [u.id, u.username]));
   const hostNames = new Map(q.hosts.all().map((h) => [h.id, h.name]));
   return q.sessions
@@ -562,6 +563,8 @@ export function sessionView(user: UserRow) {
       adopted: !!row.adopted,
       note: row.note,
       folderId: folderOf.get(row.id) ?? null,
+      // out of 最近 until its activity moves past this
+      recentHiddenAt: hiddenAt.get(row.id) ?? null,
       canManage: canManageSession(user, row),
       tmux: row.adopted ? `${row.tmux_socket === 'default' ? '' : `-L ${row.tmux_socket} `}${row.tmux_name}` : null,
       access,

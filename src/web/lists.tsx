@@ -94,8 +94,17 @@ function RecentModal({ minutes, onPick, onClose }: { minutes: number; onPick: (m
 /** Sessions in use lately: active within `minutes`, or working / waiting right now. */
 export function recentSessions(list: SessionInfo[], minutes: number): SessionInfo[] {
   if (!minutes) return [];
-  return sortSessions(list.filter((s) => s.status === 'busy' || s.status === 'waiting' || Date.now() - s.activityAt < minutes * 60_000));
+  return sortSessions(
+    list.filter(
+      (s) =>
+        // taken out by hand: until the conversation is used again
+        !(s.recentHiddenAt !== null && s.activityAt <= s.recentHiddenAt) &&
+        (s.status === 'busy' || s.status === 'waiting' || Date.now() - s.activityAt < minutes * 60_000),
+    ),
+  );
 }
+/** Out of 最近 until the session is used again. */
+const hideFromRecent = (s: SessionInfo) => api('PUT', `/_tw/api/sessions/${s.id}/recent`, { hidden: true }).catch((e) => alert(e.message));
 const folderName = (s: SessionInfo, folders: Folder[]) => folders.find((f) => f.id === s.folderId)?.name ?? '未分组';
 
 /** Waiting for you first, then running, then most recently active. */
@@ -439,28 +448,32 @@ export function Sidebar(props: {
   }, [activityKey]);
   // the recent section: name, conversation title and which folder it lives in
   const recentItem = (s: SessionInfo) => (
-    <button
-      key={`r${s.id}`}
-      class={`session-item ${props.active.includes(s.id) ? 'active' : ''}`}
-      onPointerDown={() => prefetchChat(s)}
-      onMouseEnter={() => prefetchChat(s)}
-      onClick={() => props.onPick(s.id)}
-      {...drag(s)}
-      title={s.title || undefined}
-    >
-      <AgentBadge s={s} small />
-      <span class="s-main">
-        <span class="s-name">
-          {s.name}
-          {props.unread.has(s.id) && <span class="unread" />}
+    <div key={`r${s.id}`} class={`session-item view-item ${props.active.includes(s.id) ? 'active' : ''}`}>
+      <button
+        class="view-open"
+        onPointerDown={() => prefetchChat(s)}
+        onMouseEnter={() => prefetchChat(s)}
+        onClick={() => props.onPick(s.id)}
+        {...drag(s)}
+        title={s.title || undefined}
+      >
+        <AgentBadge s={s} small />
+        <span class="s-main">
+          <span class="s-name">
+            {s.name}
+            {props.unread.has(s.id) && <span class="unread" />}
+          </span>
+          <span class="s-sub">
+            <span class="s-folder">{folderName(s, props.folders)}</span>
+            {s.title ? ` · ${s.title}` : ''}
+          </span>
         </span>
-        <span class="s-sub">
-          <span class="s-folder">{folderName(s, props.folders)}</span>
-          {s.title ? ` · ${s.title}` : ''}
-        </span>
-      </span>
-      <span class="s-time">{ago(s.activityAt)}</span>
-    </button>
+        <span class="s-time">{ago(s.activityAt)}</span>
+      </button>
+      <button class="icon-btn view-remove" onClick={() => hideFromRecent(s)} aria-label="移出最近" title="移出「最近」：这个会话下次有新对话时再回来">
+        ✕
+      </button>
+    </div>
   );
   const item = (s: SessionInfo) => (
     <button
@@ -591,8 +604,17 @@ export function MobileHome(props: {
         </span>
       </span>
       {s.status !== 'idle' ? <span class={`m-pill ${s.status}`}>{STATUS_LABEL[s.status]}</span> : <span class="m-time">{ago(s.activityAt)}</span>}
-      <span class="m-chev">
-        <Chevron open={false} />
+      <span
+        class="m-chev m-unrecent"
+        role="button"
+        aria-label="移出最近"
+        title="移出「最近」：下次有新对话时再回来"
+        // not a long press to drag the row, nor a tap opening it
+        onTouchStart={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => (e.stopPropagation(), hideFromRecent(s))}
+      >
+        ✕
       </span>
     </button>
   );

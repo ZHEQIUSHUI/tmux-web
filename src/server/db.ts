@@ -131,6 +131,13 @@ create table if not exists session_folders (
   folder_id integer not null references folders(id) on delete cascade,
   primary key (user_id, session_id)
 );
+-- taken out of 最近 by a user, until the session's activity passes activity_at (personal, like folders)
+create table if not exists recent_hidden (
+  user_id integer not null references users(id) on delete cascade,
+  session_id integer not null references sessions(id) on delete cascade,
+  activity_at integer not null,
+  primary key (user_id, session_id)
+);
 -- long-lived tokens for apps and scripts (Authorization: Bearer ...)
 create table if not exists api_tokens (
   id integer primary key,
@@ -215,6 +222,9 @@ export const q = {
   folderAssignments: db.prepare<[number], { session_id: number; folder_id: number }>('select session_id, folder_id from session_folders where user_id = ?'),
   assignFolder: db.prepare('insert into session_folders (user_id, session_id, folder_id) values (?, ?, ?) on conflict (user_id, session_id) do update set folder_id = excluded.folder_id'),
   unassignFolder: db.prepare('delete from session_folders where user_id = ? and session_id = ?'),
+  recentHidden: db.prepare<[number], { session_id: number; activity_at: number }>('select session_id, activity_at from recent_hidden where user_id = ?'),
+  hideRecent: db.prepare('insert into recent_hidden (user_id, session_id, activity_at) values (?, ?, ?) on conflict (user_id, session_id) do update set activity_at = excluded.activity_at'),
+  unhideRecent: db.prepare('delete from recent_hidden where user_id = ? and session_id = ?'),
 
   /** an adopted session whose tmux is gone becomes one of ours */
   unadopt: db.prepare('update sessions set tmux_socket = null, tmux_name = null, adopted = 0 where id = ?'),
