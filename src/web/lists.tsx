@@ -104,7 +104,8 @@ export function recentSessions(list: SessionInfo[], minutes: number): SessionInf
   );
 }
 /** Out of 最近 until the session is used again. */
-const hideFromRecent = (s: SessionInfo) => api('PUT', `/_tw/api/sessions/${s.id}/recent`, { hidden: true }).catch((e) => alert(e.message));
+const hideFromRecent = (s: SessionInfo) =>
+  confirm(`把「${s.name}」移出「最近」？下次有新对话时会自动回来。`) && api('PUT', `/_tw/api/sessions/${s.id}/recent`, { hidden: true }).catch((e) => alert(e.message));
 const folderName = (s: SessionInfo, folders: Folder[]) => folders.find((f) => f.id === s.folderId)?.name ?? '未分组';
 
 /** Waiting for you first, then running, then most recently active. */
