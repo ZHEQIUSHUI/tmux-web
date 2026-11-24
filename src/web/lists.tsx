@@ -449,7 +449,10 @@ export function Sidebar(props: {
   }, [activityKey]);
   // the recent section: name, conversation title and which folder it lives in
   const recentItem = (s: SessionInfo) => (
-    <div key={`r${s.id}`} class={`session-item view-item ${props.active.includes(s.id) ? 'active' : ''}`}>
+    <div key={`r${s.id}`} class={`session-item view-item recent-item ${props.active.includes(s.id) ? 'active' : ''}`}>
+      <button class="recent-x" onClick={() => hideFromRecent(s)} aria-label="移出最近" title="移出「最近」：这个会话下次有新对话时再回来">
+        ✕
+      </button>
       <button
         class="view-open"
         onPointerDown={() => prefetchChat(s)}
@@ -470,9 +473,6 @@ export function Sidebar(props: {
           </span>
         </span>
         <span class="s-time">{ago(s.activityAt)}</span>
-      </button>
-      <button class="icon-btn view-remove" onClick={() => hideFromRecent(s)} aria-label="移出最近" title="移出「最近」：这个会话下次有新对话时再回来">
-        ✕
       </button>
     </div>
   );
@@ -593,6 +593,18 @@ export function MobileHome(props: {
   const recent = q ? [] : recentSessions(sessions || [], recentMin);
   const recentRow = (s: SessionInfo) => (
     <button key={`r${s.id}`} class={`m-row ${s.status}`} onPointerDown={() => prefetchChat(s)} onClick={() => props.onPick(s.id)} {...drag(s)}>
+      <span
+        class="recent-x"
+        role="button"
+        aria-label="移出最近"
+        title="移出「最近」：下次有新对话时再回来"
+        // not a long press to drag the row, nor a tap opening it
+        onTouchStart={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => (e.stopPropagation(), hideFromRecent(s))}
+      >
+        ✕
+      </span>
       <AgentBadge s={s} />
       <span class="m-main">
         <span class="m-name">
@@ -605,18 +617,6 @@ export function MobileHome(props: {
         </span>
       </span>
       {s.status !== 'idle' ? <span class={`m-pill ${s.status}`}>{STATUS_LABEL[s.status]}</span> : <span class="m-time">{ago(s.activityAt)}</span>}
-      <span
-        class="m-chev m-unrecent"
-        role="button"
-        aria-label="移出最近"
-        title="移出「最近」：下次有新对话时再回来"
-        // not a long press to drag the row, nor a tap opening it
-        onTouchStart={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => (e.stopPropagation(), hideFromRecent(s))}
-      >
-        ✕
-      </span>
     </button>
   );
   const count = (st: Status) => (sessions || []).filter((s) => s.status === st).length;

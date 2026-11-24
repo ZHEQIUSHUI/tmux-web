@@ -2012,13 +2012,50 @@ a.btn {
   display: grid;
   flex: none;
 }
-/* 最近: take the session out (a bigger target than the chevron it replaces) */
-.m-unrecent {
+/* 最近: take the session out — a small ✕ on the row's top-left corner, away from the
+   right edge where a tap opens the session */
+.recent-x {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  margin: -6px -8px -6px 0;
-  font-size: 13px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font-size: 10px;
+  line-height: 1;
+}
+.recent-x::before {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--line);
+  z-index: -1;
+}
+.recent-x:hover {
+  color: var(--text);
+}
+/* computer: only while the mouse is over the row */
+.recent-item {
+  position: relative;
+}
+.recent-item .recent-x {
+  width: 26px;
+  height: 26px;
+  opacity: 0;
+}
+.recent-item:hover .recent-x {
+  opacity: 1;
+}
+.recent-item .view-open {
+  padding-right: 8px;
 }
 /* session view pushed over the list (the list stays mounted underneath) */
 .m-push {
