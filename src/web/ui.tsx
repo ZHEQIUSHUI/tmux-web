@@ -192,7 +192,20 @@ export const Chevron = ({ open }: { open: boolean }) => (
 );
 
 /** A small copy button; `text` may be fetched on click (e.g. the full text of a cut-off message). */
-export function CopyBtn({ text, label, class: cls, title }: { text: string | (() => Promise<string>); label?: string; class?: string; title?: string }) {
+// flash: what the copied text is on screen; it lights up briefly so you can see what was copied
+export function CopyBtn({
+  text,
+  label,
+  class: cls,
+  title,
+  flash,
+}: {
+  text: string | (() => Promise<string>);
+  label?: string;
+  class?: string;
+  title?: string;
+  flash?: (btn: HTMLElement) => Element | null | undefined;
+}) {
   const [done, setDone] = useState<'' | 'ok' | 'fail'>('');
   return (
     <button
@@ -203,6 +216,7 @@ export function CopyBtn({ text, label, class: cls, title }: { text: string | (()
       onMouseDown={(e) => e.preventDefault()}
       onClick={async (e) => {
         e.stopPropagation();
+        const btn = e.currentTarget;
         let ok = false;
         try {
           ok = await copyText(typeof text === 'string' ? text : await text());
@@ -211,6 +225,13 @@ export function CopyBtn({ text, label, class: cls, title }: { text: string | (()
         }
         setDone(ok ? 'ok' : 'fail');
         setTimeout(() => setDone(''), 1500);
+        const el = ok && flash?.(btn);
+        if (el) {
+          el.classList.remove('copied-flash');
+          void (el as HTMLElement).offsetWidth; // restart the animation on a second copy
+          el.classList.add('copied-flash');
+          el.addEventListener('animationend', () => el.classList.remove('copied-flash'), { once: true });
+        }
       }}
     >
       {label ? (done === 'ok' ? '已复制' : done === 'fail' ? '复制失败' : label) : done === 'ok' ? <Icon.check /> : <Icon.copy />}

@@ -72,7 +72,7 @@ export function ToolGroup({ sid, items, onExpand }: { sid: number; items: ChatIt
           <div key={it.id} class={`tool-line ${it.tool === 'error' ? 'err' : ''}`}>
             {it.tool && it.tool !== 'result' && it.tool !== 'error' ? <b>{it.tool}</b> : <span class="dim">↳</span>}
             {text && <pre>{text}</pre>}
-            {text && <CopyBtn class="tool-copy" text={it.truncated ? () => fullText(sid, it) : text} />}
+            {text && <CopyBtn class="tool-copy" text={it.truncated ? () => fullText(sid, it) : text} flash={(b) => b.parentElement?.querySelector('pre')} />}
             <Images list={images} />
             {it.truncated && (
               <button class="link" onClick={() => onExpand(it)}>
@@ -142,7 +142,7 @@ export function Message({ sid, it, hit, onExpand, onRewind }: { sid: number; it:
           <Time at={it.at} />
         </div>
         <div class="msg-actions">
-          <CopyBtn class="link" label="复制" text={it.truncated ? () => fullText(sid, it) : it.text} />
+          <CopyBtn class="link" label="复制" text={it.truncated ? () => fullText(sid, it) : it.text} flash={(b) => b.closest('.msg')?.querySelector('.bubble')} />
           <button
             class="link md-toggle"
             onClick={(e) => {
@@ -175,7 +175,7 @@ export function Message({ sid, it, hit, onExpand, onRewind }: { sid: number; it:
       {more}
       <div class="msg-tools">
         <Time at={it.at} />
-        <CopyBtn text={it.truncated ? () => fullText(sid, it) : it.text} title="复制这条回复（Markdown 原文）" />
+        <CopyBtn text={it.truncated ? () => fullText(sid, it) : it.text} title="复制这条回复（Markdown 原文）" flash={(b) => b.closest('.msg')?.querySelector('.md')} />
       </div>
     </div>
   );

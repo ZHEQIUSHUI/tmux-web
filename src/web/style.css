@@ -580,6 +580,35 @@ label select {
   outline-offset: 3px;
   border-radius: 10px;
 }
+/* the text a copy button just copied: lit up, then fades out */
+.copied-flash {
+  animation: copied-flash 1.2s ease-out;
+  border-radius: 6px;
+}
+@keyframes copied-flash {
+  0%,
+  25% {
+    background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+.bubble.copied-flash {
+  border-radius: 12px 12px 4px 12px;
+  animation-name: copied-flash-bubble;
+}
+@keyframes copied-flash-bubble {
+  0%,
+  25% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
 /* ↓ back to the latest: stays at the bottom right of the visible part while scrolled up */
 .to-bottom-wrap {
   position: sticky;
