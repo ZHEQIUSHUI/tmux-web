@@ -902,8 +902,8 @@ export function ChatView({ session, onOpenTerminal, search = false, onSearchClos
         // offline: keep showing the cache; the stream catches up once the server is reachable
         .catch(() => !cancelled && begin(cached.end));
     } else {
-      setItems([]);
-      setPage(null);
+      // starting over (another conversation, or too far behind): what's shown stays up until
+      // the latest page is here
       stick.current = true;
       api<Page>('GET', `/_tw/api/sessions/${id}/messages?limit=30`)
         .then((p) => {

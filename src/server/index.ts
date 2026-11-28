@@ -534,6 +534,8 @@ route('GET', '/_tw/api/sessions/:id/claude-state', async (req, res, [id]) => {
  * host from `offset` on. `log` is the conversation the page's offsets belong to (a /clear starts a
  * new one: then it is told to start over). Returns the cleanup.
  */
+/** How far behind a page may be for the stream to send it everything since (bytes of log). */
+const GAP_MAX = 256 * 1024;
 function followSession(row: SessionRow, live: LiveSession, offset: number, log: string | null, send: (event: string, data: unknown, end?: number) => void): () => void {
   let stopFollow: (() => void) | null = null;
   let timer: NodeJS.Timeout | null = null;
@@ -560,6 +562,14 @@ function followSession(row: SessionRow, live: LiveSession, offset: number, log: 
       return;
     }
     if (log && log !== path.posix.basename(file)) return send('reset', 0);
+    // far behind (a page left open on a machine not used for a while): don't stream everything
+    // since; the page starts over from the latest messages, older ones load on scroll
+    const size = await host
+      .readTail(file, 0)
+      .then((t) => t.size)
+      .catch(() => 0);
+    if (closed) return;
+    if (size - offset > GAP_MAX) return send('reset', 0);
     following = file;
     stopFollow = followLog(row.agent, host, file, offset, (items, end) => send('msg', items, end));
   };
